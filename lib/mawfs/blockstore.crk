@@ -1,0 +1,137 @@
+## Low-level block-store API.
+
+#import crack.exp.fuse fuseMain = main, LockedFilesystem, NodeImpl;
+import crack.cont.array Array;
+import crack.hash Hash;
+import crack.hash.sha256 SHA256;
+import crack.lang cmp, makeHashVal, Buffer, Exception, ManagedBuffer;
+
+import crack.fs Path;
+import crack.io Reader, StringWriter, Writer;
+
+import crack.protobuf Field, Message, ProtoWriter;
+import crack.crypt.ssl.cipher EVP_aes_256_cbc, DecryptWriter, EncryptWriter;
+
+@import crack.ann impl;
+@import crack.protobuf.ann protobuf;
+
+@protobuf {
+    ## A filesystem entry.
+    message Entry {
+        ## The sha1 hash of the encrypted object.
+        required bytes hash = 1;
+
+        ## The name of the object.
+        required string name = 2;
+
+        ## The 32 bit checksum of the original file (calculated by adding
+        ## bytes).
+        optional int32 org_checksum = 3;
+    }
+
+    message Directory {
+        repeated Entry entry = 1;
+    }
+}
+
+String hashFile(Path file) {
+    src := file.makeFullReader();
+    hasher := SHA256();
+    buffer := ManagedBuffer(4096);
+    uint64 size;
+#    while (rc := src.read(buffer)) {
+#        size += rc;
+#        cout `\r$size\033[k`;
+#        hasher.update(buffer);
+#    }
+    hasher.update(src.readAll());
+    return hasher.digest();
+}
+
+## A chunk is the basic unit of data in MAWFS.  We store its content and
+## the digest of its encrypted representation.
+class Chunk {
+    String contents;
+    String digest;
+
+    oper init(String contents, String digeset) :
+        contents = contents,
+        digest = digest {
+    }
+}
+
+# Size of blocks to read and write.
+const BLOCK_SIZE := 65536;
+
+class BadDigestError : Exception {
+    oper init() {}
+    oper init(String message) : Exception(message) {}
+}
+
+class HashAndWrite @impl Writer {
+
+    Hash hasher;
+    Writer dst;
+
+    oper init(Hash hasher, Writer dst) :
+        hasher = hasher,
+        dst = dst {
+    }
+
+    void write(Buffer data) {
+        hasher.update(data);
+        dst.write(data);
+    }
+
+    String getDigest() { return hasher.digest(); }
+}
+
+## Information on a MAWFS filesystem.
+class FSInfo {
+    String password;
+
+    oper init(String password) : password = password {}
+
+    ## Reads a "Chunk" from a Reader.  A chunk is the basic unit of data.  The
+    ## reader is assumed to be an encrypted stream
+    Chunk readChunk(Reader src) {
+        hasher := SHA256();
+        back := StringWriter();
+        decrypter := DecryptWriter(EVP_aes_256_cbc(), password, back);
+        while (data := src.read(BLOCK_SIZE)) {
+            hasher.update(data);
+            decrypter.write(data);
+        }
+
+        decrypter.close();
+
+        return Chunk(back.string(), hasher.digest());
+    }
+
+    ## Writes and encrypts raw chunk data, returns the digest of the encrypted
+    ## data.
+    String writeChunk(Writer dst, Buffer data) {
+        temp := Buffer(null, 0);
+        uint cur;
+        HashAndWrite back = {SHA256(), dst};
+        encrypter := EncryptWriter(EVP_aes_256_cbc(), password, back);
+        while (cur < data.size) {
+            temp.size = (data.size - cur > BLOCK_SIZE) ? BLOCK_SIZE :
+                                                         data.size - cur;
+            temp.buffer = data.buffer + cur;
+            encrypter.write(temp);
+            cur += temp.size;
+        }
+
+        encrypter.close();
+        return back.getDigest();
+    }
+
+    ## Writes and encrypts a chunk and verifies the digest.  If the digest
+    ## doesn't match that of the chunk, throws a BadDigestError.
+    void writeChunk(Writer dst, Chunk chunk) {
+        if (writeChunk(dst, chunk.contents) != chunk.digest)
+            throw BadDigestError();
+    }
+
+}
