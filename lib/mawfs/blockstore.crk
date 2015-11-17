@@ -2,12 +2,13 @@
 
 #import crack.exp.fuse fuseMain = main, LockedFilesystem, NodeImpl;
 import crack.cont.array Array;
+import crack.ascii hex;
 import crack.hash Hash;
 import crack.hash.sha256 SHA256;
 import crack.lang cmp, makeHashVal, Buffer, Exception, ManagedBuffer;
 
 import crack.fs Path;
-import crack.io Reader, StringWriter, Writer;
+import crack.io FStr, Reader, StringWriter, Writer;
 
 import crack.protobuf Field, Message, ProtoWriter;
 import crack.crypt.ssl.cipher EVP_aes_256_cbc, DecryptWriter, EncryptWriter;
@@ -54,7 +55,7 @@ class Chunk {
     String contents;
     String digest;
 
-    oper init(String contents, String digeset) :
+    oper init(String contents, String digest) :
         contents = contents,
         digest = digest {
     }
@@ -133,5 +134,53 @@ class FSInfo {
         if (writeChunk(dst, chunk.contents) != chunk.digest)
             throw BadDigestError();
     }
+}
 
+## Lets you store and load chunks from a persistent back-end.
+## This is currently implemented as a thin wrapper around a directory, but it
+## should eventually be an interface wrapping any place fine chunks are
+## stored.
+class ChunkStore {
+
+    Path __dir;
+    FSInfo __fsInfo;
+
+    oper init(Path dir, FSInfo fsInfo) : __dir = dir, __fsInfo = fsInfo {}
+
+    ## Loads and returns the chunk with the specified digest, returns null if
+    ## the chunk doesn't exist in the store.
+    ##
+    ## Verifies the chunk digest on read, throws BadDigestError if it doesn't
+    ## match.
+    Chunk load(String digest) {
+        path := __dir/hex(digest);
+        if (path.exists()) {
+            result := __fsInfo.readChunk(path.reader());
+            if (result.digest != digest)
+                throw BadDigestError(
+                    FStr() I`chunk $(hex(digest)) data integrity failure.
+                             Actual data digest is $(hex(result.digest))`
+                );
+            return result;
+        } else {
+            return null;
+        }
+    }
+
+    ## Store the chunk.
+    ##
+    ## Verifies the chunk digest on write, throws BadDigestError if it doesn't
+    ## match.
+    void store(Chunk chunk) {
+        path := __dir/hex(chunk.digest);
+        __fsInfo.writeChunk(path.writer(), chunk);
+    }
+
+    ## Stores a chunk without a hash.  Returns the digest.
+    String store(Buffer data) {
+        path := __dir/(FStr() `tempchunk.$(uintz(data))`);
+        digest := __fsInfo.writeChunk(path.writer(), data);
+        path.moveTo(__dir/hex(digest));
+        return digest;
+    }
 }
