@@ -1,0 +1,89 @@
+
+import crack.cont.array Array;
+import crack.ext._fuse FuseFileInfo;
+import crack.exp.fuse log, main, Context, NodeImpl, LockedFilesystem;
+import crack.io cerr;
+import crack.lang WriteBuffer;
+import crack.runtime free, Stat;
+import crack.strutil StringArray;
+import mawfs.blockstore ChunkStore, Node;
+
+uintz min(uintz a, uintz b) {
+    return (a < b) ? a : b;
+}
+
+class BlockIter {
+    Array[Node] nodeStack = {};
+    uintz pos;
+
+    oper init(Node target) { nodeStack.append(target); }
+
+    void setPos(uintz newPos) {
+        Node target = nodeStack[-1];
+        if (target.contents) {
+            if (pos < target.contents.size)
+                pos = newPos;
+            else
+                pos = target.contents.size;
+        } else {
+            pos = 0;
+        }
+
+        # TODO: deal with "elems"
+    }
+
+    int read(WriteBuffer result) {
+        Node target = nodeStack[-1];
+        if (!target.contents)
+            return 0;
+        size := min(target.contents.size - pos, result.cap);
+        result.move(0, target.contents.buffer + pos, size );
+        # TODO: deal with elems.
+        return size;
+    }
+}
+
+
+## A MAWFS filesystem node.
+class MAWFSNode : NodeImpl {
+    Node __rep;
+
+    oper init(Node rep) : NodeImpl(040777, 1), __rep = rep {}
+
+    int readdir(Context ctx, voidptr buf,
+                function[int, voidptr, byteptr, Stat, uintz] filler,
+                uintz offset,
+                FuseFileInfo fi
+                ) {
+        Stat stat = {};
+        filler(buf, ".".buffer, null, 0);
+        filler(buf, "..".buffer, null, 0);
+
+        stat.st_mode = 040777;
+        for (child :in __rep.children) {
+            filler(buf, child.name.buffer, stat, 0);
+        }
+
+        free(stat);
+        return 0;
+    }
+
+    int open(Context ctx, FuseFileInfo fi) {
+        return 0;
+    }
+
+    int read(Context ctx, byteptr buf, uintz size, uintz offset,
+             FuseFileInfo fi
+             ) {
+        iter := BlockIter(__rep);
+        iter.setPos(offset);
+        return iter.read(WriteBuffer(buf, size));
+    }
+
+}
+
+void runFuse(ChunkStore store, StringArray argv) {
+    rootNode := store.getRoot();
+    main(argv, LockedFilesystem(MAWFSNode(rootNode)));
+}
+

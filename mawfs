@@ -11,7 +11,7 @@ import crack.io cin, cout, cerr, FStr, Reader;
 import crack.cont.array Array;
 import crack.lang AppendBuffer;
 
-import mawfs.blockstore hashFile, ChunkStore, FSInfo, BLOCK_SIZE;
+import mawfs.blockstore hashFile, unhex, ChunkStore, FSInfo, BLOCK_SIZE;
 
 #class DirNode : NodeImpl {
 #    @static DirNode readFrom(Reader src) {
@@ -49,31 +49,6 @@ Reader getReader(String filename) {
     } else {
         return makePath(filename).reader();
     }
-}
-
-## Converts a hex representation to binary (e.g. converts "616263" to "abc")
-String unhex(String src) {
-    if (src.size % 2)
-        throw InvalidArgumentError(
-            FStr() I`Hex strings must be of even length (got length \
-                     $(src.size))`
-        );
-    byte toNybble(byte b) {
-        if (b >= b'0' && b <= b'9')
-            return b - b'0';
-        else if (b >= b'a' && b <= b'f')
-            return b - b'a' + 10;
-        else if (b >= b'A' && b <= b'F')
-            return b - b'A' + 10;
-        else
-            throw InvalidArgumentError(
-                FStr() `invalid character "$(String(1, b))" in hex string.`
-            );
-    }
-    AppendBuffer result = {64};
-    for (int i = 0; i < src.size; i += 2)
-        result.append((toNybble(src[i]) << 4) | toNybble(src[i + 1]));
-    return String(result, true);
 }
 
 # The main function, which is a command dispatcher.

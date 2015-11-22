@@ -5,16 +5,19 @@ import crack.cont.array Array;
 import crack.ascii hex;
 import crack.hash Hash;
 import crack.hash.sha256 SHA256;
-import crack.lang cmp, makeHashVal, Buffer, Exception, ManagedBuffer;
+import crack.lang cmp, makeHashVal, AppendBuffer, Buffer, Exception,
+    InvalidArgumentError, ManagedBuffer;
 
 import crack.fs Path;
 import crack.io FStr, Reader, StringWriter, Writer;
 
-import crack.protobuf Field, Message, ProtoWriter;
+import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
 import crack.crypt.ssl.cipher EVP_aes_256_cbc, DecryptWriter, EncryptWriter;
 
 @import crack.ann impl;
 @import crack.protobuf.ann protobuf;
+
+const MAX_NODE_SIZE := 1024 * 1024;
 
 @protobuf {
     ## A filesystem entry.
@@ -28,6 +31,19 @@ import crack.crypt.ssl.cipher EVP_aes_256_cbc, DecryptWriter, EncryptWriter;
         ## The 32 bit checksum of the original file (calculated by adding
         ## bytes).
         optional int32 org_checksum = 3;
+    }
+
+    ## A filesystem node.  MAWFS is agnostic to the difference between files
+    ## and directories.  A MAWFS node can contain both named entries and
+    ## contents.
+    message Node {
+        required int32 checksum = 1;
+        optional string contents = 2;
+        repeated Entry children = 3;
+
+# Recursively defined protobufs don't seem to work.  And anyway, we really
+# to store the digests of the elements, not the nodes themselves.
+#        repeated Node elems = 4;
     }
 
     message Directory {
@@ -67,6 +83,31 @@ const BLOCK_SIZE := 65536;
 class BadDigestError : Exception {
     oper init() {}
     oper init(String message) : Exception(message) {}
+}
+
+## Converts a hex representation to binary (e.g. converts "616263" to "abc")
+String unhex(String src) {
+    if (src.size % 2)
+        throw InvalidArgumentError(
+            FStr() I`Hex strings must be of even length (got length \
+                     $(src.size))`
+        );
+    byte toNybble(byte b) {
+        if (b >= b'0' && b <= b'9')
+            return b - b'0';
+        else if (b >= b'a' && b <= b'f')
+            return b - b'a' + 10;
+        else if (b >= b'A' && b <= b'F')
+            return b - b'A' + 10;
+        else
+            throw InvalidArgumentError(
+                FStr() `invalid character "$(String(1, b))" in hex string.`
+            );
+    }
+    AppendBuffer result = {64};
+    for (int i = 0; i < src.size; i += 2)
+        result.append((toNybble(src[i]) << 4) | toNybble(src[i + 1]));
+    return String(result, true);
 }
 
 class HashAndWrite @impl Writer {
@@ -183,4 +224,34 @@ class ChunkStore {
         path.moveTo(__dir/hex(digest));
         return digest;
     }
+
+    Node getNode(String digest) {
+        chunk := load(digest);
+        if (!chunk)
+            return null;
+
+        Node node = {};
+        readMessageFromString(node, chunk.contents);
+        return node;
+    }
+
+    ## Stores the node, returns its digest.
+    String storeNode(Node node) {
+        return store(node.toString());
+    }
+
+    ## Returns the root node or null if there is none.
+    Node getRoot() {
+        digest := unhex((__dir/'root').readAll());
+        return getNode(digest);
+    }
+
+    ## Store an entire directory in the blockstore.  Returns its digest.
+#    String storeDir(Path root) {
+#        files := Array[Entry]![];
+#        for (file :in root.children()) {
+#            if (file.isDir()) {
+#                storeDir(file);
+#            } else {
+#                files.append(Entry
 }
