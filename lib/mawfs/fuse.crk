@@ -3,7 +3,7 @@ import crack.cont.array Array;
 import crack.ext._fuse FuseFileInfo;
 import crack.exp.fuse log, main, Context, NodeImpl, LockedFilesystem;
 import crack.io cerr;
-import crack.lang WriteBuffer;
+import crack.lang AssertionError, Buffer, Exception, ManagedBuffer, WriteBuffer;
 import crack.runtime free, Stat;
 import crack.strutil StringArray;
 import mawfs.blockstore ChunkStore, Node;
@@ -40,6 +40,33 @@ class BlockIter {
         result.move(0, target.contents.buffer + pos, size );
         # TODO: deal with elems.
         return size;
+    }
+
+    int write(Buffer data) {
+        Node target = nodeStack[-1];
+        if (target.contents) {
+            if (pos <= target.contents.size) {
+                ManagedBuffer resultBuf = {
+                    (target.contents.size > pos + data.size) ?
+                        target.contents.size :
+                        pos + data.size
+                };
+
+                # Copy in the original data and the new data.
+                resultBuf.move(0, target.contents);
+                resultBuf.move(pos, data);
+
+                target.contents = String(resultBuf, true);
+            } else {
+                # It looks like a write() a position greater than the current size
+                # of the file resizes the file and pads with zeroes up to the
+                # write position.
+                throw AssertionError('Implement writes greater than size.');
+            }
+        } else {
+            target.contents = String(data);
+        }
+        return data.size;
     }
 }
 

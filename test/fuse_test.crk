@@ -1,0 +1,110 @@
+
+import crack.cont.array Array;
+import crack.io cerr, cout;
+import crack.lang Buffer, ManagedBuffer;
+import crack.runtime free, Stat;
+import mawfs.blockstore Entry, Node;
+import mawfs.fuse BlockIter, MAWFSNode;
+
+@import crack.ann assert;
+
+String readNode(Node node, int pos, int size) {
+    ManagedBuffer buf = {size};
+    BlockIter iter = {node};
+    iter.setPos(pos);
+    iter.read(buf);
+    return String(buf, true);
+}
+
+int writeNode(Node node, int pos, Buffer data) {
+    BlockIter iter = {node};
+    iter.setPos(pos);
+    return iter.write(data);
+}
+
+Stat copyStat(Stat other) {
+    if (other is null)
+        return null;
+    Stat result = Stat();
+    result.st_dev = other.st_dev;
+    result.st_ino = other.st_ino;
+    result.st_nlink = other.st_nlink;
+    result.st_uid = other.st_uid;
+    result.st_gid = other.st_gid;
+    result.st_rdev = other.st_rdev;
+    result.st_blksize = other.st_blksize;
+    result.st_blocks = other.st_blocks;
+    result.st_atime = other.st_atime;
+    result.st_mtime = other.st_mtime;
+    result.st_ctime = other.st_ctime;
+
+    return result;
+}
+
+class Info {
+    String filename;
+    Stat stat;
+
+    oper init(String filename, Stat stat) :
+        filename = filename,
+        stat = copyStat(stat) {
+    }
+
+    oper del() {
+        free(stat);
+    }
+}
+
+Entry e(String filename) {
+    result := Entry();
+    result.name = filename;
+    return result;
+}
+
+Array[Info] filled = {};
+
+int filler(voidptr buf, byteptr filename, Stat stat, uintz something) {
+    filled.append(Info(String(filename), stat));
+    return 0;
+}
+
+if (true) {
+    node := Node();
+    node.contents = 'this is a test';
+
+    iter := BlockIter(node);
+    @assert(readNode(node, 0, 4) == 'this');
+    @assert(readNode(node, 5, 4) == 'is a');
+    @assert(readNode(node, 10, 10) == 'test');
+}
+
+if (true) {
+    node := Node();
+    node.children = Array[Entry]![e('foo'), e('bar')];
+    node.contents = 'this is some data';
+
+    MAWFSNode fuseNode = {node};
+    @assert(!fuseNode.readdir(null, null, filler, 0, null));
+    @assert(filled[0].filename == '.');
+    @assert(filled[1].filename == '..');
+    @assert(filled[2].filename == 'foo');
+    @assert(filled[3].filename == 'bar');
+
+    ManagedBuffer buf = {64};
+    @assert(fuseNode.read(null, buf.buffer, buf.cap, 0, null) == 17);
+    buf.size = 17;
+    @assert(String(buf, true) == 'this is some data');
+}
+
+if (true) {
+    node := Node();
+    MAWFSNode fuseNode = {node};
+
+    @assert(writeNode(node, 0, 'some data') == 9);
+    @assert(readNode(node, 0, 9) == 'some data');
+    @assert(writeNode(node, 5, 'pig') == 3);
+    @assert(readNode(node, 0, 1024) == 'some piga');
+}
+
+cout `ok\n`;
+
