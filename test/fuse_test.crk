@@ -1,5 +1,6 @@
 
 import crack.cont.array Array;
+import crack.exp.fuse Context;
 import crack.io cerr, cout;
 import crack.lang Buffer, ManagedBuffer;
 import crack.runtime free, Stat;
@@ -104,6 +105,20 @@ if (true) {
     @assert(readNode(node, 0, 9) == 'some data');
     @assert(writeNode(node, 5, 'pig') == 3);
     @assert(readNode(node, 0, 1024) == 'some piga');
+}
+
+if (true) {
+    MAWFSNode fs = {Node()};
+    ManagedBuffer buf = {8};
+    Context ctx = {'/foo', fs};
+
+    data := 'data';
+    @assert(fs.write(ctx, data.buffer, data.size, 0, null) == 4);
+    @assert(fs.write(ctx, data.buffer, data.size, 4, null) == 4);
+    @assert((buf.size = fs.read(ctx, buf.buffer, 3, 0, null)) == 3);
+    @assert(buf == 'dat');
+    @assert((buf.size = fs.read(ctx, buf.buffer, 10, 3, null)) == 5);
+    @assert(buf == 'adata');
 }
 
 cout `ok\n`;

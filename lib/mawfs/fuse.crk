@@ -107,10 +107,23 @@ class MAWFSNode : NodeImpl {
         return iter.read(WriteBuffer(buf, size));
     }
 
+    int write(Context ctx, byteptr buf, uintz size, uintz offset,
+              FuseFileInfo fi
+              ) {
+        iter := BlockIter(__rep);
+        iter.setPos(offset);
+        return iter.write(Buffer(buf, size));
+    }
 }
 
 void runFuse(ChunkStore store, StringArray argv) {
+
+    # Get the existing root node or create one if this is an empty filesystem.
     rootNode := store.getRoot();
+    if (!rootNode) {
+        rootNode = Node();
+        store.storeRoot(store.storeNode(rootNode));
+    }
     main(argv, LockedFilesystem(MAWFSNode(rootNode)));
 }
 

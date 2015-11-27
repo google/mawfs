@@ -4,14 +4,17 @@ import crack.ascii hex, radix;
 #import crack.exp.fuse fuseMain = main, LockedFilesystem, NodeImpl;
 import crack.lang InvalidArgumentError, SystemError;
 
+import crack.exp.fuse fuseLog = log;
 import crack.fs cwd, makePath, Path;
+import crack.strutil StringArray;
 import crack.sys argv, exit;
-import crack.io cin, cout, cerr, FStr, Reader;
+import crack.io cin, cout, cerr, FStr, Reader, StandardFormatter;
 
 import crack.cont.array Array;
 import crack.lang AppendBuffer;
 
 import mawfs.blockstore hashFile, unhex, ChunkStore, FSInfo, BLOCK_SIZE;
+import mawfs.fuse runFuse;
 
 #class DirNode : NodeImpl {
 #    @static DirNode readFrom(Reader src) {
@@ -101,6 +104,17 @@ void main() {
                 cerr `Chunk $(argv[2]) not found\n`;
             else
                 cout `$(chunk.contents)`;
+        } else if (cmd == 'run') {
+            if (argv.count() < 4) {
+                cerr I`Usage: mawfs run <backing-dir> [fuse-options] \
+                       <mount-point>\n`;
+                exit(1);
+            }
+
+            StringArray fuseArgs = [argv[0]];
+            fuseArgs.extend(argv.subarray(3));
+            fuseLog = StandardFormatter(makePath('mawfs.log').writer());
+            runFuse(ChunkStore(makePath(argv[2]), FSInfo(TESTPW)), fuseArgs);
         } else {
             cerr `Unknown command: $cmd\n`;
             usage();

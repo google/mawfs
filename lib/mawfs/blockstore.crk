@@ -242,8 +242,16 @@ class ChunkStore {
 
     ## Returns the root node or null if there is none.
     Node getRoot() {
-        digest := unhex((__dir/'root').readAll());
+        rootFile := __dir/'root';
+        if (!rootFile.exists())
+            return null;
+        digest := unhex(rootFile.readAll());
         return getNode(digest);
+    }
+
+    # Store the current root digest.
+    void storeRoot(String digest) {
+        (__dir/'root').writeAll(hex(digest));
     }
 
     ## Store an entire directory in the blockstore.  Returns its digest.
