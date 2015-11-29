@@ -229,8 +229,11 @@ class MAWFSNode : NodeImpl {
             __rep.children.append(entry);
         }
 
-        newDigest := __store.storeNode(__rep);
-        __changeChild(ctx, newDigest);
+        myDigest := __store.storeNode(__rep);
+        if (__parent)
+            __parent.__changeChild(ctx, myDigest);
+        else
+            __store.storeRoot(myDigest);
 
         return 0;
     }
