@@ -19,6 +19,10 @@ import crack.crypt.ssl.cipher EVP_aes_256_cbc, DecryptWriter, EncryptWriter;
 
 const MAX_NODE_SIZE := 1024 * 1024;
 
+const int
+    MODE_DIR = 1,   # A directory.
+    MODE_EXE = 2;   # Set the executable flag.
+
 @protobuf {
     ## A filesystem entry.
     message Entry {
@@ -40,6 +44,10 @@ const MAX_NODE_SIZE := 1024 * 1024;
         required int32 checksum = 1;
         optional string contents = 2;
         repeated Entry children = 3;
+
+        ## See the MODE_* constants above.  'mode' should be present for all
+        ## top-level file nodes and directory nodes.
+        optional int32 mode = 4;
 
 # Recursively defined protobufs don't seem to work.  And anyway, we really
 # to store the digests of the elements, not the nodes themselves.
@@ -177,11 +185,28 @@ class FSInfo {
     }
 }
 
+## Interface for a node store.
+@abstract class NodeStore {
+
+    ## Store the node, return its digest.
+    @abstract String storeNode(Node node);
+
+    ## Get the node at the given digest, null if it's not currently stored.
+    @abstract Node getNode(String digest);
+
+    # Get the root node.
+    @abstract Node getRoot();
+
+    ## Store the digest of the root node.
+    @abstract void storeRoot(String digest);
+}
+
+
 ## Lets you store and load chunks from a persistent back-end.
 ## This is currently implemented as a thin wrapper around a directory, but it
 ## should eventually be an interface wrapping any place fine chunks are
 ## stored.
-class ChunkStore {
+class ChunkStore : NodeStore {
 
     Path __dir;
     FSInfo __fsInfo;

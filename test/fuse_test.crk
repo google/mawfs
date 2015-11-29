@@ -1,10 +1,12 @@
 
 import crack.cont.array Array;
+import crack.cont.hashmap HashMap;
 import crack.exp.fuse Context;
-import crack.io cerr, cout;
+import crack.io cerr, cout, StringReader, StringWriter;
 import crack.lang Buffer, ManagedBuffer;
+import crack.protobuf readMessageFromString;
 import crack.runtime free, Stat;
-import mawfs.blockstore Entry, Node;
+import mawfs.blockstore Entry, FSInfo, Node, NodeStore;
 import mawfs.fuse BlockIter, MAWFSNode;
 
 @import crack.ann assert;
@@ -29,6 +31,7 @@ Stat copyStat(Stat other) {
     Stat result = Stat();
     result.st_dev = other.st_dev;
     result.st_ino = other.st_ino;
+    result.st_mode = other.st_mode;
     result.st_nlink = other.st_nlink;
     result.st_uid = other.st_uid;
     result.st_gid = other.st_gid;
@@ -69,6 +72,45 @@ int filler(voidptr buf, byteptr filename, Stat stat, uintz something) {
     return 0;
 }
 
+class FakeNodeStore : NodeStore {
+    HashMap[String, String] __contents = {};
+    FSInfo __fsInfo = {'12345678123456781234567812345678'};
+    String rootDigest;
+
+    oper init() {}
+
+    String storeNode(Node node) {
+        StringWriter temp = {};
+        digest := __fsInfo.writeChunk(temp, node.toString());
+        __contents[digest] = String(temp, true);
+        return digest;
+    }
+
+    ## Get the node at the given digest, null if it's not currently stored.
+    Node getNode(String digest) {
+        serialized := __contents[digest];
+        chunk := __fsInfo.readChunk(StringReader(serialized));
+        node := Node();
+        readMessageFromString(node, chunk.contents);
+        return node;
+    }
+
+    # Get the root node.
+    Node getRoot() {
+        if (!rootDigest)
+            return null;
+        return getNode(rootDigest);
+    }
+
+    ## Store the digest of the root node.
+    void storeRoot(String digest) {
+        rootDigest = digest;
+    }
+}
+
+
+###### BEGIN TESTS
+
 if (true) {
     node := Node();
     node.contents = 'this is a test';
@@ -84,12 +126,13 @@ if (true) {
     node.children = Array[Entry]![e('foo'), e('bar')];
     node.contents = 'this is some data';
 
-    MAWFSNode fuseNode = {node};
+    MAWFSNode fuseNode = {FakeNodeStore(), node};
     @assert(!fuseNode.readdir(null, null, filler, 0, null));
     @assert(filled[0].filename == '.');
     @assert(filled[1].filename == '..');
     @assert(filled[2].filename == 'foo');
     @assert(filled[3].filename == 'bar');
+    @assert(filled[3].stat.st_mode == 040777);
 
     ManagedBuffer buf = {64};
     @assert(fuseNode.read(null, buf.buffer, buf.cap, 0, null) == 17);
@@ -99,7 +142,7 @@ if (true) {
 
 if (true) {
     node := Node();
-    MAWFSNode fuseNode = {node};
+    MAWFSNode fuseNode = {FakeNodeStore(), node};
 
     @assert(writeNode(node, 0, 'some data') == 9);
     @assert(readNode(node, 0, 9) == 'some data');
@@ -108,7 +151,7 @@ if (true) {
 }
 
 if (true) {
-    MAWFSNode fs = {Node()};
+    MAWFSNode fs = {FakeNodeStore(), Node()};
     ManagedBuffer buf = {8};
     Context ctx = {'/foo', fs};
 
@@ -119,6 +162,32 @@ if (true) {
     @assert(buf == 'dat');
     @assert((buf.size = fs.read(ctx, buf.buffer, 10, 3, null)) == 5);
     @assert(buf == 'adata');
+}
+
+# Creating files.
+if (true) {
+    nodeStore := FakeNodeStore();
+    root := Node();
+    nodeStore.storeRoot(nodeStore.storeNode(root));
+    MAWFSNode fs = {nodeStore, root};
+    Context ctx = {'/foo', fs};
+    @assert(fs.create(ctx, 0, null) == 0);
+    children := root.children;
+    @assert(children.count() == 1);
+    @assert(children[0].name = 'foo');
+
+    # Verify that we can reproduce this from the node store.
+    root = nodeStore.getRoot();
+    children = root.children;
+    @assert(children.count() == 1);
+    @assert(children[0].name == 'foo');
+
+    # Verify that we overwrite the existing child and don't add a new one.
+    # (I'm not sure this behavior is correct, I think it might be appropriate
+    # to make this case an error and require a truncate).
+    @assert(fs.create(ctx, 0, null) == 0);
+    @assert(children.count() == 1);
+    @assert(children[0].name = 'foo');
 }
 
 cout `ok\n`;

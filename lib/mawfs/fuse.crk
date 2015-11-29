@@ -1,12 +1,14 @@
 
+import crack.ascii hex;
 import crack.cont.array Array;
+import crack.cont.hashmap HashMap;
 import crack.ext._fuse FuseFileInfo;
-import crack.exp.fuse log, main, Context, NodeImpl, LockedFilesystem;
-import crack.io cerr;
+import crack.exp.fuse log, main, Context, FuseNode = Node, NodeImpl, LockedFilesystem;
+import crack.io cerr, Formatter;
 import crack.lang AssertionError, Buffer, Exception, ManagedBuffer, WriteBuffer;
-import crack.runtime free, Stat;
+import crack.runtime free, Stat, S_IFDIR, S_IFREG;
 import crack.strutil StringArray;
-import mawfs.blockstore ChunkStore, Node;
+import mawfs.blockstore Entry, Node, NodeStore, MODE_DIR, MODE_EXE;
 
 uintz min(uintz a, uintz b) {
     return (a < b) ? a : b;
@@ -70,12 +72,95 @@ class BlockIter {
     }
 }
 
-
 ## A MAWFS filesystem node.
 class MAWFSNode : NodeImpl {
+    NodeStore __store;
     Node __rep;
+    MAWFSNode __parent;
+    bool isRoot;
 
-    oper init(Node rep) : NodeImpl(040777, 1), __rep = rep {}
+    class Child {
+        ## The digest of the child node.
+        String digest;
+
+        ## Index of the child in its parent.
+        int index;
+
+        ## The MAWFS node of the child, may be null if the child hasn't been
+        ## loaded.
+        MAWFSNode node;
+
+        oper init(String digest, int index) : digest = digest, index = index {}
+
+        void formatTo(Formatter out) {
+            out `MAWFSNode.Child($(hex(digest)), $index)`;
+        }
+    }
+    alias ChildMap = HashMap[String, Child];
+    ChildMap __children;
+
+    ## The index of the node in it's parent's list.
+    int __indexInParent;
+
+    oper init(NodeStore store, Node rep) :
+        NodeImpl(040777, 1),
+        __store = store,
+        __rep = rep,
+        __parent = null {
+    }
+
+    oper init(MAWFSNode parent, Node rep) :
+        NodeImpl(040777, 1),
+        __store = parent.__store,
+        __rep = rep,
+        __parent = parent {
+    }
+
+    ## Gets the dictionary of children, populating it if necessary.
+    ChildMap __getChildren() {
+        if (__children is null) {
+            __children = ChildMap();
+
+            int i;
+            for (child :in __rep.children)
+                __children[child.name] = Child(child.hash, i++);
+        }
+        return __children;
+    }
+
+    ## Returns the size of the underlying node.
+    uintz __getSize() {
+        if (__rep.contents)
+            # TODO: make this work for nested nodes.
+            return __rep.contents.count();
+        else
+            return 0;
+    }
+
+    void __changeChild(StringArray name, int index, String digest) {
+        child := __getChildren().get(name[index]);
+        if (!child) {
+            log I`Error: directory $(name.subarray(0, index)) does not have \
+                  child $(name[index])\n`;
+            return;
+        }
+
+        if (child.digest == digest)
+            return;
+
+        child.digest = digest;
+        __rep.children[child.index].hash = digest;
+        myDigest := __store.storeNode(__rep);
+
+        if (__parent)
+            __parent.__changeChild(name, index - 1, myDigest);
+        else
+            __store.storeRoot(myDigest);
+    }
+
+    void __changeChild(Context ctx, String digest) {
+        __changeChild(ctx.parsedPath, ctx.parsedPath.count() - 1, digest);
+    }
 
     int readdir(Context ctx, voidptr buf,
                 function[int, voidptr, byteptr, Stat, uintz] filler,
@@ -83,10 +168,15 @@ class MAWFSNode : NodeImpl {
                 FuseFileInfo fi
                 ) {
         Stat stat = {};
+        stat.st_mode = 040777;
+
         filler(buf, ".".buffer, null, 0);
         filler(buf, "..".buffer, null, 0);
 
         stat.st_mode = 040777;
+        stat.st_nlink = 1;
+        stat.st_uid = 0;
+        stat.st_gid = 0;
         for (child :in __rep.children) {
             filler(buf, child.name.buffer, stat, 0);
         }
@@ -112,18 +202,78 @@ class MAWFSNode : NodeImpl {
               ) {
         iter := BlockIter(__rep);
         iter.setPos(offset);
-        return iter.write(Buffer(buf, size));
+        result := iter.write(Buffer(buf, size));
+
+        digest := __store.storeNode(__rep);
+        if (__parent)
+            __parent.__changeChild(ctx, digest);
+
+        return result;
+    }
+
+    int create(Context ctx, int mode, FuseFileInfo fi)  {
+        # Create a new node and store it.
+        node := Node();
+        digest := __store.storeNode(node);
+        name := ctx.parsedPath[-1];
+
+        children := __getChildren();
+        child := children.get(name);
+        if (child) {
+            __rep.children[child.index].hash = digest;
+        } else {
+            entry := Entry();
+            entry.name = name;
+            entry.hash = digest;
+            children[name] = Child(digest, __rep.children.count());
+            __rep.children.append(entry);
+        }
+
+        newDigest := __store.storeNode(__rep);
+        __changeChild(ctx, newDigest);
+
+        return 0;
+    }
+
+    int getattr(Context ctx, Stat stbuf) {
+        mode := 0666;
+        if (__rep.mode & MODE_EXE)
+            mode |= 0111;
+        if (__rep.mode & MODE_DIR)
+            mode |= S_IFDIR | 0111;
+        else
+            mode |= S_IFREG;
+        stbuf.st_mode = mode;
+        stbuf.st_nlink = 1;
+        stbuf.st_uid = 1000;
+        stbuf.st_gid = 1000;
+        stbuf.st_size = __getSize();
+        return 0;
+    }
+
+    FuseNode lookUp(StringArray parsedPath, int start, int end) {
+        if (start == end)
+            return this;
+
+        children := __getChildren();
+        child := children.get(parsedPath[start]);
+        if (child) {
+            mawfsChild := MAWFSNode(this, __store.getNode(child.digest));
+            return mawfsChild.lookUp(parsedPath, start + 1, end);
+        } else
+            return null;
     }
 }
 
-void runFuse(ChunkStore store, StringArray argv) {
+void runFuse(NodeStore store, StringArray argv) {
 
     # Get the existing root node or create one if this is an empty filesystem.
     rootNode := store.getRoot();
     if (!rootNode) {
         rootNode = Node();
+        rootNode.mode = MODE_DIR;
         store.storeRoot(store.storeNode(rootNode));
     }
-    main(argv, LockedFilesystem(MAWFSNode(rootNode)));
+    main(argv, LockedFilesystem(MAWFSNode(store, rootNode)));
 }
 
