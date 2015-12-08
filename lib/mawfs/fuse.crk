@@ -137,6 +137,7 @@ class MAWFSNode : NodeImpl {
             return 0;
     }
 
+    ## Rewrite a parent node after changing the digest of a child.
     void __changeChild(StringArray name, int index, String digest) {
         child := __getChildren().get(name[index]);
         if (!child) {
@@ -211,9 +212,10 @@ class MAWFSNode : NodeImpl {
         return result;
     }
 
-    int create(Context ctx, int mode, FuseFileInfo fi)  {
+    void __makeChild(Context ctx, int mode) {
         # Create a new node and store it.
         node := Node();
+        node.mode = int32(mode);
         digest := __store.storeNode(node);
         name := ctx.parsedPath[-1];
 
@@ -230,11 +232,22 @@ class MAWFSNode : NodeImpl {
         }
 
         myDigest := __store.storeNode(__rep);
-        if (__parent)
-            __parent.__changeChild(ctx, myDigest);
-        else
+        if (__parent) {
+            __parent.__changeChild(ctx.parsedPath, ctx.parsedPath.count() - 2,
+                                   myDigest
+                                   );
+        } else {
             __store.storeRoot(myDigest);
+        }
+    }
 
+    int create(Context ctx, int mode, FuseFileInfo fi)  {
+        __makeChild(ctx, (mode & 0111) ? MODE_EXE : 0);
+        return 0;
+    }
+
+    int mkdir(Context ctx, int mode) {
+        __makeChild(ctx, MODE_DIR);
         return 0;
     }
 
@@ -263,8 +276,9 @@ class MAWFSNode : NodeImpl {
         if (child) {
             mawfsChild := MAWFSNode(this, __store.getNode(child.digest));
             return mawfsChild.lookUp(parsedPath, start + 1, end);
-        } else
+        } else {
             return null;
+        }
     }
 }
 
@@ -279,4 +293,3 @@ void runFuse(NodeStore store, StringArray argv) {
     }
     main(argv, LockedFilesystem(MAWFSNode(store, rootNode)));
 }
-

@@ -6,7 +6,7 @@ import crack.io cerr, cout, StringReader, StringWriter;
 import crack.lang Buffer, ManagedBuffer;
 import crack.protobuf readMessageFromString;
 import crack.runtime free, Stat;
-import mawfs.blockstore Entry, FSInfo, Node, NodeStore;
+import mawfs.blockstore Entry, FSInfo, Node, NodeStore, MODE_DIR, MODE_EXE;
 import mawfs.fuse BlockIter, MAWFSNode;
 
 @import crack.ann assert;
@@ -111,6 +111,7 @@ class FakeNodeStore : NodeStore {
 
 ###### BEGIN TESTS
 
+/*
 if (true) {
     node := Node();
     node.contents = 'this is a test';
@@ -189,6 +190,38 @@ if (true) {
     @assert(fs.create(ctx, 0, null) == 0);
     @assert(children.count() == 1);
     @assert(children[0].name = 'foo');
+}
+*/
+
+# Create nested file.
+if (true) {
+    nodeStore := FakeNodeStore();
+    root := Node();
+    nodeStore.storeRoot(nodeStore.storeNode(root));
+    MAWFSNode fs = {nodeStore, root};
+    Context ctx = {'/foo', fs};
+
+    @assert(fs.mkdir(ctx, 0) == 0);
+    children := root.children;
+    @assert(children.count() == 1);
+    @assert(children[0].name == 'foo');
+
+    foo := ctx.lookUp();
+    ctx = Context('/foo/bar', fs);
+    @assert(foo.create(ctx, 0, null) == 0);
+
+    # Read back all the way from the node store.
+    root = nodeStore.getRoot();
+    children = root.children;
+    @assert(children.count() == 1);
+    @assert(children[0].name == 'foo');
+
+    dirNode := nodeStore.getNode(children[0].hash);
+    @assert(dirNode.mode == MODE_DIR);
+
+    children = dirNode.children;
+    @assert(children.count() == 1);
+    @assert(children[0].name == 'bar');
 }
 
 cout `ok\n`;
