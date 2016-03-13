@@ -111,7 +111,6 @@ class FakeNodeStore : NodeStore {
 
 ###### BEGIN TESTS
 
-/*
 if (true) {
     node := Node();
     node.contents = 'this is a test';
@@ -191,7 +190,6 @@ if (true) {
     @assert(children.count() == 1);
     @assert(children[0].name = 'foo');
 }
-*/
 
 # Create nested file.
 if (true) {
@@ -224,5 +222,33 @@ if (true) {
     @assert(children[0].name == 'bar');
 }
 
-cout `ok\n`;
+# Truncate.
+if (true) {
+    nodeStore := FakeNodeStore();
+    root := Node();
+    nodeStore.storeRoot(nodeStore.storeNode(root));
+    MAWFSNode fs = {nodeStore, root};
+    Context ctx = {'/foo', fs};
 
+    @assert(fs.create(ctx, 0, null) == 0);
+    text := 'this is text';
+    foo := ctx.lookUp();
+    @assert(foo.write(ctx, text.buffer, text.size, 0, null));
+    @assert(foo.truncate(ctx, 4) == 0);
+
+    root = nodeStore.getRoot();
+    fs.setRep(root);
+    ManagedBuffer temp = {10};
+    foo = ctx.lookUp();
+    rc := temp.size = foo.read(ctx, temp.buffer, temp.cap, 0, null);
+    @assert(foo.read(ctx, temp.buffer, temp.cap, 0, null) == 4);
+
+    foo.truncate(ctx, 0);
+    root = nodeStore.getRoot();
+    fs.setRep(root);
+    foo = ctx.lookUp();
+    rc = temp.size = foo.read(ctx, temp.buffer, temp.cap, 0, null);
+    @assert(foo.read(ctx, temp.buffer, temp.cap, 0, null) == 0);
+}
+
+cout `ok\n`;

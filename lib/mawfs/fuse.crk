@@ -14,6 +14,9 @@ uintz min(uintz a, uintz b) {
     return (a < b) ? a : b;
 }
 
+## BlockIter lets you read and write to certain positions in a BlockStore node.
+## Note: this may not be a very good abstraction considering the way that
+## we're using it.
 class BlockIter {
     Array[Node] nodeStack = {};
     uintz pos;
@@ -163,6 +166,11 @@ class MAWFSNode : NodeImpl {
         __changeChild(ctx.parsedPath, ctx.parsedPath.count() - 1, digest);
     }
 
+    ## For testing only.
+    void setRep(Node rep) {
+        __rep = rep;
+    }
+
     int readdir(Context ctx, voidptr buf,
                 function[int, voidptr, byteptr, Stat, uintz] filler,
                 uintz offset,
@@ -265,6 +273,23 @@ class MAWFSNode : NodeImpl {
         stbuf.st_gid = 1000;
         stbuf.st_size = __getSize();
         return 0;
+    }
+
+    int truncate(Context ctx, uintz size) {
+        if (__rep.contents && __rep.contents.size > size) {
+            __rep.contents = __rep.contents.substr(0, size);
+
+            digest := __store.storeNode(__rep);
+
+            if (__parent)
+                __parent.__changeChild(ctx, digest);
+        }
+
+        return 0;
+    }
+
+    int ftruncate(Context ctx, uintz size, FuseFileInfo fi) {
+        return truncate(ctx, size);
     }
 
     FuseNode lookUp(StringArray parsedPath, int start, int end) {
