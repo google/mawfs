@@ -1,0 +1,53 @@
+## The node cache.
+module;
+
+import crack.cont.array Array;
+import mawfs.blockstore Entry, Node, NodeStore;
+
+class Cache {
+    ## The raw cached blocks.
+#    HashMap[String, Node] blcoks;
+}
+
+class CachedNode {
+    String digest;
+    Node node;
+
+    class CachedEntry {
+        Entry entry;
+        CachedNode node;
+
+        oper init(Entry entry, CachedNode node) : entry = entry, node = node {}
+    }
+
+    # A sparse-array version of Node.children.  These get filled in as
+    Array[CachedEntry] __children;
+
+    oper init(String digest, Node node) :
+        digest = digest,
+        node = node {
+    }
+
+    CachedNode getChild(NodeStore store, uint index) {
+        CachedEntry cachedEntry;
+        if (!__children)
+            # Create an array of children to mirror that of node.children,
+            # initialize all elements to null.
+            __children = Array[CachedEntry](node.children.count(), null);
+        else
+            cachedEntry = __children[index];
+        if (!cachedEntry) {
+            entry := node.children[index];
+            cachedEntry = __children[index] =
+                CachedEntry(entry, CachedNode(entry.hash,
+                                              store.getNode(entry.hash)
+                                              )
+                            );
+        }
+        return cachedEntry.node;
+    }
+
+    @final String getContents() {
+        return node.contents;
+    }
+}

@@ -1,0 +1,65 @@
+
+import crack.cont.array Array;
+import crack.hash.sha256 SHA256;
+import crack.io cerr, StringWriter;
+import crack.protobuf ProtoWriter;
+import crack.cont.hashmap HashMap;
+import mawfs.blockstore Entry, Node, NodeStore;
+import mawfs.cache CachedNode;
+@import crack.ann assert, impl;
+
+class FakeNodeStore @impl NodeStore {
+    HashMap[String, Node] __nodes = {};
+    String __root;
+
+    String __digest(Node node) {
+        # Construct a digest from the object contents.
+        StringWriter temp = {};
+        ProtoWriter pw = {temp};
+        node.serialize(pw);
+        hasher := SHA256();
+        hasher.update(temp.string());
+        return hasher.digest();
+    }
+
+    String storeNode(Node node) {
+        __nodes[result := __digest(node)] = node;
+        return result;
+    }
+
+    Node getNode(String digest) {
+        return __nodes.get(digest);
+    }
+
+    Node getRoot() {
+        return getNode(__root);
+    }
+
+    void storeRoot(String digest) {
+        __root = digest;
+    }
+}
+
+node := Node();
+node.contents = 'contents of foo';
+node.size = int32(node.contents.count());
+node.mode = 0;
+
+nodeStore := FakeNodeStore();
+digest := nodeStore.storeNode(node);
+
+root := Node();
+node.children = Array[Entry]();
+entry := Entry();
+entry.hash = digest;
+entry.name = 'foo';
+root.children.append(entry);
+
+digest = nodeStore.storeNode(root);
+nodeStore.storeRoot(digest);
+
+cachedRoot := CachedNode(digest, root);
+cachedNode := cachedRoot.getChild(nodeStore, 0);
+@assert(cachedNode.getContents() == 'contents of foo');
+
+cerr `ok\n`;
