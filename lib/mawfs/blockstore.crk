@@ -14,7 +14,7 @@ import crack.io FStr, Reader, StringWriter, Writer;
 import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
 import crack.crypt.ssl.cipher EVP_aes_256_cbc, DecryptWriter, EncryptWriter;
 
-@import crack.ann impl;
+@import crack.ann interface, impl;
 @import crack.protobuf.ann protobuf;
 
 const MAX_NODE_SIZE := 1024 * 1024;
@@ -26,7 +26,7 @@ const int
 @protobuf {
     ## A filesystem entry.
     message Entry {
-        ## The sha1 hash of the encrypted object.
+        ## The sha256 hash of the encrypted object.
         required bytes hash = 1;
 
         ## The name of the object.
@@ -43,11 +43,14 @@ const int
     message Node {
         required int32 checksum = 1;
         optional string contents = 2;
+
+        ## 'size' is the size of the data in all children.
+        optional int32 size = 4;
         repeated Entry children = 3;
 
         ## See the MODE_* constants above.  'mode' should be present for all
         ## top-level file nodes and directory nodes.
-        optional int32 mode = 4;
+        optional int32 mode = 5;
 
 # Recursively defined protobufs don't seem to work.  And anyway, we really
 # to store the digests of the elements, not the nodes themselves.
@@ -186,7 +189,7 @@ class FSInfo {
 }
 
 ## Interface for a node store.
-@abstract class NodeStore {
+@interface NodeStore {
 
     ## Store the node, return its digest.
     @abstract String storeNode(Node node);
@@ -206,7 +209,7 @@ class FSInfo {
 ## This is currently implemented as a thin wrapper around a directory, but it
 ## should eventually be an interface wrapping any place fine chunks are
 ## stored.
-class ChunkStore : NodeStore {
+class ChunkStore @impl NodeStore {
 
     Path __dir;
     FSInfo __fsInfo;

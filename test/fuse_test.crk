@@ -9,7 +9,7 @@ import crack.runtime free, Stat;
 import mawfs.blockstore Entry, FSInfo, Node, NodeStore, MODE_DIR, MODE_EXE;
 import mawfs.fuse BlockIter, MAWFSNode;
 
-@import crack.ann assert;
+@import crack.ann assert, impl;
 
 String readNode(Node node, int pos, int size) {
     ManagedBuffer buf = {size};
@@ -72,7 +72,7 @@ int filler(voidptr buf, byteptr filename, Stat stat, uintz something) {
     return 0;
 }
 
-class FakeNodeStore : NodeStore {
+class FakeNodeStore @impl NodeStore {
     HashMap[String, String] __contents = {};
     FSInfo __fsInfo = {'12345678123456781234567812345678'};
     String rootDigest;
