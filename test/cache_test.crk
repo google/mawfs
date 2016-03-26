@@ -1,4 +1,5 @@
 
+import crack.ascii hex;  # For debugging hash values.
 import crack.cont.array Array;
 import crack.hash.sha256 SHA256;
 import crack.io cerr, StringWriter;
@@ -87,11 +88,24 @@ cachedRoot.addChild('cat', makeFileNode('cat contents', 0));
 cachedRoot.addChild('alpha', makeFileNode('alpha contents', 0));
 cachedRoot.addChild('zeta', makeFileNode('zeta contents', 0));
 
+# Rewrite "foo" to test overwrites.
+cachedRoot.addChild('foo', makeFileNode('foo contents', 0));
+
 @assert(cachedRoot.getChild(nodeStore, 0).getContents() == 'alpha contents');
 @assert(cachedRoot.getChild(nodeStore, 1).getContents() == 'contents of bar');
 @assert(cachedRoot.getChild(nodeStore, 2).getContents() == 'cat contents');
+@assert(cachedRoot.getChild(nodeStore, 3).getContents() == 'foo contents');
+@assert(cachedRoot.getChild(nodeStore, 4).getContents() == 'zeta contents');
 
-@assert(cachedRoot.getChild(nodeStore, 3).getContents() == 'contents of foo');
+# Test committing changes.
+nodeStore.storeRoot(cachedRoot.commit(nodeStore));
+cachedRoot = CachedNode(digest, nodeStore.getRoot());
+
+# Verify that we got all of the contents.
+@assert(cachedRoot.getChild(nodeStore, 0).getContents() == 'alpha contents');
+@assert(cachedRoot.getChild(nodeStore, 1).getContents() == 'contents of bar');
+@assert(cachedRoot.getChild(nodeStore, 2).getContents() == 'cat contents');
+@assert(cachedRoot.getChild(nodeStore, 3).getContents() == 'foo contents');
 @assert(cachedRoot.getChild(nodeStore, 4).getContents() == 'zeta contents');
 
 cerr `ok\n`;

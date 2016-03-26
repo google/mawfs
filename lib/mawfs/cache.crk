@@ -1,6 +1,7 @@
 ## The node cache.
 module;
 
+import crack.ascii hex;
 import crack.io cerr;
 import crack.cont.array Array;
 import crack.logger debug;
@@ -15,7 +16,6 @@ class Cache {
 class CachedNode {
     String digest;
     Node node;
-    bool dirty;
 
     ## The parent node (the directory that this node is in).
     CachedNode parent;
@@ -26,8 +26,16 @@ class CachedNode {
 
         oper init(Entry entry, CachedNode node) : entry = entry, node = node {}
 
-        String getName() {
+        @final String getName() {
             return entry.name;
+        }
+
+        @final String getDigest() {
+            return entry.hash;
+        }
+
+        @final void setDigest(String digest) {
+            entry.hash = digest;
         }
     }
 
@@ -64,8 +72,10 @@ class CachedNode {
         return node.contents;
     }
 
+    ## Find the index of a named child within a range. (Does a binary search
+    ## in __children).
     @final uint __findIndex(String name, uint start, uint end) {
-        uint midpoint = (end - start) / 2;
+        uint midpoint = (end - start) / 2 + start;
         if (midpoint == start) {
             if (name < __children[midpoint].getName())
                 return start;
@@ -82,9 +92,25 @@ class CachedNode {
             return __findIndex(name, midpoint, end);
     }
 
+    ## Mark the node as diry by removing its digest and do the same for all
+    ## parent nodes.
+    void __markDirty() {
+
+        # Find the child in the parent and invalidate all instances.
+        if (parent) {
+            for (child :in parent.__children) {
+                if (child.entry is this || child.getDigest() == digest)
+                    child.setDigest(null);
+            }
+        }
+
+        digest = null;
+        if (parent) parent.__markDirty();
+    }
+
+    ## Add a new child node with the specified name.
     void addChild(String name, Node node) {
         child := CachedNode(null, node);
-        child.dirty = true;
         child.parent = this;
 
         CachedEntry entry = {Entry(), child};
@@ -95,5 +121,36 @@ class CachedNode {
             __children[i] = entry;
         else
             __children.insert(i, entry);
+
+        # Mark the node and the entire ancestor chain as dirty.
+        __markDirty();
+    }
+
+    ## Commit all outstanding changes in the tree.  Returns the new digest.
+    String commit(NodeStore store) {
+        # If our digest is up to date, we don't need to do anything.
+        if (digest)
+            return digest;
+
+        if (__children) {
+            # Commit all dirty children and reconstruct the child list for the
+            # underlying node.
+
+            # Create a new list of children for the node.
+            node.children = Array[Entry](__children.count());
+
+            for (child :in __children) {
+                if (!child.getDigest())
+                    child.setDigest(child.node.commit(store));
+                node.children.append(child.entry);
+            }
+        } else {
+            # Make sure our node also has no children.
+            node.children = null;
+        }
+
+        # Commit the node itself.
+        digest = store.storeNode(node);
+        return digest;
     }
 }
