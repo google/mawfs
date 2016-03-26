@@ -1,8 +1,11 @@
 ## The node cache.
 module;
 
+import crack.io cerr;
 import crack.cont.array Array;
+import crack.logger debug;
 import mawfs.blockstore Entry, Node, NodeStore;
+
 
 class Cache {
     ## The raw cached blocks.
@@ -12,15 +15,24 @@ class Cache {
 class CachedNode {
     String digest;
     Node node;
+    bool dirty;
+
+    ## The parent node (the directory that this node is in).
+    CachedNode parent;
 
     class CachedEntry {
         Entry entry;
         CachedNode node;
 
         oper init(Entry entry, CachedNode node) : entry = entry, node = node {}
+
+        String getName() {
+            return entry.name;
+        }
     }
 
-    # A sparse-array version of Node.children.  These get filled in as
+    # A sparse-array version of Node.children.  These get filled in as they
+    # are accessed.
     Array[CachedEntry] __children;
 
     oper init(String digest, Node node) :
@@ -28,6 +40,7 @@ class CachedNode {
         node = node {
     }
 
+    ## Get a child by its index.
     CachedNode getChild(NodeStore store, uint index) {
         CachedEntry cachedEntry;
         if (!__children)
@@ -49,5 +62,38 @@ class CachedNode {
 
     @final String getContents() {
         return node.contents;
+    }
+
+    @final uint __findIndex(String name, uint start, uint end) {
+        uint midpoint = (end - start) / 2;
+        if (midpoint == start) {
+            if (name < __children[midpoint].getName())
+                return start;
+            else
+                return end;
+        }
+
+        if (name == __children[midpoint].getName())
+            return midpoint;
+
+        if (name < __children[midpoint].getName())
+            return __findIndex(name, start, midpoint);
+        else
+            return __findIndex(name, midpoint, end);
+    }
+
+    void addChild(String name, Node node) {
+        child := CachedNode(null, node);
+        child.dirty = true;
+        child.parent = this;
+
+        CachedEntry entry = {Entry(), child};
+        entry.entry.name = name;
+
+        i := __findIndex(name, 0, __children.count());
+        if (i < __children.count() && name == __children[i].getName())
+            __children[i] = entry;
+        else
+            __children.insert(i, entry);
     }
 }

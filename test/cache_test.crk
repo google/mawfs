@@ -4,6 +4,7 @@ import crack.hash.sha256 SHA256;
 import crack.io cerr, StringWriter;
 import crack.protobuf ProtoWriter;
 import crack.cont.hashmap HashMap;
+import crack.logger debug, setLogLevel, DEBUG;
 import mawfs.blockstore Entry, Node, NodeStore;
 import mawfs.cache CachedNode;
 @import crack.ann assert, impl;
@@ -40,10 +41,18 @@ class FakeNodeStore @impl NodeStore {
     }
 }
 
-node := Node();
-node.contents = 'contents of foo';
-node.size = int32(node.contents.count());
-node.mode = 0;
+Node makeFileNode(String contents, int32 mode) {
+    node := Node();
+    node.contents = contents;
+    node.size = int32(node.contents.count());
+    node.mode = mode;
+
+    return node;
+}
+
+setLogLevel(DEBUG);
+
+node := makeFileNode('contents of foo', 0);
 
 nodeStore := FakeNodeStore();
 digest := nodeStore.storeNode(node);
@@ -61,5 +70,28 @@ nodeStore.storeRoot(digest);
 cachedRoot := CachedNode(digest, root);
 cachedNode := cachedRoot.getChild(nodeStore, 0);
 @assert(cachedNode.getContents() == 'contents of foo');
+
+# Do it again, make sure this works right if the object is loaded.
+cachedNode = cachedRoot.getChild(nodeStore, 0);
+@assert(cachedNode.getContents() == 'contents of foo');
+
+# Add a child.
+node = makeFileNode('contents of bar', 0);
+cachedRoot.addChild('bar', node);
+
+@assert(cachedRoot.getChild(nodeStore, 0).getContents() == 'contents of bar');
+@assert(cachedRoot.getChild(nodeStore, 1).getContents() == 'contents of foo');
+
+# Verify that the insertion order is correct.
+cachedRoot.addChild('cat', makeFileNode('cat contents', 0));
+cachedRoot.addChild('alpha', makeFileNode('alpha contents', 0));
+cachedRoot.addChild('zeta', makeFileNode('zeta contents', 0));
+
+@assert(cachedRoot.getChild(nodeStore, 0).getContents() == 'alpha contents');
+@assert(cachedRoot.getChild(nodeStore, 1).getContents() == 'contents of bar');
+@assert(cachedRoot.getChild(nodeStore, 2).getContents() == 'cat contents');
+
+@assert(cachedRoot.getChild(nodeStore, 3).getContents() == 'contents of foo');
+@assert(cachedRoot.getChild(nodeStore, 4).getContents() == 'zeta contents');
 
 cerr `ok\n`;
