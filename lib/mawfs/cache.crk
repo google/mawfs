@@ -2,20 +2,75 @@
 module;
 
 import crack.ascii hex;
-import crack.io cerr;
+import crack.io cerr, FStr;
 import crack.cont.array Array;
+import crack.lang cmp, AssertionError, makeHashVal;
 import crack.logger debug;
+import crack.protobuf Field, Message, ProtoWriter;
 import mawfs.blockstore Entry, Node, NodeStore;
 
+@import crack.ann assert, impl;
+@import crack.protobuf.ann protobuf;
+
+const int32
+    ## Add child (contains a Node and a name)
+    CHANGE_ADD_CHILD = 1,
+
+    ## Make a change to a nested child.  Contains a 'name' (the name of the
+    ## child) and the 'nested' field containing the change to be applied to
+    ## that child.
+    CHANGE_NESTED = 2;
+
+@protobuf {
+    declare Node;
+
+    message Change {
+        ## Types are the CHANGE_* constants.
+        required int32 type = 1;
+
+        ## Child name.
+        optional string name = 2;
+
+        ## Node to be added.
+        optional Node node = 3;
+
+        ## Change to be applied to a nested child (should be another Changes
+        ## message).
+        optional bytes nested = 4;
+    }
+}
 
 class Cache {
     ## The raw cached blocks.
 #    HashMap[String, Node] blcoks;
+
+    NodeStore store;
+
+    oper init(NodeStore store) : store = store {}
+
+    @final void addChange(String digest, Change change) {
+        store.writeToJournal(digest, change.toString());
+    }
+
+    @final String storeNode(Node node) {
+        return store.storeNode(node);
+    }
+
+    @final Node getNode(String digest) {
+        return store.getNode(digest);
+    }
+
+    @final void clearJournal(String digest) {
+        store.deleteJournal(digest);
+    }
 }
 
 class CachedNode {
+    Cache __cache;
+
     String digest;
     Node node;
+    bool dirty;
 
     ## The parent node (the directory that this node is in).
     CachedNode parent;
@@ -43,13 +98,16 @@ class CachedNode {
     # are accessed.
     Array[CachedEntry] __children;
 
-    oper init(String digest, Node node) :
+    ## digest should be null for a new node.
+    oper init(Cache cache, String digest, Node node) :
+        __cache = cache,
         digest = digest,
-        node = node {
+        node = node,
+        dirty = !digest {
     }
 
     ## Get a child by its index.
-    CachedNode getChild(NodeStore store, uint index) {
+    CachedNode getChild(uint index) {
         CachedEntry cachedEntry;
         if (!__children)
             # Create an array of children to mirror that of node.children,
@@ -60,9 +118,10 @@ class CachedNode {
         if (!cachedEntry) {
             entry := node.children[index];
             cachedEntry = __children[index] =
-                CachedEntry(entry, CachedNode(entry.hash,
-                                              store.getNode(entry.hash)
-                                              )
+                CachedEntry(entry,
+                            CachedNode(__cache, entry.hash,
+                                       __cache.getNode(entry.hash)
+                                       )
                             );
         }
         return cachedEntry.node;
@@ -92,8 +151,7 @@ class CachedNode {
             return __findIndex(name, midpoint, end);
     }
 
-    ## Mark the node as diry by removing its digest and do the same for all
-    ## parent nodes.
+    ## Mark the node as diry and do the same for all parent nodes.
     void __markDirty() {
 
         # Find the child in the parent and invalidate all instances.
@@ -104,13 +162,38 @@ class CachedNode {
             }
         }
 
-        digest = null;
+        dirty = true;
         if (parent) parent.__markDirty();
+    }
+
+    void __recordChildChange(CachedNode child, Change childChange) {
+
+        # Find the name of the child.
+        String childName;
+        for (c :in __children) {
+            if (c.node is child)
+                childName = c.getName();
+        }
+
+        @assert(childName);
+
+        # Create a change for the child.
+        change := Change();
+        change.type = CHANGE_NESTED;
+        change.name = childName;
+        change.nested = childChange.toString();
+        if (digest) {
+            __cache.addChange(digest, change);
+        } else {
+            @assert(parent);
+            __recordChildChange(this, change);
+        }
+
     }
 
     ## Add a new child node with the specified name.
     void addChild(String name, Node node) {
-        child := CachedNode(null, node);
+        child := CachedNode(__cache, null, node);
         child.parent = this;
 
         CachedEntry entry = {Entry(), child};
@@ -122,14 +205,30 @@ class CachedNode {
         else
             __children.insert(i, entry);
 
+        # Record the change in the journal.
+        change := Change();
+        change.type = CHANGE_ADD_CHILD;
+        change.name = name;
+        change.node = node;
+
+        # If we have a digest, we can create a change record against this
+        # node.  If not, we have to recurse back to the first parent that has
+        # a digest and apply the change to its journal.
+        if (digest) {
+            __cache.addChange(digest, change);
+        } else {
+            @assert(parent);
+            parent.__recordChildChange(this, change);
+        }
+
         # Mark the node and the entire ancestor chain as dirty.
         __markDirty();
     }
 
     ## Commit all outstanding changes in the tree.  Returns the new digest.
-    String commit(NodeStore store) {
+    String commit() {
         # If our digest is up to date, we don't need to do anything.
-        if (digest)
+        if (!dirty)
             return digest;
 
         if (__children) {
@@ -141,7 +240,7 @@ class CachedNode {
 
             for (child :in __children) {
                 if (!child.getDigest())
-                    child.setDigest(child.node.commit(store));
+                    child.setDigest(dig := child.node.commit());
                 node.children.append(child.entry);
             }
         } else {
@@ -149,8 +248,22 @@ class CachedNode {
             node.children = null;
         }
 
-        # Commit the node itself.
-        digest = store.storeNode(node);
+        # Commit the node itself and clear the journal.
+        orgDigest := digest;
+        if (__children) {
+            for (child :in __children) {
+                if (!child.entry.hash)
+                    throw AssertionError(
+                        FStr() `Invalid hash for $(child.getName())`
+                    );
+                else if (!child.entry.name)
+                    throw AssertionError(FStr() `Child with no name`);
+            }
+        }
+
+        digest = __cache.storeNode(node);
+        __cache.clearJournal(orgDigest);
+
         return digest;
     }
 }

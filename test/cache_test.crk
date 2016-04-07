@@ -7,7 +7,8 @@ import crack.protobuf ProtoWriter;
 import crack.cont.hashmap HashMap;
 import crack.logger debug, setLogLevel, DEBUG;
 import mawfs.blockstore Entry, Node, NodeStore;
-import mawfs.cache CachedNode;
+import mawfs.cache Cache, CachedNode;
+
 @import crack.ann assert, impl;
 
 class FakeNodeStore @impl NodeStore {
@@ -40,6 +41,9 @@ class FakeNodeStore @impl NodeStore {
     void storeRoot(String digest) {
         __root = digest;
     }
+
+    void writeToJournal(String digest, String contents) {}
+    void deleteJournal(String digest) {}
 }
 
 Node makeFileNode(String contents, int32 mode) {
@@ -68,20 +72,21 @@ root.children.append(entry);
 digest = nodeStore.storeNode(root);
 nodeStore.storeRoot(digest);
 
-cachedRoot := CachedNode(digest, root);
-cachedNode := cachedRoot.getChild(nodeStore, 0);
+cache := Cache(nodeStore);
+cachedRoot := CachedNode(cache, digest, root);
+cachedNode := cachedRoot.getChild(0);
 @assert(cachedNode.getContents() == 'contents of foo');
 
 # Do it again, make sure this works right if the object is loaded.
-cachedNode = cachedRoot.getChild(nodeStore, 0);
+cachedNode = cachedRoot.getChild(0);
 @assert(cachedNode.getContents() == 'contents of foo');
 
 # Add a child.
 node = makeFileNode('contents of bar', 0);
 cachedRoot.addChild('bar', node);
 
-@assert(cachedRoot.getChild(nodeStore, 0).getContents() == 'contents of bar');
-@assert(cachedRoot.getChild(nodeStore, 1).getContents() == 'contents of foo');
+@assert(cachedRoot.getChild(0).getContents() == 'contents of bar');
+@assert(cachedRoot.getChild(1).getContents() == 'contents of foo');
 
 # Verify that the insertion order is correct.
 cachedRoot.addChild('cat', makeFileNode('cat contents', 0));
@@ -91,21 +96,26 @@ cachedRoot.addChild('zeta', makeFileNode('zeta contents', 0));
 # Rewrite "foo" to test overwrites.
 cachedRoot.addChild('foo', makeFileNode('foo contents', 0));
 
-@assert(cachedRoot.getChild(nodeStore, 0).getContents() == 'alpha contents');
-@assert(cachedRoot.getChild(nodeStore, 1).getContents() == 'contents of bar');
-@assert(cachedRoot.getChild(nodeStore, 2).getContents() == 'cat contents');
-@assert(cachedRoot.getChild(nodeStore, 3).getContents() == 'foo contents');
-@assert(cachedRoot.getChild(nodeStore, 4).getContents() == 'zeta contents');
+@assert(cachedRoot.getChild(0).getContents() == 'alpha contents');
+@assert(cachedRoot.getChild(1).getContents() == 'contents of bar');
+@assert(cachedRoot.getChild(2).getContents() == 'cat contents');
+@assert(cachedRoot.getChild(3).getContents() == 'foo contents');
+@assert(cachedRoot.getChild(4).getContents() == 'zeta contents');
 
 # Test committing changes.
-nodeStore.storeRoot(cachedRoot.commit(nodeStore));
-cachedRoot = CachedNode(digest, nodeStore.getRoot());
+nodeStore.storeRoot(cachedRoot.commit());
+cachedRoot = CachedNode(cache, digest, nodeStore.getRoot());
 
 # Verify that we got all of the contents.
-@assert(cachedRoot.getChild(nodeStore, 0).getContents() == 'alpha contents');
-@assert(cachedRoot.getChild(nodeStore, 1).getContents() == 'contents of bar');
-@assert(cachedRoot.getChild(nodeStore, 2).getContents() == 'cat contents');
-@assert(cachedRoot.getChild(nodeStore, 3).getContents() == 'foo contents');
-@assert(cachedRoot.getChild(nodeStore, 4).getContents() == 'zeta contents');
+@assert(cachedRoot.getChild(0).getContents() == 'alpha contents');
+@assert(cachedRoot.getChild(1).getContents() == 'contents of bar');
+@assert(cachedRoot.getChild(2).getContents() == 'cat contents');
+@assert(cachedRoot.getChild(3).getContents() == 'foo contents');
+@assert(cachedRoot.getChild(4).getContents() == 'zeta contents');
+
+# TODO:
+#   - create a directory and then a child node to verify that when we do
+#     addChild() on a node without a digest the change propagates back to the
+#     parent.
 
 cerr `ok\n`;

@@ -202,6 +202,12 @@ class FSInfo {
 
     ## Store the digest of the root node.
     @abstract void storeRoot(String digest);
+
+    ## Write a change to the journal for a node.
+    @abstract void writeToJournal(String digest, String change);
+
+    ## Delete the journal for a node.
+    @abstract void deleteJournal(String digest);
 }
 
 
@@ -280,6 +286,14 @@ class ChunkStore @impl NodeStore {
     # Store the current root digest.
     void storeRoot(String digest) {
         (__dir/'root').writeAll(hex(digest));
+    }
+
+    void writeToJournal(String digest, String contents) {
+#        dst := (__dir/'root').appender();
+#        ProtoWriter
+    }
+
+    void deleteJournal(String digest) {
     }
 
     ## Store an entire directory in the blockstore.  Returns its digest.

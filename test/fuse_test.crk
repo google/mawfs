@@ -106,6 +106,9 @@ class FakeNodeStore @impl NodeStore {
     void storeRoot(String digest) {
         rootDigest = digest;
     }
+
+    void writeToJournal(String digest, String change) {}
+    void deleteJournal(String digest) {}
 }
 
 
