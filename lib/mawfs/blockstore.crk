@@ -60,6 +60,22 @@ const int
     message Directory {
         repeated Entry entry = 1;
     }
+
+    ## A change record to be stored in the journal.
+    message Change {
+        ## Types are the CHANGE_* constants.
+        required int32 type = 1;
+
+        ## Child name.
+        optional string name = 2;
+
+        ## Node to be added.
+        optional Node node = 3;
+
+        ## Change to be applied to a nested child (should be another Changes
+        ## message).
+        optional bytes nested = 4;
+    }
 }
 
 String hashFile(Path file) {
@@ -208,6 +224,9 @@ class FSInfo {
 
     ## Delete the journal for a node.
     @abstract void deleteJournal(String digest);
+
+    ## Return all journal entries for the node with the given digest.
+    @abstract Array[String] getJournalEntries(String digest);
 }
 
 
@@ -294,6 +313,10 @@ class ChunkStore @impl NodeStore {
     }
 
     void deleteJournal(String digest) {
+    }
+
+    Array[String] getJournalEntries(String digest) {
+        return null;
     }
 
     ## Store an entire directory in the blockstore.  Returns its digest.

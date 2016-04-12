@@ -6,7 +6,7 @@ import crack.io cerr, FStr;
 import crack.cont.array Array;
 import crack.lang cmp, AssertionError, makeHashVal;
 import crack.logger debug;
-import crack.protobuf Field, Message, ProtoWriter;
+import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
 import mawfs.blockstore Entry, Node, NodeStore;
 
 @import crack.ann assert, impl;
@@ -63,6 +63,17 @@ class Cache {
     @final void clearJournal(String digest) {
         store.deleteJournal(digest);
     }
+
+    @final Array[Change] getJournalEntries(String digest) {
+        unparsedChanges := store.getJournalEntries(digest);
+        Array[Change] changes = {};
+        for (serializedChange :in unparsedChanges) {
+            Change parsedChange = {};
+            readMessageFromString(parsedChange, serializedChange);
+            changes.append(parsedChange);
+        }
+        return changes;
+    }
 }
 
 class CachedNode {
@@ -106,13 +117,30 @@ class CachedNode {
         dirty = !digest {
     }
 
+    ## Allocate __children array to mirror the values in node.children.
+    @final void __makeChildren() {
+        # Create an array of children to mirror that of node.children,
+        # initialize all elements to null.
+        __children = Array[CachedEntry](node.children.count(), null);
+    }
+
+
+    ## Allocate an array of children and populate with the child entries in
+    ## the node.
+    @final void __populateChildren() {
+        if (!__children)
+            __makeChildren();
+        if (node.children) {
+            for (iter :on node.children)
+                __children[iter.index] = CachedEntry(iter.elem(), null);
+        }
+    }
+
     ## Get a child by its index.
     CachedNode getChild(uint index) {
         CachedEntry cachedEntry;
         if (!__children)
-            # Create an array of children to mirror that of node.children,
-            # initialize all elements to null.
-            __children = Array[CachedEntry](node.children.count(), null);
+            __makeChildren();
         else
             cachedEntry = __children[index];
         if (!cachedEntry) {
@@ -191,19 +219,31 @@ class CachedNode {
 
     }
 
-    ## Add a new child node with the specified name.
-    void addChild(String name, Node node) {
+    ## Internal add child method, which does everything but create a change
+    ## record.
+    void __addChild(String name, Node node) {
         child := CachedNode(__cache, null, node);
         child.parent = this;
 
         CachedEntry entry = {Entry(), child};
         entry.entry.name = name;
 
+        if (!__children)
+            __populateChildren();
+
         i := __findIndex(name, 0, __children.count());
         if (i < __children.count() && name == __children[i].getName())
             __children[i] = entry;
         else
             __children.insert(i, entry);
+
+        # Mark the node and the entire ancestor chain as dirty.
+        __markDirty();
+    }
+
+    ## Add a new child node with the specified name.
+    void addChild(String name, Node node) {
+        __addChild(name, node);
 
         # Record the change in the journal.
         change := Change();
@@ -220,9 +260,6 @@ class CachedNode {
             @assert(parent);
             parent.__recordChildChange(this, change);
         }
-
-        # Mark the node and the entire ancestor chain as dirty.
-        __markDirty();
     }
 
     ## Commit all outstanding changes in the tree.  Returns the new digest.
@@ -262,8 +299,28 @@ class CachedNode {
         }
 
         digest = __cache.storeNode(node);
+        dirty = false;
         __cache.clearJournal(orgDigest);
 
         return digest;
+    }
+
+    ## Replay all journal entries against the node.  If the node doesn't have
+    ## a digest or there are no changes, does nothing.
+    void replayJournal() {
+
+        # Don't do this for a node that hasn't been saved.
+        if (!digest)
+            return;
+
+        changes := __cache.getJournalEntries(digest);
+        if (!changes)
+            return;
+
+        # Apply all of the changes in sequence.
+        for (change :in changes) {
+            if (change.type == CHANGE_ADD_CHILD)
+                __addChild(change.name, change.node);
+        }
     }
 }

@@ -13,6 +13,7 @@ import mawfs.cache Cache, CachedNode;
 
 class FakeNodeStore @impl NodeStore {
     HashMap[String, Node] __nodes = {};
+    HashMap[String, Array[String]] __journal = {};
     String __root;
 
     String __digest(Node node) {
@@ -42,8 +43,21 @@ class FakeNodeStore @impl NodeStore {
         __root = digest;
     }
 
-    void writeToJournal(String digest, String contents) {}
-    void deleteJournal(String digest) {}
+    void writeToJournal(String digest, String contents) {
+        arr := __journal.get(digest);
+        if (!arr)
+            __journal[digest] = arr = Array[String]();
+        arr.append(contents);
+    }
+
+    Array[String] getJournalEntries(String digest) {
+        return __journal.get(digest);
+    }
+
+    void deleteJournal(String digest) {
+        if (__journal.hasKey(digest))
+            __journal.delete(digest);
+    }
 }
 
 Node makeFileNode(String contents, int32 mode) {
@@ -96,22 +110,26 @@ cachedRoot.addChild('zeta', makeFileNode('zeta contents', 0));
 # Rewrite "foo" to test overwrites.
 cachedRoot.addChild('foo', makeFileNode('foo contents', 0));
 
-@assert(cachedRoot.getChild(0).getContents() == 'alpha contents');
-@assert(cachedRoot.getChild(1).getContents() == 'contents of bar');
-@assert(cachedRoot.getChild(2).getContents() == 'cat contents');
-@assert(cachedRoot.getChild(3).getContents() == 'foo contents');
-@assert(cachedRoot.getChild(4).getContents() == 'zeta contents');
+void verifyContents() {
+    @assert(cachedRoot.getChild(0).getContents() == 'alpha contents');
+    @assert(cachedRoot.getChild(1).getContents() == 'contents of bar');
+    @assert(cachedRoot.getChild(2).getContents() == 'cat contents');
+    @assert(cachedRoot.getChild(3).getContents() == 'foo contents');
+    @assert(cachedRoot.getChild(4).getContents() == 'zeta contents');
+}
+
+# TODO: test committing changes at this point as well as after replaying them
+# back from the cache.
+
+# Test reconstructing changes from cache.
+cachedRoot = CachedNode(cache, digest, nodeStore.getRoot());
+cachedRoot.replayJournal();
+verifyContents();
 
 # Test committing changes.
 nodeStore.storeRoot(cachedRoot.commit());
 cachedRoot = CachedNode(cache, digest, nodeStore.getRoot());
-
-# Verify that we got all of the contents.
-@assert(cachedRoot.getChild(0).getContents() == 'alpha contents');
-@assert(cachedRoot.getChild(1).getContents() == 'contents of bar');
-@assert(cachedRoot.getChild(2).getContents() == 'cat contents');
-@assert(cachedRoot.getChild(3).getContents() == 'foo contents');
-@assert(cachedRoot.getChild(4).getContents() == 'zeta contents');
+verifyContents();
 
 # TODO:
 #   - create a directory and then a child node to verify that when we do
