@@ -5,7 +5,7 @@ import crack.ascii hex;
 import crack.io cerr, FStr;
 import crack.cont.array Array;
 import crack.lang cmp, AssertionError, makeHashVal;
-import crack.logger debug;
+import crack.logger debug, error;
 import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
 import mawfs.blockstore Entry, Node, NodeStore;
 
@@ -76,6 +76,12 @@ class Cache {
     }
 }
 
+class CachedNode;
+
+## Returns an up-to-date (i.e. the journal has been replayed) cached node
+## from the cache.
+CachedNode _getCachedNode(Cache cache, String digest);
+
 class CachedNode {
     Cache __cache;
 
@@ -86,11 +92,25 @@ class CachedNode {
     ## The parent node (the directory that this node is in).
     CachedNode parent;
 
+    @final int getMode() {
+        return node.mode;
+    }
+
     class CachedEntry {
         Entry entry;
+        Cache __cache;
         CachedNode node;
 
-        oper init(Entry entry, CachedNode node) : entry = entry, node = node {}
+        oper init(Cache cache, Entry entry) :
+            entry = entry,
+            __cache = cache {
+        }
+
+        oper init(Entry entry, CachedNode node) : entry = entry, node = node {
+            # We shouldn't really need the cache if we've already got the
+            # node, but this gives us a clean invariant.
+            __cache = node.__cache;
+        }
 
         @final String getName() {
             return entry.name;
@@ -103,11 +123,84 @@ class CachedNode {
         @final void setDigest(String digest) {
             entry.hash = digest;
         }
+
+        ## Returns the node referenced by this child object.
+        @final CachedNode getNode() {
+            # Lazy load the node.
+            if (!node)
+                node = _getCachedNode(__cache, entry.hash);
+            return node;
+        }
+
+        @final int getMode() {
+            return getNode().getMode();
+        }
+    }
+
+    ## A list of children sorted by name.  Retrieval/insertion by name is
+    ## supported.
+    class __ChildArray : Array[CachedEntry] {
+
+        oper init(uint size, CachedEntry default) :
+            Array[CachedEntry](size, default) {
+        }
+
+        ## Recursive helper for __findIndex(String).
+        @final int __findIndex(String name, uint start, uint end) {
+
+            if (!count())
+                return -1;
+
+            uint midpoint = (end - start) / 2 + start;
+            if (midpoint == start) {
+                comparison := cmp(name, this[midpoint].getName());
+                if (comparison == 0)
+                    return start;
+                else if (comparison < 0)
+                    return -(start + 1);
+                else
+                    return -(end + 1);
+            }
+
+            if (name == this[midpoint].getName())
+                return midpoint;
+
+            if (name < this[midpoint].getName())
+                return __findIndex(name, start, midpoint);
+            else
+                return __findIndex(name, midpoint, end);
+        }
+
+        ## Find the index of the child with the given name.  If there is no
+        ## match in the array, returns the
+        ## negative index + 1 of where the element would be (so if it belonged
+        ## at index 0, we would return -1).  Returns the index of the element
+        ## if it was found as an ordinary positive integer.
+        @final int findIndex(String name) {
+            return __findIndex(name, 0, count());
+        }
+
+        ## Return the entry identified by the name, null if it doesn't exist.
+        @final CachedEntry get(String name) {
+            i := __findIndex(name, 0, count());
+            if (i < 0)
+                return null;
+            else
+                return this[i];
+        }
+
+        @final void add(CachedEntry entry) {
+            i := findIndex(entry.getName());
+            if (i >= 0)
+                this[i] = entry;
+            else
+                insert(-i - 1, entry);
+        }
     }
 
     # A sparse-array version of Node.children.  These get filled in as they
     # are accessed.
-    Array[CachedEntry] __children;
+    __ChildArray __children;
 
     ## digest should be null for a new node.
     oper init(Cache cache, String digest, Node node) :
@@ -121,7 +214,7 @@ class CachedNode {
     @final void __makeChildren() {
         # Create an array of children to mirror that of node.children,
         # initialize all elements to null.
-        __children = Array[CachedEntry](node.children.count(), null);
+        __children = __ChildArray(node.children.count(), null);
     }
 
 
@@ -132,7 +225,7 @@ class CachedNode {
             __makeChildren();
         if (node.children) {
             for (iter :on node.children)
-                __children[iter.index] = CachedEntry(iter.elem(), null);
+                __children[iter.index] = CachedEntry(__cache, iter.elem());
         }
     }
 
@@ -157,26 +250,6 @@ class CachedNode {
 
     @final String getContents() {
         return node.contents;
-    }
-
-    ## Find the index of a named child within a range. (Does a binary search
-    ## in __children).
-    @final uint __findIndex(String name, uint start, uint end) {
-        uint midpoint = (end - start) / 2 + start;
-        if (midpoint == start) {
-            if (name < __children[midpoint].getName())
-                return start;
-            else
-                return end;
-        }
-
-        if (name == __children[midpoint].getName())
-            return midpoint;
-
-        if (name < __children[midpoint].getName())
-            return __findIndex(name, start, midpoint);
-        else
-            return __findIndex(name, midpoint, end);
     }
 
     ## Mark the node as diry and do the same for all parent nodes.
@@ -228,14 +301,12 @@ class CachedNode {
         CachedEntry entry = {Entry(), child};
         entry.entry.name = name;
 
-        if (!__children)
+        if (__children is null)
+            # TODO: we can get away with lazy-populating the child entries.
             __populateChildren();
 
-        i := __findIndex(name, 0, __children.count());
-        if (i < __children.count() && name == __children[i].getName())
-            __children[i] = entry;
-        else
-            __children.insert(i, entry);
+        # Add the child.
+        __children.add(entry);
 
         # Mark the node and the entire ancestor chain as dirty.
         __markDirty();
@@ -305,6 +376,26 @@ class CachedNode {
         return digest;
     }
 
+    void __applyChange(Change change) {
+        if (change.type == CHANGE_ADD_CHILD) {
+            __addChild(change.name, change.node);
+        } else if (change.type == CHANGE_NESTED) {
+
+            # Get the requested child.
+            child := __children.get(change.name);
+            if (!child) {
+                error I`Change for child $(change.name) of node $digest \
+                        found, but child doesn't exist.`;
+                return;
+            }
+
+            # Extract the neste change and apply it to the child.
+            Change nested = {};
+            readMessageFromString(nested, change.nested);
+            child.getNode().__applyChange(nested);
+        }
+    }
+
     ## Replay all journal entries against the node.  If the node doesn't have
     ## a digest or there are no changes, does nothing.
     void replayJournal() {
@@ -318,9 +409,13 @@ class CachedNode {
             return;
 
         # Apply all of the changes in sequence.
-        for (change :in changes) {
-            if (change.type == CHANGE_ADD_CHILD)
-                __addChild(change.name, change.node);
-        }
+        for (change :in changes)
+            __applyChange(change);
     }
+}
+
+CachedNode _getCachedNode(Cache cache, String digest) {
+    node := CachedNode(cache, digest, cache.getNode(digest));
+    node.replayJournal();
+    return node;
 }

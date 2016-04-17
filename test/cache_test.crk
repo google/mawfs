@@ -6,7 +6,7 @@ import crack.io cerr, StringWriter;
 import crack.protobuf ProtoWriter;
 import crack.cont.hashmap HashMap;
 import crack.logger debug, setLogLevel, DEBUG;
-import mawfs.blockstore Entry, Node, NodeStore;
+import mawfs.blockstore Entry, Node, NodeStore, MODE_DIR;
 import mawfs.cache Cache, CachedNode;
 
 @import crack.ann assert, impl;
@@ -69,6 +69,12 @@ Node makeFileNode(String contents, int32 mode) {
     return node;
 }
 
+Node makeDirNode() {
+    node := Node();
+    node.mode = MODE_DIR;
+    return node;
+}
+
 setLogLevel(DEBUG);
 
 node := makeFileNode('contents of foo', 0);
@@ -109,6 +115,9 @@ cachedRoot.addChild('zeta', makeFileNode('zeta contents', 0));
 
 # Rewrite "foo" to test overwrites.
 cachedRoot.addChild('foo', makeFileNode('foo contents', 0));
+cachedRoot.addChild('zzdir', makeDirNode());
+zzdir := cachedRoot.getChild(5);
+zzdir.addChild('zzfile', makeFileNode('zzfile contents', 0));
 
 void verifyContents() {
     @assert(cachedRoot.getChild(0).getContents() == 'alpha contents');
@@ -116,6 +125,9 @@ void verifyContents() {
     @assert(cachedRoot.getChild(2).getContents() == 'cat contents');
     @assert(cachedRoot.getChild(3).getContents() == 'foo contents');
     @assert(cachedRoot.getChild(4).getContents() == 'zeta contents');
+    @assert(cachedRoot.getChild(5).getMode() == MODE_DIR);
+    @assert(cachedRoot.getChild(5).getChild(0).getContents() ==
+            'zzfile contents');
 }
 
 # TODO: test committing changes at this point as well as after replaying them
