@@ -2,9 +2,9 @@
 module;
 
 import crack.ascii hex;
-import crack.io cerr, FStr;
+import crack.io cerr, Formatter, FStr;
 import crack.cont.array Array;
-import crack.lang cmp, AssertionError, makeHashVal;
+import crack.lang cmp, AssertionError, KeyError, makeHashVal;
 import crack.logger debug, error;
 import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
 import mawfs.blockstore Entry, Node, NodeStore;
@@ -16,10 +16,13 @@ const int32
     ## Add child (contains a Node and a name)
     CHANGE_ADD_CHILD = 1,
 
+    ## Delete a child (contains a name).
+    CHANGE_DELETE_CHILD = 2,
+
     ## Make a change to a nested child.  Contains a 'name' (the name of the
     ## child) and the 'nested' field containing the change to be applied to
     ## that child.
-    CHANGE_NESTED = 2;
+    CHANGE_NESTED = 3;
 
 @protobuf {
     declare Node;
@@ -141,8 +144,12 @@ class CachedNode {
     ## supported.
     class __ChildArray : Array[CachedEntry] {
 
-        oper init(uint size, CachedEntry default) :
-            Array[CachedEntry](size, default) {
+        # Underlying representation.
+        Array[Entry] __rep;
+
+        oper init(Array[Entry] rep) :
+            Array[CachedEntry](rep.count(), null),
+            __rep = rep {
         }
 
         ## Recursive helper for __findIndex(String).
@@ -191,10 +198,36 @@ class CachedNode {
 
         @final void add(CachedEntry entry) {
             i := findIndex(entry.getName());
-            if (i >= 0)
+            if (i >= 0) {
                 this[i] = entry;
-            else
+                __rep[i] = entry.entry;
+            } else {
                 insert(-i - 1, entry);
+                __rep.insert(-i - 1, entry.entry);
+            }
+        }
+
+        @final void delete(String name) {
+            i := findIndex(name);
+            if (i >= 0) {
+                this.delete(i);
+                __rep.delete(i);
+            } else {
+                throw KeyError(FStr() `Element $name not found`);
+            }
+        }
+
+        void formatTo(Formatter out) {
+            out `CachedEntries![`;
+            for (child :in this) {
+                dig := child.getDigest();
+                String digest;
+                if (dig)
+                    digest := hex(dig);
+                out I`$(child.getName().getRepr()): \
+                      $(digest), `;
+            }
+            out `]`;
         }
     }
 
@@ -214,7 +247,7 @@ class CachedNode {
     @final void __makeChildren() {
         # Create an array of children to mirror that of node.children,
         # initialize all elements to null.
-        __children = __ChildArray(node.children.count(), null);
+        __children = __ChildArray(node.children);
     }
 
 
@@ -292,6 +325,20 @@ class CachedNode {
 
     }
 
+    ## Record a change in the journal for this node or for the appropriate
+    ## parent node if this node doesn't have a digest yet.
+    void __recordChange(Change change) {
+        # If we have a digest, we can create a change record against this
+        # node.  If not, we have to recurse back to the first parent that has
+        # a digest and apply the change to its journal.
+        if (digest) {
+            __cache.addChange(digest, change);
+        } else {
+            @assert(parent);
+            parent.__recordChildChange(this, change);
+        }
+    }
+
     ## Internal add child method, which does everything but create a change
     ## record.
     void __addChild(String name, Node node) {
@@ -321,16 +368,24 @@ class CachedNode {
         change.type = CHANGE_ADD_CHILD;
         change.name = name;
         change.node = node;
+        __recordChange(change);
+    }
 
-        # If we have a digest, we can create a change record against this
-        # node.  If not, we have to recurse back to the first parent that has
-        # a digest and apply the change to its journal.
-        if (digest) {
-            __cache.addChange(digest, change);
-        } else {
-            @assert(parent);
-            parent.__recordChildChange(this, change);
-        }
+    void deleteChild(String name) {
+        if (__children is null)
+            __populateChildren();
+        __children.delete(name);
+
+        # Record the change.
+        change := Change();
+        change.type = CHANGE_DELETE_CHILD;
+        change.name = name;
+        __recordChange(change);
+    }
+
+    ## Returns the number of children in the node.
+    uint getChildCount() {
+        return node.children.count();
     }
 
     ## Commit all outstanding changes in the tree.  Returns the new digest.
@@ -379,6 +434,8 @@ class CachedNode {
     void __applyChange(Change change) {
         if (change.type == CHANGE_ADD_CHILD) {
             __addChild(change.name, change.node);
+        } else if (change.type == CHANGE_DELETE_CHILD) {
+            __children.delete(change.name);
         } else if (change.type == CHANGE_NESTED) {
 
             # Get the requested child.

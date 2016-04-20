@@ -118,6 +118,8 @@ cachedRoot.addChild('foo', makeFileNode('foo contents', 0));
 cachedRoot.addChild('zzdir', makeDirNode());
 zzdir := cachedRoot.getChild(5);
 zzdir.addChild('zzfile', makeFileNode('zzfile contents', 0));
+zzdir.addChild('deleted', makeFileNode('deleted file', 0));
+zzdir.deleteChild('deleted');
 
 void verifyContents() {
     @assert(cachedRoot.getChild(0).getContents() == 'alpha contents');
@@ -128,6 +130,7 @@ void verifyContents() {
     @assert(cachedRoot.getChild(5).getMode() == MODE_DIR);
     @assert(cachedRoot.getChild(5).getChild(0).getContents() ==
             'zzfile contents');
+    @assert(cachedRoot.getChild(5).getChildCount() == 1);
 }
 
 # TODO: test committing changes at this point as well as after replaying them
