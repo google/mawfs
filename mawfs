@@ -8,12 +8,14 @@ import crack.exp.fuse fuseLog = log;
 import crack.fs cwd, makePath, Path;
 import crack.strutil StringArray;
 import crack.sys argv, exit;
-import crack.io cin, cout, cerr, FStr, Reader, StandardFormatter;
+import crack.io cin, cout, cerr, Formatter, FStr, Reader, StandardFormatter,
+    StringReader;
 
 import crack.cont.array Array;
 import crack.lang AppendBuffer;
+import crack.protobuf readMessageFromString;
 
-import mawfs.blockstore hashFile, unhex, ChunkStore, FSInfo, BLOCK_SIZE;
+import mawfs.blockstore hashFile, unhex, ChunkStore, FSInfo, Node, BLOCK_SIZE;
 import mawfs.fuse runFuse;
 
 #class DirNode : NodeImpl {
@@ -28,19 +30,41 @@ import mawfs.fuse runFuse;
 
 const TESTPW := 'FooBar-boguspassFooBar-boguspass';
 
+void dumpNode(Formatter out, Node node) {
+    if (node.checksum)
+        out `checksum: $(node.checksum)\n`;
+    if (!(node.contents is null))
+        out `contents: $(node.contents.getRepr())\n`;
+    out `mode: $(node.mode)\n`;
+    out `size: $(node.size)\n`;
+    if (node.children) {
+        out `children:\n`;
+        for (child :in node.children) {
+            out `-  hash: $(hex(child.hash))\n`;
+            if (child.name)
+                out `   name: $(child.name)\n`;
+            if (child.org_checksum)
+                out `   org_checksum: $(child.org_checksum)\n`;
+        }
+    }
+}
+
 void usage() {
     cerr I`\
         Usage:
+            mawfs run <backing> <mountpoint>
+                Mount a mawfs filesystem.
             mawfs hash <filename> ...
                 Show file hashes.
-            mawfs mount <backing-store> <mount-point>
-                Mount a filesystem.
+                the correct way to do this.
             mawfs storechunk <src-file>
                 Reads data from <src-file> and writes it to the filesystem
                 under its digest name.
             mawfs loadchunk <hash>
                 Loads a chunk based on its digest and writes it to standard
                 output.
+            mawfs dump <filename>
+                Dump the contents of an encrypted backing file.
         `;
 }
 
@@ -71,11 +95,13 @@ void main() {
             for (file :in argv.subarray(2))
                 cout `$(hex(hashFile(makePath(file)))) $file\n`;
         } else if (cmd == 'mount') {
-            if (argv.count() != 4) {
-                cerr `Usage: mawfs mount <backing-store> <mount-point>\n`;
-                exit(1);
-            }
-
+            cerr `"mount" doesn't work, use "run"]\n`;
+            exit(1);
+#            if (argv.count() != 4) {
+#                cerr `Usage: mawfs mount <backing-store> <mount-point>\n`;
+#                exit(1);
+#            }
+#
 #            mount(argv[2], argv[3]);
         } else if (cmd == 'storechunk') {
             if (argv.count() != 3) {
@@ -115,6 +141,26 @@ void main() {
             fuseArgs.extend(argv.subarray(3));
             fuseLog = StandardFormatter(makePath('mawfs.log').writer());
             runFuse(ChunkStore(makePath(argv[2]), FSInfo(TESTPW)), fuseArgs);
+        } else if (cmd == 'dump') {
+            if (argv.count() != 3) {
+                cerr I`Usage: mawfs dump <path>`;
+                exit(1);
+            }
+
+            path := makePath(argv[2]);
+            contents := path.readAll();
+
+            # See if this is a tag.
+            if (contents.count() == 64 &&
+                ((refed := path.parent()/unhex(contents))).exists()
+                )
+                contents = refed.readAll();
+
+            # Read it.
+            chunk := FSInfo(TESTPW).readChunk(StringReader(contents));
+            Node node = {};
+            readMessageFromString(node, chunk.contents);
+            dumpNode(cout, node);
         } else {
             cerr `Unknown command: $cmd\n`;
             usage();
