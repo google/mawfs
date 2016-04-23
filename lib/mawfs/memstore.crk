@@ -1,0 +1,61 @@
+## A NodeStore implemented in memory.  This is mainly useful for testing.
+
+import crack.cont.array Array;
+import crack.cont.hashmap HashMap;
+import crack.hash.sha256 SHA256;
+import crack.io StringWriter;
+import crack.protobuf ProtoWriter;
+import mawfs.blockstore Node, NodeStore;
+
+@import crack.ann impl;
+
+## A NodeStore implemented entirely in memory.
+class MemNodeStore @impl NodeStore {
+    HashMap[String, Node] __nodes = {};
+    HashMap[String, Array[String]] __journal = {};
+    String __root;
+
+    String __digest(Node node) {
+        # Construct a digest from the object contents.
+        StringWriter temp = {};
+        ProtoWriter pw = {temp};
+        node.serialize(pw);
+        hasher := SHA256();
+        hasher.update(temp.string());
+        return hasher.digest();
+    }
+
+    String storeNode(Node node) {
+        __nodes[result := __digest(node)] = node;
+        return result;
+    }
+
+    Node getNode(String digest) {
+        return __nodes.get(digest);
+    }
+
+    Node getRoot() {
+        return getNode(__root);
+    }
+
+    void storeRoot(String digest) {
+        __root = digest;
+    }
+
+    void writeToJournal(String digest, String contents) {
+        arr := __journal.get(digest);
+        if (!arr)
+            __journal[digest] = arr = Array[String]();
+        arr.append(contents);
+    }
+
+    Array[String] getJournalEntries(String digest) {
+        return __journal.get(digest);
+    }
+
+    void deleteJournal(String digest) {
+        if (__journal.hasKey(digest))
+            __journal.delete(digest);
+    }
+}
+

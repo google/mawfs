@@ -8,6 +8,7 @@ import crack.protobuf readMessageFromString;
 import crack.runtime free, Stat;
 import mawfs.blockstore Entry, FSInfo, Node, NodeStore, MODE_DIR, MODE_EXE;
 import mawfs.fuse BlockIter, MAWFSNode;
+import mawfs.memstore MemNodeStore;
 
 @import crack.ann assert, impl;
 
@@ -72,46 +73,6 @@ int filler(voidptr buf, byteptr filename, Stat stat, uintz something) {
     return 0;
 }
 
-class FakeNodeStore @impl NodeStore {
-    HashMap[String, String] __contents = {};
-    FSInfo __fsInfo = {'12345678123456781234567812345678'};
-    String rootDigest;
-
-    oper init() {}
-
-    String storeNode(Node node) {
-        StringWriter temp = {};
-        digest := __fsInfo.writeChunk(temp, node.toString());
-        __contents[digest] = String(temp, true);
-        return digest;
-    }
-
-    ## Get the node at the given digest, null if it's not currently stored.
-    Node getNode(String digest) {
-        serialized := __contents[digest];
-        chunk := __fsInfo.readChunk(StringReader(serialized));
-        node := Node();
-        readMessageFromString(node, chunk.contents);
-        return node;
-    }
-
-    # Get the root node.
-    Node getRoot() {
-        if (!rootDigest)
-            return null;
-        return getNode(rootDigest);
-    }
-
-    ## Store the digest of the root node.
-    void storeRoot(String digest) {
-        rootDigest = digest;
-    }
-
-    void writeToJournal(String digest, String change) {}
-    void deleteJournal(String digest) {}
-}
-
-
 ###### BEGIN TESTS
 
 if (true) {
@@ -129,7 +90,7 @@ if (true) {
     node.children = Array[Entry]![e('foo'), e('bar')];
     node.contents = 'this is some data';
 
-    MAWFSNode fuseNode = {FakeNodeStore(), node};
+    MAWFSNode fuseNode = {MemNodeStore(), node};
     @assert(!fuseNode.readdir(null, null, filler, 0, null));
     @assert(filled[0].filename == '.');
     @assert(filled[1].filename == '..');
@@ -145,7 +106,7 @@ if (true) {
 
 if (true) {
     node := Node();
-    MAWFSNode fuseNode = {FakeNodeStore(), node};
+    MAWFSNode fuseNode = {MemNodeStore(), node};
 
     @assert(writeNode(node, 0, 'some data') == 9);
     @assert(readNode(node, 0, 9) == 'some data');
@@ -154,7 +115,7 @@ if (true) {
 }
 
 if (true) {
-    MAWFSNode fs = {FakeNodeStore(), Node()};
+    MAWFSNode fs = {MemNodeStore(), Node()};
     ManagedBuffer buf = {8};
     Context ctx = {'/foo', fs};
 
@@ -169,7 +130,7 @@ if (true) {
 
 # Creating files.
 if (true) {
-    nodeStore := FakeNodeStore();
+    nodeStore := MemNodeStore();
     root := Node();
     nodeStore.storeRoot(nodeStore.storeNode(root));
     MAWFSNode fs = {nodeStore, root};
@@ -196,7 +157,7 @@ if (true) {
 
 # Create nested file.
 if (true) {
-    nodeStore := FakeNodeStore();
+    nodeStore := MemNodeStore();
     root := Node();
     nodeStore.storeRoot(nodeStore.storeNode(root));
     MAWFSNode fs = {nodeStore, root};
@@ -227,7 +188,7 @@ if (true) {
 
 # Truncate.
 if (true) {
-    nodeStore := FakeNodeStore();
+    nodeStore := MemNodeStore();
     root := Node();
     nodeStore.storeRoot(nodeStore.storeNode(root));
     MAWFSNode fs = {nodeStore, root};

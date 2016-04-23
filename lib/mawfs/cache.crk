@@ -2,7 +2,7 @@
 module;
 
 import crack.ascii hex;
-import crack.io cerr, Formatter, FStr;
+import crack.io Formatter, FStr;
 import crack.cont.array Array;
 import crack.lang cmp, AssertionError, KeyError, makeHashVal;
 import crack.logger debug, error;
@@ -95,6 +95,7 @@ class CachedNode {
     ## The parent node (the directory that this node is in).
     CachedNode parent;
 
+    ## Gets the node's mode.
     @final int getMode() {
         return node.mode;
     }
