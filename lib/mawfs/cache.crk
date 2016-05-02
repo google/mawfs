@@ -2,15 +2,20 @@
 module;
 
 import crack.ascii hex;
+import crack.io.fmtutil Indenter;
 import crack.io Formatter, FStr;
 import crack.cont.array Array;
-import crack.lang cmp, AssertionError, KeyError, makeHashVal;
+import crack.lang cmp, AppendBuffer, AssertionError, Buffer, Exception,
+    KeyError, makeHashVal;
 import crack.logger debug, error;
 import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
-import mawfs.blockstore Entry, Node, NodeStore;
+import mawfs.blockstore Entry, Node, NodeStore, MODE_DIR;
 
 @import crack.ann assert, impl;
 @import crack.protobuf.ann protobuf;
+
+# Allow initial blocks of up to one meg.
+const MAX_CONTENT_SIZE := 1024 * 1024;
 
 const int32
     ## Add child (contains a Node and a name)
@@ -22,7 +27,11 @@ const int32
     ## Make a change to a nested child.  Contains a 'name' (the name of the
     ## child) and the 'nested' field containing the change to be applied to
     ## that child.
-    CHANGE_NESTED = 3;
+    CHANGE_NESTED = 3,
+
+    ## Write data to node contents (respecting all current rules about file
+    ## size, layout etc).  Contains pos and data.
+    CHANGE_WRITE = 4;
 
 @protobuf {
     declare Node;
@@ -40,6 +49,12 @@ const int32
         ## Change to be applied to a nested child (should be another Changes
         ## message).
         optional bytes nested = 4;
+
+        ## Position to insert data into for a write.
+        optional int32 pos = 5;
+
+        ## Data to be inserted in a write.
+        optional bytes data = 6;
     }
 }
 
@@ -68,7 +83,11 @@ class Cache {
     }
 
     @final Array[Change] getJournalEntries(String digest) {
+        # Get changes for the node if there are any.
         unparsedChanges := store.getJournalEntries(digest);
+        if (!unparsedChanges)
+            return null;
+
         Array[Change] changes = {};
         for (serializedChange :in unparsedChanges) {
             Change parsedChange = {};
@@ -98,6 +117,10 @@ class CachedNode {
     ## Gets the node's mode.
     @final int getMode() {
         return node.mode;
+    }
+
+    @final bool isDir() {
+        return node.mode & MODE_DIR;
     }
 
     class CachedEntry {
@@ -143,6 +166,7 @@ class CachedNode {
 
     ## A list of children sorted by name.  Retrieval/insertion by name is
     ## supported.
+    ## node.children must exist for this to be created.
     class __ChildArray : Array[CachedEntry] {
 
         # Underlying representation.
@@ -208,25 +232,31 @@ class CachedNode {
             }
         }
 
-        @final void delete(String name) {
+        @final bool delete(String name) {
             i := findIndex(name);
             if (i >= 0) {
                 this.delete(i);
                 __rep.delete(i);
+                return true;
             } else {
-                throw KeyError(FStr() `Element $name not found`);
+                return false;
             }
         }
 
         void formatTo(Formatter out) {
-            out `CachedEntries![`;
+            indent := Indenter.wrap(out);
+            out `CachedEntries![\n`;
             for (child :in this) {
                 dig := child.getDigest();
                 String digest;
                 if (dig)
                     digest := hex(dig);
-                out I`$(child.getName().getRepr()): \
-                      $(digest), `;
+                out I`$(child.getName().getRepr()):\n`;
+                ++indent;
+                out I`digest: $(digest ? hex(digest) : 'null')
+                      node: `;
+                out `$(child.node)\n`;
+                --indent;
             }
             out `]`;
         }
@@ -245,42 +275,74 @@ class CachedNode {
     }
 
     ## Allocate __children array to mirror the values in node.children.
+    ## Creates node.children if it doesn't exist.
     @final void __makeChildren() {
+        # First make sure we have node.children.
+        if (!node.children)
+            node.children = Array[Entry]();
+
         # Create an array of children to mirror that of node.children,
         # initialize all elements to null.
         __children = __ChildArray(node.children);
     }
 
-
-    ## Allocate an array of children and populate with the child entries in
-    ## the node.
-    @final void __populateChildren() {
-        if (!__children)
+    ## Allocate the __children scaffold and populate with the child entries
+    ## from the node.
+    ## If createEmpty is true, create the scaffold even if node.children is
+    ## null, and also create an empty node.children.
+    ## If createEmpty is false and children is null or empty, do nothing and
+    ## return false.
+    ## Return true if the scaffold exists, false if not.
+    @final bool __populateChildren(bool createEmpty) {
+        if (!(__children is null))
+            return true;
+        if (node.children || createEmpty) {
+            if (node.children is null)
+                node.children = Array[Entry]();
             __makeChildren();
-        if (node.children) {
             for (iter :on node.children)
                 __children[iter.index] = CachedEntry(__cache, iter.elem());
+            return true;
+        } else {
+            return false;
         }
     }
 
-    ## Get a child by its index.
+    ## Get a child by its index.  Throw IndexError if the index is out of
+    ## range.  Return null if we are unable to retrieve the node.
     CachedNode getChild(uint index) {
         CachedEntry cachedEntry;
-        if (!__children)
-            __makeChildren();
-        else
-            cachedEntry = __children[index];
+        if (!__populateChildren(false))
+            return null;
+
+        cachedEntry = __children[index];
         if (!cachedEntry) {
             entry := node.children[index];
+
+            node := __cache.getNode(entry.hash);
+            if (!node) {
+                error `Unable to load node $(entry.hash)`;
+                return null;
+            }
+
             cachedEntry = __children[index] =
-                CachedEntry(entry,
-                            CachedNode(__cache, entry.hash,
-                                       __cache.getNode(entry.hash)
-                                       )
-                            );
+                CachedEntry(entry, CachedNode(__cache, entry.hash, node));
         }
-        return cachedEntry.node;
+        return cachedEntry.getNode();
     }
+
+    ## Get the child with the given name.  Returns null if there is no such
+    ## child.
+    @final CachedNode getChild(String name) {
+        if (!__populateChildren(false))
+            return null;
+        child := __children.get(name);
+        if (!child)
+            return null;
+        else
+            return child.getNode();
+    }
+
 
     @final String getContents() {
         return node.contents;
@@ -342,27 +404,27 @@ class CachedNode {
 
     ## Internal add child method, which does everything but create a change
     ## record.
-    void __addChild(String name, Node node) {
+    CachedNode __addChild(String name, Node node) {
         child := CachedNode(__cache, null, node);
         child.parent = this;
 
         CachedEntry entry = {Entry(), child};
         entry.entry.name = name;
 
-        if (__children is null)
-            # TODO: we can get away with lazy-populating the child entries.
-            __populateChildren();
+        __populateChildren(true);
 
         # Add the child.
         __children.add(entry);
 
         # Mark the node and the entire ancestor chain as dirty.
         __markDirty();
+
+        return child;
     }
 
     ## Add a new child node with the specified name.
-    void addChild(String name, Node node) {
-        __addChild(name, node);
+    CachedNode addChild(String name, Node node) {
+        child := __addChild(name, node);
 
         # Record the change in the journal.
         change := Change();
@@ -370,23 +432,80 @@ class CachedNode {
         change.name = name;
         change.node = node;
         __recordChange(change);
+
+        return child;
     }
 
-    void deleteChild(String name) {
-        if (__children is null)
-            __populateChildren();
-        __children.delete(name);
+    ## Delete the named child and return true, or return false if the child
+    ## doesn't exist.
+    bool deleteChild(String name) {
+        if (!__populateChildren(true))
+            return false;
+        if (!__children.delete(name))
+            return false;
 
         # Record the change.
         change := Change();
         change.type = CHANGE_DELETE_CHILD;
         change.name = name;
         __recordChange(change);
+
+        return true;
     }
 
     ## Returns the number of children in the node.
     uint getChildCount() {
         return node.children.count();
+    }
+
+    void __write(uint64 pos, Buffer data) {
+        if (node.children is null && node.contents is null) {
+            # The trivial case: build a tree or add a node depending on the
+            # size of the data.
+            if (pos + data.size <= MAX_CONTENT_SIZE) {
+                if (pos) {
+                    AppendBuffer buf = {pos + data.size};
+                    buf.move(0, data);
+                    node.contents = String(buf, true);
+                } else {
+                    node.contents = String(data);
+                }
+            } else {
+                throw Exception('tree building not implemented yet');
+            }
+        } else if (!(node.contents is null) && !digest) {
+            # This is a pristine content-only node.
+            if (pos + data.size > MAX_CONTENT_SIZE) {
+                # This buffer would make the node greater than the maximum
+                # size.
+                throw Exception('splitting not implemented yet.');
+            } else {
+                # This is the easy case.  We can just inject the data into the
+                # contents.
+                dataEnd := pos + data.size;
+                AppendBuffer buf = {node.contents.size > dataEnd ?
+                                    node.contents.size :
+                                    dataEnd};
+                buf.extend(node.contents.substr(0, pos));
+                buf.extend(data);
+                if (node.contents.size > dataEnd)
+                    buf.extend(node.contents.substr(dataEnd));
+                node.contents = String(buf, true);
+            }
+        } else {
+            throw Exception('Full monty not supported yet.');
+        }
+    }
+
+    void write(uint64 pos, Buffer data) {
+        __write(pos, data);
+
+        change := Change();
+        change.type = CHANGE_WRITE;
+        @assert(pos < 0x100000000);
+        change.pos = int32(pos);
+        change.data = String(data);
+        __recordChange(change);
     }
 
     ## Commit all outstanding changes in the tree.  Returns the new digest.
@@ -451,6 +570,8 @@ class CachedNode {
             Change nested = {};
             readMessageFromString(nested, change.nested);
             child.getNode().__applyChange(nested);
+        } else if (change.type == CHANGE_WRITE) {
+            __write(uint64(change.pos), change.data);
         }
     }
 
@@ -469,6 +590,20 @@ class CachedNode {
         # Apply all of the changes in sequence.
         for (change :in changes)
             __applyChange(change);
+    }
+
+    void formatTo(Formatter out) {
+        indent := Indenter.wrap(out);
+        indent `CachedNode {\n`;
+        ++indent;
+        indent I`hash: $(digest ? hex(digest) : 'null')
+                 contents: $(!(node.contents is null) ?
+                                node.contents.getRepr() :
+                                'null'
+                             )
+                 entries: $__children\n`;
+        --indent;
+        indent `}`;
     }
 }
 

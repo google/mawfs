@@ -39,7 +39,7 @@ node.children = Array[Entry]();
 entry := Entry();
 entry.hash = digest;
 entry.name = 'foo';
-root.children.append(entry);
+root.children_append(entry);
 
 digest = nodeStore.storeNode(root);
 nodeStore.storeRoot(digest);
@@ -94,9 +94,16 @@ cachedRoot.replayJournal();
 verifyContents();
 
 # Test committing changes.
-nodeStore.storeRoot(cachedRoot.commit());
+nodeStore.storeRoot(digest = cachedRoot.commit());
 cachedRoot = CachedNode(cache, digest, nodeStore.getRoot());
 verifyContents();
+
+# Test a write.
+cachedRoot.addChild('written', Node());
+cached := cachedRoot.getChild('written');
+cached.write(0, 'first data');
+@assert(cached.getContents() == 'first data');
+
 
 # TODO:
 #   - create a directory and then a child node to verify that when we do
