@@ -24,17 +24,24 @@ const int
     MODE_EXE = 2;   # Set the executable flag.
 
 @protobuf {
-    ## A filesystem entry.
+    ## A filesystem entry.  Nodes can either be directories or blobs.
+    ## Directories have a mode of MODE_DIR and their entries all have name
+    ## attributes.  Blobs do not have MODE_DIR and their entries all have
+    ## sizes, the size being the total size of the contents of the subtree
+    ## under that entry.
     message Entry {
         ## The sha256 hash of the encrypted object.
         required bytes hash = 1;
 
-        ## The name of the object.
-        required string name = 2;
+        ## The name of the object (for a directory entry).
+        optional string name = 2;
 
         ## The 32 bit checksum of the original file (calculated by adding
         ## bytes).
         optional int32 org_checksum = 3;
+
+        ## The size of the total contents of the subtree (for a blob entry).
+        optional int32 size = 4;
     }
 
     ## A filesystem node.  MAWFS is agnostic to the difference between files

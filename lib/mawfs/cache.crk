@@ -6,7 +6,7 @@ import crack.io.fmtutil Indenter;
 import crack.io Formatter, FStr;
 import crack.cont.array Array;
 import crack.lang cmp, AppendBuffer, AssertionError, Buffer, Exception,
-    KeyError, makeHashVal;
+    KeyError, WriteBuffer, makeHashVal;
 import crack.logger debug, error;
 import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
 import mawfs.blockstore Entry, Node, NodeStore, MODE_DIR;
@@ -15,7 +15,7 @@ import mawfs.blockstore Entry, Node, NodeStore, MODE_DIR;
 @import crack.protobuf.ann protobuf;
 
 # Allow initial blocks of up to one meg.
-const MAX_CONTENT_SIZE := 1024 * 1024;
+const DEFAULT_MAX_CONTENT_SIZE := 1024 * 1024;
 
 const int32
     ## Add child (contains a Node and a name)
@@ -63,6 +63,8 @@ class Cache {
 #    HashMap[String, Node] blcoks;
 
     NodeStore store;
+
+    uint maxContentSize = DEFAULT_MAX_CONTENT_SIZE;
 
     oper init(NodeStore store) : store = store {}
 
@@ -149,6 +151,10 @@ class CachedNode {
 
         @final void setDigest(String digest) {
             entry.hash = digest;
+        }
+
+        @final uint64 getSize() {
+            return uint64(entry.size);
         }
 
         ## Returns the node referenced by this child object.
@@ -462,7 +468,7 @@ class CachedNode {
         if (node.children is null && node.contents is null) {
             # The trivial case: build a tree or add a node depending on the
             # size of the data.
-            if (pos + data.size <= MAX_CONTENT_SIZE) {
+            if (pos + data.size <= __cache.maxContentSize) {
                 if (pos) {
                     AppendBuffer buf = {pos + data.size};
                     buf.move(0, data);
@@ -475,7 +481,7 @@ class CachedNode {
             }
         } else if (!(node.contents is null) && !digest) {
             # This is a pristine content-only node.
-            if (pos + data.size > MAX_CONTENT_SIZE) {
+            if (pos + data.size > __cache.maxContentSize) {
                 # This buffer would make the node greater than the maximum
                 # size.
                 throw Exception('splitting not implemented yet.');
@@ -590,6 +596,52 @@ class CachedNode {
         # Apply all of the changes in sequence.
         for (change :in changes)
             __applyChange(change);
+    }
+
+    uint read(uint64 pos, WriteBuffer buffer) {
+        if (node.contents) {
+
+            # We've got contents, read from there.
+            if (pos < node.contents.size) {
+                uint size;
+                if (buffer.cap >= node.contents.size - pos)
+                    size = node.contents.size - pos;
+                else
+                    size = buffer.cap;
+                buffer.move(0, node.contents.buffer + pos,
+                            size
+                            );
+                buffer.size = size;
+            } else {
+                buffer.size = 0;
+            }
+        } else if (node.children) {
+
+            uint64 pos;
+            WriteBuffer frame = {null, 0, 0};
+            for (child :in __children) {
+                if (pos < child.getSize()) {
+
+                    # Delegate the operation to the child
+
+                    # Make the frame buffer the remaining part of the input
+                    # buffer.
+                    frame.buffer = buffer.buffer + frame.size;
+                    frame.cap = buffer.cap - frame.size;
+
+                    # Pass this off to the child.
+                    buffer.size += child.getNode().read(pos, frame);
+                    if (buffer.size == buffer.cap)
+                        break;
+                }
+
+                # Fix the position to be relative to the start of the next
+                # child.
+                pos -= child.getSize();
+            }
+        }
+
+        return buffer.size;
     }
 
     void formatTo(Formatter out) {
