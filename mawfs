@@ -6,6 +6,8 @@ import crack.lang InvalidArgumentError, SystemError;
 
 import crack.exp.fuse fuseLog = log;
 import crack.fs cwd, makePath, Path;
+import crack.runtime abort, backtrace, free, getLocation, memcmp, sigaction,
+    strlen, SigAction, SigInfo, SA_SIGINFO, SIGFPE, SIGILL, SIGSEGV;
 import crack.strutil StringArray;
 import crack.sys argv, exit;
 import crack.io cin, cout, cerr, Formatter, FStr, Reader, StandardFormatter,
@@ -29,6 +31,41 @@ import mawfs.fuse runFuse;
 #}
 
 const TESTPW := 'FooBar-boguspassFooBar-boguspass';
+
+Formatter err = cerr;
+
+# Lifted from crack.lang.
+
+const _ADDRS_SIZE := 100;
+const array[voidptr] _addrs = {_ADDRS_SIZE};
+const array[byteptr] _addrInfo = {3};
+
+void trapHandler(int signal, SigInfo si, voidptr ucontext) {
+    err `Stack Trace\n`;
+    numFrames := backtrace(_addrs, _ADDRS_SIZE);
+    if (numFrames == _ADDRS_SIZE)
+        err `[stack trace truncated]\n`;
+    for (int i = numFrames - 1; i; --i) {
+        getLocation(_addrs[i], _addrInfo);
+        if (strlen(_addrInfo[0]) >= 8 &&
+            !memcmp(_addrInfo[0], ':unknown'.buffer, 8)) {
+            err `unknown address\n`;
+        } else {
+            err `$(_addrInfo[0])\n`;
+        }
+    }
+
+    if (signal == SIGSEGV)
+        err `SIGSEGV received\n`;
+    else if (signal == SIGILL)
+        err `SIGILL received\n`;
+    else if (signal == SIGFPE)
+        err `SIGFPE received\n`;
+    else
+        err `Unexpected signal received\n`;
+
+    abort();
+}
 
 void dumpNode(Formatter out, Node node) {
     if (node.checksum)
@@ -137,9 +174,18 @@ void main() {
                 exit(1);
             }
 
+            sa := SigAction();
+            sa.sa_sigaction = trapHandler;
+            sa.sa_flags = SA_SIGINFO;
+            sigaction(SIGSEGV, sa, null);
+            sigaction(SIGILL, sa, null);
+            sigaction(SIGFPE, sa, null);
+            free(sa);
+            sa = null;
+
             StringArray fuseArgs = [argv[0]];
             fuseArgs.extend(argv.subarray(3));
-            fuseLog = StandardFormatter(makePath('mawfs.log').writer());
+            err = fuseLog = StandardFormatter(makePath('mawfs.log').writer());
             runFuse(ChunkStore(makePath(argv[2]), FSInfo(TESTPW)), fuseArgs);
         } else if (cmd == 'dump') {
             if (argv.count() != 3) {
@@ -167,9 +213,9 @@ void main() {
             exit(1);
         }
     } catch (SystemError ex) {
-        cerr `$(ex.text)\n`;
+        err `$(ex.text)\n`;
     } catch (InvalidArgumentError ex) {
-        cerr `$(ex.text)\n`;
+        err `$(ex.text)\n`;
     }
 }
 
