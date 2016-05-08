@@ -188,8 +188,10 @@ class MAWFSNode : NodeImpl {
         stat.st_nlink = 1;
         stat.st_uid = 0;
         stat.st_gid = 0;
-        for (child :in __rep.children) {
-            filler(buf, child.name.buffer, stat, 0);
+        if (__rep.children) {
+            for (child :in __rep.children) {
+                filler(buf, child.name.buffer, stat, 0);
+            }
         }
 
         free(stat);
