@@ -1,0 +1,7 @@
+#!/bin/sh
+
+root=$(dirname $0)
+for test in $root/test/*_test.crk; do
+    echo -n "$test..."
+    crack $test
+done
