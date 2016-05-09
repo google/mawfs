@@ -1,0 +1,25 @@
+
+import crack.io cerr;
+import mawfs.blockstore Node, Entry, MODE_DIR;
+import crack.cont.array Array;
+import crack.logger debug, setLogLevel, DEBUG;
+import mawfs.path MAWFSPath;
+import mawfs.memstore MemNodeStore;
+import mawfs.cache Cache, CachedNode;
+
+@import crack.ann assert;
+
+setLogLevel(DEBUG);
+
+# Create an empty filesystem.
+nodeStore := MemNodeStore();
+cache := Cache(nodeStore);
+rootNode := CachedNode(cache, null, Node());
+rootNode.node.mode = MODE_DIR;
+rootNode.node.children = Array[Entry]();
+rootNode.commit();
+
+root := MAWFSPath(rootNode);
+(root/'foo').writer().write('first file');
+@assert((root/'foo').readAll() == 'first file');
+cerr `ok\n`;
