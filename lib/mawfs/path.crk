@@ -1,0 +1,231 @@
+## Filesystem node abstraction.
+## XXX Putting this on the back-burner, it's a nicer interface but I think I
+## can do everything I need to with blockstore.
+## Also, "Node" is already a heavily overloaded name.
+module;
+
+import crack.runtime ENOTDIR;
+import crack.fs Path, PathIter, PathStat;
+import crack.io FStr, SeekableReader, SeekableWriter, SEEK_CUR, SEEK_END,
+    SEEK_SET;
+import crack.lang Buffer, Exception, InvalidArgumentError, InvalidStateError,
+    WriteBuffer, SystemError;
+import crack.logger debug;
+import mawfs.blockstore Node, MODE_DIR, MODE_EXE;
+import mawfs.cache CachedNode;
+
+@import crack.ann implements;
+
+## RWPath extends the interface of crack.fs.Path to random-access read and
+## write operations.
+@abstract class RWPath : Path {
+
+    ## Write the data at the given position in the file.  If 'pos' is out of
+    ## range, or the node is not a file, the behavior is undefined.
+    @abstract void write(uint pos, Buffer data);
+
+    ## Try to read 'data.cap' bytes from the file at pos.  If 'pos' is out of
+    ## range, this should return an empty buffer.  If the node is not a file,
+    ## the behavior is undefined.
+    @abstract void read(uint pos, WriteBuffer data);
+}
+
+class _Seekable {
+    intz _pos;
+    RWPath _path;
+
+    oper init(RWPath path) : _path = path {}
+
+    @final intz _seek(intz offset, int whence) {
+        if (whence == SEEK_CUR)
+            _pos = offset;
+        else if (whence == SEEK_END)
+            _pos = _path.getSize() + offset;
+        else if (whence == SEEK_SET)
+            _pos = offset;
+        else
+            throw InvalidArgumentError();
+
+        return _pos;
+    }
+}
+
+class RWPathAppender : _Seekable @implements SeekableWriter {
+
+    void flush() {}
+
+    oper init(RWPath path) : _Seekable(path) {}
+
+    void write(Buffer data) {
+        _path.write(_pos, data);
+        _pos += data.size;
+    }
+
+    void write(Buffer data) {
+        _path.write(_pos, data);
+    }
+
+    intz seek(intz offset, int whence) {
+        return _seek(offset, whence);
+    }
+}
+
+class RWPathReader : _Seekable @implements SeekableReader {
+
+    oper init(RWPath path) : _Seekable(path) {}
+
+    intz seek(intz offset, int whence) {
+        return _seek(offset, whence);
+    }
+
+    uint read(WriteBuffer buffer) {
+        debug `in read, pos = $_pos. `;
+        _path.read(_pos, buffer);
+        debug `buffer of size $(buffer.size) is $(buffer.getRepr())`;
+        _pos += buffer.size;
+        return buffer.size;
+    }
+}
+
+Path _makeMAWFSPath(CachedNode node);
+
+class MAWFSIter : PathIter {
+    CachedNode __node;
+    int i;
+
+    oper init(CachedNode node) : __node = node {}
+
+    bool next() {
+        if (i < __node.getChildCount()) {
+            ++i;
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    Path elem() {
+        return _makeMAWFSPath(__node.getChild(i));
+    }
+
+}
+
+class MAWFSPath : RWPath {
+
+    CachedNode __rep;
+    MAWFSPath __parent;
+    String __name;
+
+    oper init(CachedNode rep) : __rep = rep, __name = '' {}
+
+    oper init(CachedNode rep, MAWFSPath parent, String name) :
+        __rep = rep,
+        __parent = parent,
+        __name = name {
+    }
+
+    SeekableWriter appender() {
+        return RWPathAppender(this);
+    }
+
+    PathIter children() {
+        if (__rep.getMode() & MODE_DIR)
+            return MAWFSIter(__rep);
+        else
+            throw SystemError('Node is not a directory', ENOTDIR);
+    }
+
+    void delete() {}
+
+    void deleteTree() {}
+
+    bool exists() {
+        return true;
+    }
+
+    int getAccessTime() { return 0 }
+
+    int getCreateTime() { return 0 }
+
+    String getFullName() { return null }
+
+    int getModTime() { return 0 }
+
+    int getMode() { return 0 }
+
+    String getName() { return null }
+
+    uint64 getSize() { return 0 }
+
+    PathStat getStat() { return null }
+
+    bool isDir() { return false }
+
+    bool isExecutable() { return false }
+
+    bool isLink() { return false }
+
+    SeekableWriter appender() { return null }
+
+    void makeDir(bool errorOnExists) {}
+
+    void makeDirs() {}
+
+    SeekableReader reader() {
+        return RWPathReader(this);
+    }
+
+    SeekableWriter writer() {
+        # Create a new node.
+        if (__parent) {
+            parentRep := __parent.__rep;
+            __rep = parentRep.addChild(__name, Node());
+        } else {
+            # The root path should have been created with a cached node.
+            throw Exception('Root has no cached node!');
+        }
+        debug `rep is $__rep\n`;
+        return RWPathAppender(this);
+    }
+
+    Path parent() { return __parent }
+
+    void truncate(uint64 newSize) {}
+
+    void moveTo(Path other) {}
+
+    Path oper [](String child) { return null }
+
+    Path _createNode(String  path) { return null }
+
+    Path oper /(String other) {
+        # XXX deal with multi-components paths.
+        child := __rep.getChild(other);
+        return MAWFSPath(child, this, other);
+    }
+
+    void setMode(int mode) {}
+
+    Path moveToDir(Path other) { return null }
+
+    void write(uint pos, Buffer data) {
+
+        if (!__rep)
+            throw InvalidStateError(
+                FStr() `File $(getFullName()) does not exist.`);
+
+        if (__rep.isDir())
+            throw InvalidStateError(
+                FStr() `File $(getFullName()) is a directory.`);
+
+        __rep.write(pos, data);
+    }
+
+    void read(uint pos, WriteBuffer data) {
+        __rep.read(pos, data);
+    }
+}
+
+Path _makeMAWFSPath(CachedNode node) {
+    return MAWFSPath(node);
+}
