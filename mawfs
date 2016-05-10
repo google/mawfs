@@ -208,7 +208,7 @@ void main() {
                 exit(1);
             }
 
-	    password := readPassword();
+            password := readPassword();
 
             # Read the file contents.
             src := getReader(argv[2]);
@@ -225,7 +225,7 @@ void main() {
                 exit(1);
             }
 
-	    password := readPassword();
+            password := readPassword();
 
             store := ChunkStore(cwd, FSInfo(password));
             chunk := store.load(unhex(argv[2]));
@@ -240,7 +240,7 @@ void main() {
                 exit(1);
             }
 
-	    password := readPassword();
+            password := readPassword();
 
             sa := SigAction();
             sa.sa_sigaction = trapHandler;
@@ -264,7 +264,7 @@ void main() {
                 exit(1);
             }
 
-	    password := readPassword();
+            password := readPassword();
 
             path := makePath(argv[2]);
             contents := path.readAll();
