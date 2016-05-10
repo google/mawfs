@@ -30,7 +30,7 @@ import crack.io cin, cout, cerr, Formatter, FStr, Reader, StandardFormatter,
 import crack.cont.array Array;
 import crack.io.readers LineReader;
 import crack.lang AppendBuffer, InvalidStateError;
-import crack.logger error, setLogFile, setLogLevel, DEBUG;
+import crack.logger debug, error, setLogFile, setLogLevel, DEBUG;
 import crack.protobuf readMessageFromString;
 
 import mawfs.blockstore hashFile, unhex, ChunkStore, FSInfo, Node, BLOCK_SIZE;

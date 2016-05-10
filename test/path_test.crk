@@ -33,12 +33,21 @@ rootNode.node.children = Array[Entry]();
 rootNode.commit();
 
 root := MAWFSPath(rootNode);
-(root/'foo').writer().write('first file');
-@assert((root/'foo').readAll() == 'first file');
-@assert((root/'foo').getSize() == 10);
+foo := root/'foo';
+foo.writer().write('first file');
+@assert(foo.readAll() == 'first file');
+@assert(foo.getSize() == 10);
+
+bar := root/'bar';
+foo.moveTo(bar);
+@assert(!foo.exists());
+@assert(bar.exists());
+@assert(bar.readAll() == 'first file');
 
 dir := root/'dir';
 dir.makeDir();
 @assert(dir.isDir());
+
+
 
 cerr `ok\n`;

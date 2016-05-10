@@ -254,7 +254,14 @@ class MAWFSPath : RWPath {
 
     void truncate(uint64 newSize) {}
 
-    void moveTo(Path other) {}
+    void moveTo(Path other) {
+        o := MAWFSPath.cast(other);
+        newParent := o.__parent;
+        __parent.__rep.deleteChild(__name);
+        newParent.__rep.addChild(other.getName(), __rep.node);
+        o.__rep = __rep;
+        __rep = null;
+    }
 
     Path oper [](String child) {
         __checkExists();

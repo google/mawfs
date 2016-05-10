@@ -92,6 +92,13 @@ class TestFailure : Exception {
 
         return result;
     }
+
+    void assertEqual(Object a, Object b) {
+        if (a != b)
+            throw TestFailure(
+                FStr() `[$a] != [$b]`
+            );
+    }
 }
 
 class EmptyDirTest : TestCase {
@@ -103,13 +110,6 @@ class EmptyDirTest : TestCase {
 EmptyDirTest().exec();
 
 class FileTest : TestCase {
-
-    void assertEqual(Object a, Object b) {
-        if (a != b)
-            throw TestFailure(
-                FStr() `[$a] != [$b]`
-            );
-    }
 
     void run() {
         foo := makePath('fs')/'foo';
@@ -137,6 +137,25 @@ class MkDirTest : TestCase {
     }
 }
 MkDirTest().exec();
+
+class MoveTest : TestCase {
+    void run() {
+        a := makePath('fs')/'a';
+        a.writeAll('this is data');
+
+        b := makePath('fs')/'b';
+        a.moveTo(b);
+        if (a.exists())
+            throw TestFailure(FStr() `moved file still exists`);
+
+        if (!b.exists())
+            throw TestFailure(FStr() I`moved file doesn't exist in new \
+                                       location`
+                              );
+        assertEqual(b.readAll(), 'this is data');
+    }
+}
+MoveTest().exec();
 
 /*
 String readNode(Node node, int pos, int size) {

@@ -287,11 +287,13 @@ int _access(byteptr path, int uid) {
 
 int _rename(byteptr path, byteptr newPath) {
     info `in rename($path, $newPath)`;
-#    ctx := Context.get(path);
-#    if (node := ctx.lookUp())
-#        return node.rename(ctx, String(newPath));
-#    else
+    ctx := Context.get();
+    p0 := ctx.getPath(path);
+    p1 := ctx.getPath(newPath);
+    if (!p0 || !p0.exists() || !p1 || !p1.parent().exists())
         return -ENOENT;
+    p0.moveTo(p1);
+    return 0;
 }
 
 int _chown(byteptr path, int uid, int gid) {
