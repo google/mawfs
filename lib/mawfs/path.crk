@@ -225,7 +225,11 @@ class MAWFSPath : RWPath {
 
     SeekableWriter appender() { return null }
 
-    void makeDir(bool errorOnExists) {}
+    void makeDir(bool errorOnExists) {
+        node := Node();
+        node.mode = MODE_DIR;
+        __rep = __parent.__rep.addChild(__name, node);
+    }
 
     void makeDirs() {}
 

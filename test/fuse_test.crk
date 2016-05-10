@@ -13,8 +13,8 @@
 # limitations under the License.
 
 import crack.fs cwd, makePath, Path;
-import crack.io cerr, FStr;
-import crack.lang Exception;
+import crack.io cerr, FStr, SEEK_SET;
+import crack.lang Exception, ManagedBuffer;
 import crack.process Process, CRK_PROC_EXITED;
 import crack.strutil StringArray;
 import crack.sys argv;
@@ -96,19 +96,40 @@ class EmptyDirTest : TestCase {
 EmptyDirTest().exec();
 
 class FileTest : TestCase {
+
+    void assertEqual(Object a, Object b) {
+        if (a != b)
+            throw TestFailure(
+                FStr() `[$a] != [$b]`
+            );
+    }
+
     void run() {
         foo := makePath('fs')/'foo';
         foo.writer().write('this is some data');
         if ((files := getAllFiles(null)) != StringArray!['foo'])
-            throw TestFailure(
-                FStr() `Didn't get created file 'foo', got $files`
-            );
 
-        if ((content := foo.readAll()) != 'this is some data')
-            throw TestFailure(FStr() `Incorrect file contents: [$content]\n`);
+        assertEqual(foo.readAll(), 'this is some data');
+
+        reader := foo.reader();
+        reader.seek(4, SEEK_SET);
+        ManagedBuffer buf = {4};
+        reader.read(buf);
+        assertEqual(String(buf, true), ' is ');
     }
 }
 FileTest().exec();
+
+class MkDirTest : TestCase {
+    void run() {
+        dir := makePath('fs')/'dir';
+        dir.makeDir();
+
+        if (!dir.isDir())
+            throw TestFailure(FStr() `did not create a directory`);
+    }
+}
+MkDirTest().exec();
 
 /*
 String readNode(Node node, int pos, int size) {

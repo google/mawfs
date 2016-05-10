@@ -21,7 +21,7 @@ import crack.ext._fuse fuse_main = main, get_context, DoubleTimeSpec,
     FuseOperations, FuseFileInfo;
 import crack.fs Path;
 import crack.io SeekableReader, SeekableWriter, SEEK_SET;
-import crack.lang Buffer, WriteBuffer;
+import crack.lang Buffer, SystemError, WriteBuffer;
 import crack.runtime free, memcpy, Stat, EACCES, EEXIST, EINVAL, ENOENT,
     ENOTDIR, O_CREAT, O_RDONLY, S_IFDIR, S_IFREG;
 import crack.strutil split, StringArray;
@@ -30,16 +30,6 @@ import mawfs.path MAWFSPath;
 import mawfs.cache Cache, CachedNode;
 
 const int ENOSYS = 38;
-
-#import crack.ascii hex;
-#import crack.cont.array Array;
-#import crack.cont.hashmap HashMap;
-#import crack.ext._fuse FuseFileInfo;
-#import crack.exp.fuse log, main, Context, FuseNode = Node, NodeImpl, LockedFilesystem;
-#import crack.io cerr, Formatter;
-#import crack.lang AssertionError, Buffer, Exception, ManagedBuffer, WriteBuffer;
-#import crack.runtime free, Stat, S_IFDIR, S_IFREG;
-#import crack.strutil StringArray;
 
 ## Stores information on an open file.
 class FileInfo {
@@ -265,11 +255,20 @@ int _create(byteptr path, int mode, FuseFileInfo fi) {
 
 int _mkdir(byteptr path, int mode) {
     log `in mkdir($path, $mode)\n`;
-#    ctx := Context.get(path);
-#    if (node := ctx.lookUpParent())
-#        return node.mkdir(ctx, mode);
-#    else
+    ctx := Context.get();
+    p := ctx.getPath(path);
+    if (p) {
+        try {
+            p.makeDir();
+            return 0;
+        } catch (SystemError ex) {
+            # TODO: return error code from ex.
+            log `exception in mkdir: $ex\n`;
+            return -EINVAL;
+        }
+    } else {
         return -ENOENT;
+    }
 }
 
 int _chmod(byteptr path, int mode) {
