@@ -27,6 +27,8 @@ import crack.sys argv, exit;
 import crack.io cin, cout, cerr, Formatter, FStr, Reader, StandardFormatter,
     StringFormatter, StringReader;
 
+import crack.hash.sha256 SHA256;
+
 import crack.cont.array Array;
 import crack.io.readers LineReader;
 import crack.lang AppendBuffer, InvalidStateError;
@@ -131,6 +133,7 @@ Reader getReader(String filename) {
 }
 
 String readPassword() {
+    String password;
     if (isatty(0)) {
         lr := LineReader(cin);
 
@@ -152,7 +155,7 @@ String readPassword() {
         }
 
         cout `password: `;
-        password := lr.readLine().rtrim();
+        password = lr.readLine().rtrim();
         cout `\n`;
 
         p = Process(StringArray!['/bin/stty', orig_term_settings],
@@ -162,13 +165,16 @@ String readPassword() {
             throw InvalidStateError('Got an error from stty; terminal may '
                                     'be in a bad state');
         }
-        return password;
+    } else {
+        lr := LineReader(cin);
+        password = lr.readLine().rtrim();
     }
 
-    lr := LineReader(cin);
-    password := lr.readLine().rtrim();
+    hasher := SHA256();
+    hasher.update(password);
+    hashed_password := hasher.digest();
 
-    return password;
+    return hashed_password;
 }
 
 # The main function, which is a command dispatcher.
@@ -202,7 +208,7 @@ void main() {
                 exit(1);
             }
 
-	    password := readPassword();
+            password := readPassword();
 
             # Read the file contents.
             src := getReader(argv[2]);
@@ -219,7 +225,7 @@ void main() {
                 exit(1);
             }
 
-	    password := readPassword();
+            password := readPassword();
 
             store := ChunkStore(cwd, FSInfo(password));
             chunk := store.load(unhex(argv[2]));
@@ -234,7 +240,7 @@ void main() {
                 exit(1);
             }
 
-	    password := readPassword();
+            password := readPassword();
 
             sa := SigAction();
             sa.sa_sigaction = trapHandler;
@@ -258,7 +264,7 @@ void main() {
                 exit(1);
             }
 
-	    password := readPassword();
+            password := readPassword();
 
             path := makePath(argv[2]);
             contents := path.readAll();
