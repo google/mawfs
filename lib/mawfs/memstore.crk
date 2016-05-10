@@ -52,6 +52,10 @@ class MemNodeStore @impl NodeStore {
         return getNode(__root);
     }
 
+    String getRootDigest() {
+        return __root;
+    }
+
     void storeRoot(String digest) {
         __root = digest;
     }
