@@ -15,7 +15,7 @@
 import crack.fs cwd, makePath, Path;
 import crack.io cerr, FStr, SEEK_SET;
 import crack.lang Exception, ManagedBuffer;
-import crack.process Process, CRK_PROC_EXITED;
+import crack.process Process, CRK_PROC_EXITED, CRK_PIPE_STDIN;
 import crack.strutil StringArray;
 import crack.sys argv;
 import crack.runtime sleep;
@@ -44,7 +44,12 @@ class TestFailure : Exception {
         if (!fsDir.exists())
             fsDir.makeDir();
 
-        rc := Process(StringArray!['./mawfs', 'run', 'backing', 'fs']).run();
+        proc := Process(StringArray!['./mawfs', 'run', 'backing', 'fs'],
+                        CRK_PIPE_STDIN
+                        );
+        proc.putStdIn('TestPasswordDudeBestAsstwordFood');
+        proc.closeStdIn();
+        rc := proc.run();
         if (rc != CRK_PROC_EXITED)
             throw Exception('Failed in startup');
     }
@@ -53,8 +58,10 @@ class TestFailure : Exception {
 
     void tearDown() {
         rc := Process(StringArray!['fusermount', '-u', 'fs']).run();
-        if (rc != CRK_PROC_EXITED)
+        if (rc != CRK_PROC_EXITED) {
             cerr `fusermount failed`;
+            cerr `$(makePath('mawfs.log').readAll())\n`;
+        }
         deleteBacking();
     }
 

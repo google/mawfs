@@ -18,6 +18,7 @@ import crack.ascii hex, radix;
 import crack.lang InvalidArgumentError, SystemError;
 
 import crack.fs cwd, makePath, Path;
+import crack.process Process, CRK_PIPE_STDERR, CRK_PIPE_STDOUT;
 import crack.runtime abort, backtrace, free, getLocation, isatty, memcmp,
     sigaction, strlen, SigAction, SigInfo, SA_SIGINFO, SIGFPE, SIGILL,
     SIGSEGV;
