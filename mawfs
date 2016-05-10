@@ -18,15 +18,17 @@ import crack.ascii hex, radix;
 import crack.lang InvalidArgumentError, SystemError;
 
 import crack.fs cwd, makePath, Path;
-import crack.runtime abort, backtrace, free, getLocation, memcmp, sigaction,
-    strlen, SigAction, SigInfo, SA_SIGINFO, SIGFPE, SIGILL, SIGSEGV;
+import crack.runtime abort, backtrace, free, getLocation, isatty, memcmp,
+    sigaction, strlen, SigAction, SigInfo, SA_SIGINFO, SIGFPE, SIGILL,
+    SIGSEGV;
 import crack.strutil StringArray;
 import crack.sys argv, exit;
 import crack.io cin, cout, cerr, Formatter, FStr, Reader, StandardFormatter,
     StringFormatter, StringReader;
 
 import crack.cont.array Array;
-import crack.lang AppendBuffer;
+import crack.io.readers LineReader;
+import crack.lang AppendBuffer, InvalidStateError;
 import crack.logger error, setLogFile, setLogLevel, DEBUG;
 import crack.protobuf readMessageFromString;
 
@@ -42,8 +44,6 @@ import mawfs.fuse runFuse;
 #    fuseMain(StringArray!['<mawfs>', mountPoint], LockedFilesystem(backingRoot));
 #    # xxxx finish writing xxxxx
 #}
-
-const TESTPW := 'FooBar-boguspassFooBar-boguspass';
 
 # Lifted from crack.lang.
 
@@ -129,6 +129,47 @@ Reader getReader(String filename) {
     }
 }
 
+String readPassword() {
+    if (isatty(0)) {
+        lr := LineReader(cin);
+
+        p := Process(StringArray!['/bin/stty', '-g'],
+                     CRK_PIPE_STDOUT | CRK_PIPE_STDERR);
+        orig_term_settings := p.getStdOut().rtrim();
+        cmd_err := p.getStdErr().rtrim();
+        if (cmd_err != "") {
+            throw InvalidStateError('Got an error from stty; terminal may '
+                                    'be in a bad state');
+        }
+
+        p = Process(StringArray!['/bin/stty', '-echo'],
+                     CRK_PIPE_STDOUT | CRK_PIPE_STDERR);
+        cmd_err = p.getStdErr().rtrim();
+        if (cmd_err != "") {
+            throw InvalidStateError('Got an error from stty; terminal may '
+                                    'be in a bad state');
+        }
+
+        cout `password: `;
+        password := lr.readLine().rtrim();
+        cout `\n`;
+
+        p = Process(StringArray!['/bin/stty', orig_term_settings],
+                     CRK_PIPE_STDOUT | CRK_PIPE_STDERR);
+        cmd_err = p.getStdErr().rtrim();
+        if (cmd_err != "") {
+            throw InvalidStateError('Got an error from stty; terminal may '
+                                    'be in a bad state');
+        }
+        return password;
+    }
+
+    lr := LineReader(cin);
+    password := lr.readLine().rtrim();
+
+    return password;
+}
+
 # The main function, which is a command dispatcher.
 void main() {
     if (argv.count() < 2) {
@@ -160,13 +201,15 @@ void main() {
                 exit(1);
             }
 
+	    password := readPassword();
+
             # Read the file contents.
             src := getReader(argv[2]);
             contents := AppendBuffer(BLOCK_SIZE);
             while (data := src.read(BLOCK_SIZE))
                 contents.extend(data);
 
-            store := ChunkStore(cwd, FSInfo(TESTPW));
+            store := ChunkStore(cwd, FSInfo(password));
             digest := store.store(contents);
             cout `$(hex(digest))\n`;
         } else if (cmd == 'loadchunk') {
@@ -175,7 +218,9 @@ void main() {
                 exit(1);
             }
 
-            store := ChunkStore(cwd, FSInfo(TESTPW));
+	    password := readPassword();
+
+            store := ChunkStore(cwd, FSInfo(password));
             chunk := store.load(unhex(argv[2]));
             if (!chunk)
                 cerr `Chunk $(argv[2]) not found\n`;
@@ -187,6 +232,8 @@ void main() {
                        <mount-point>\n`;
                 exit(1);
             }
+
+	    password := readPassword();
 
             sa := SigAction();
             sa.sa_sigaction = trapHandler;
@@ -202,13 +249,15 @@ void main() {
 
             setLogFile('mawfs.log');
             setLogLevel(DEBUG);
-            chunkStore := ChunkStore(makePath(argv[2]), FSInfo(TESTPW));
+            chunkStore := ChunkStore(makePath(argv[2]), FSInfo(password));
             runFuse(chunkStore, fuseArgs);
         } else if (cmd == 'dump') {
             if (argv.count() != 3) {
                 cerr I`Usage: mawfs dump <path>`;
                 exit(1);
             }
+
+	    password := readPassword();
 
             path := makePath(argv[2]);
             contents := path.readAll();
@@ -220,7 +269,7 @@ void main() {
                 contents = refed.readAll();
 
             # Read it.
-            chunk := FSInfo(TESTPW).readChunk(StringReader(contents));
+            chunk := FSInfo(password).readChunk(StringReader(contents));
             Node node = {};
             readMessageFromString(node, chunk.contents);
             dumpNode(cout, node);
