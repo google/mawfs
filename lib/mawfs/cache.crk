@@ -328,9 +328,7 @@ class CachedNode {
         }
     }
 
-    ## Get a child by its index.  Throw IndexError if the index is out of
-    ## range.  Return null if we are unable to retrieve the node.
-    CachedNode getChild(uint index) {
+    CachedEntry __getChildEntry(uint index) {
         CachedEntry cachedEntry;
         if (!__populateChildren(false))
             return null;
@@ -348,7 +346,21 @@ class CachedNode {
             cachedEntry = __children[index] =
                 CachedEntry(entry, CachedNode(__cache, entry.hash, node));
         }
+
+        return cachedEntry;
+    }
+
+    ## Get a child by its index.  Throw IndexError if the index is out of
+    ## range.  Return null if we are unable to retrieve the node.
+    CachedNode getChild(uint index) {
+        cachedEntry := __getChildEntry(index);
         return cachedEntry.getNode();
+    }
+
+    ## Returns the name of a child.
+    String getChildName(uint index) {
+        cachedEntry := __getChildEntry(index);
+        return cachedEntry.getName();
     }
 
     ## Get the child with the given name.  Returns null if there is no such
@@ -366,6 +378,21 @@ class CachedNode {
 
     @final String getContents() {
         return node.contents;
+    }
+
+    ## Returns the total size of the node.
+    @final uint64 getSize() {
+        # TODO: Store this information in the node as well as its children.
+        if (!(node.contents is null)) {
+            return node.contents.size;
+        } else if (node.children) {
+            uint64 sum;
+            for (child :in node.children)
+                sum += uint64(child.size);
+            return sum;
+        } else {
+            return 0;
+        }
     }
 
     ## Mark the node as diry and do the same for all parent nodes.
@@ -475,7 +502,7 @@ class CachedNode {
 
     ## Returns the number of children in the node.
     uint getChildCount() {
-        return node.children.count();
+        return node.children ? node.children.count() : 0;
     }
 
     void __write(uint64 pos, Buffer data) {

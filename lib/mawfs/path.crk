@@ -1,16 +1,28 @@
-## Filesystem node abstraction.
-## XXX Putting this on the back-burner, it's a nicer interface but I think I
-## can do everything I need to with blockstore.
-## Also, "Node" is already a heavily overloaded name.
+# Copyright 2016 Google Inc. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+## Filesystem Path adapter.
 module;
 
-import crack.runtime ENOTDIR;
+import crack.runtime ENOENT, ENOTDIR;
 import crack.fs Path, PathIter, PathStat;
 import crack.io FStr, SeekableReader, SeekableWriter, SEEK_CUR, SEEK_END,
     SEEK_SET;
 import crack.lang Buffer, Exception, InvalidArgumentError, InvalidStateError,
     WriteBuffer, SystemError;
 import crack.logger debug;
+import crack.runtime S_IFDIR, S_IFREG;
 import mawfs.blockstore Node, MODE_DIR, MODE_EXE;
 import mawfs.cache CachedNode;
 
@@ -79,21 +91,23 @@ class RWPathReader : _Seekable @implements SeekableReader {
     }
 
     uint read(WriteBuffer buffer) {
-        debug `in read, pos = $_pos. `;
         _path.read(_pos, buffer);
-        debug `buffer of size $(buffer.size) is $(buffer.getRepr())`;
         _pos += buffer.size;
         return buffer.size;
     }
 }
 
-Path _makeMAWFSPath(CachedNode node);
+Path _makeMAWFSPath(CachedNode node, Path parent, String name);
 
 class MAWFSIter : PathIter {
+    Path __path;
     CachedNode __node;
     int i;
 
-    oper init(CachedNode node) : __node = node {}
+    oper init(Path path, CachedNode node) :
+        __path = path,
+        __node = node {
+    }
 
     bool next() {
         if (i < __node.getChildCount()) {
@@ -105,14 +119,22 @@ class MAWFSIter : PathIter {
     }
 
     Path elem() {
-        return _makeMAWFSPath(__node.getChild(i));
+        return _makeMAWFSPath(__node.getChild(i), __path,
+                              __node.getChildName(i)
+                              );
     }
 
+    bool isTrue() {
+        return i < __node.getChildCount();
+    }
 }
 
 class MAWFSPath : RWPath {
 
+    ## The underlying cached node.  This may be null if the file does not
+    ## exist.
     CachedNode __rep;
+
     MAWFSPath __parent;
     String __name;
 
@@ -128,9 +150,15 @@ class MAWFSPath : RWPath {
         return RWPathAppender(this);
     }
 
+    void __checkExists() {
+        if (__rep is null)
+            throw SystemError('File does not exist', ENOENT);
+    }
+
     PathIter children() {
+        __checkExists();
         if (__rep.getMode() & MODE_DIR)
-            return MAWFSIter(__rep);
+            return MAWFSIter(this, __rep);
         else
             throw SystemError('Node is not a directory', ENOTDIR);
     }
@@ -140,7 +168,7 @@ class MAWFSPath : RWPath {
     void deleteTree() {}
 
     bool exists() {
-        return true;
+        return __rep;
     }
 
     int getAccessTime() { return 0 }
@@ -153,25 +181,60 @@ class MAWFSPath : RWPath {
 
     int getMode() { return 0 }
 
-    String getName() { return null }
+    String getName() { return __name }
 
-    uint64 getSize() { return 0 }
+    uint64 getSize() {
+        __checkExists();
+        return __rep.getSize();
+    }
 
-    PathStat getStat() { return null }
+    PathStat getStat() {
+        __checkExists();
+        PathStat stat = {};
 
-    bool isDir() { return false }
+        # The only attributes for the underlying filesystem are "directory"
+        # and "executable".  Everything else is a normal file.
+        # TODO: Make permissions configurable at the cache level.
+        if (__rep.isDir())
+            stat.st_mode = 0755 | S_IFDIR;
+        else if (__rep.getMode() & MODE_EXE)
+            stat.st_mode = 0755 | S_IFREG;
+        else
+            stat.st_mode = 0644 | S_IFREG;
 
-    bool isExecutable() { return false }
+        # TODO: change this to the user/group that started the server.
+        stat.st_uid = 0;
+        stat.st_gid = 0;
+        stat.st_nlink = 1;
+        return stat;
+    }
+
+    bool isDir() {
+        if (!__rep)
+            return false;
+        return __rep.isDir();
+    }
+
+    bool isExecutable() {
+        if (!__rep)
+            return false;
+        return __rep.getMode() & MODE_EXE;
+    }
 
     bool isLink() { return false }
 
     SeekableWriter appender() { return null }
 
-    void makeDir(bool errorOnExists) {}
+    void makeDir(bool errorOnExists) {
+        node := Node();
+        node.mode = MODE_DIR;
+        __rep = __parent.__rep.addChild(__name, node);
+    }
 
     void makeDirs() {}
 
     SeekableReader reader() {
+        __checkExists();
         return RWPathReader(this);
     }
 
@@ -184,7 +247,6 @@ class MAWFSPath : RWPath {
             # The root path should have been created with a cached node.
             throw Exception('Root has no cached node!');
         }
-        debug `rep is $__rep\n`;
         return RWPathAppender(this);
     }
 
@@ -194,14 +256,16 @@ class MAWFSPath : RWPath {
 
     void moveTo(Path other) {}
 
-    Path oper [](String child) { return null }
+    Path oper [](String child) {
+        __checkExists();
+        childNode := __rep.getChild(child);
+        return MAWFSPath(childNode, this, child);
+    }
 
     Path _createNode(String  path) { return null }
 
     Path oper /(String other) {
-        # XXX deal with multi-components paths.
-        child := __rep.getChild(other);
-        return MAWFSPath(child, this, other);
+        return this[other];
     }
 
     void setMode(int mode) {}
@@ -209,11 +273,7 @@ class MAWFSPath : RWPath {
     Path moveToDir(Path other) { return null }
 
     void write(uint pos, Buffer data) {
-
-        if (!__rep)
-            throw InvalidStateError(
-                FStr() `File $(getFullName()) does not exist.`);
-
+        __checkExists();
         if (__rep.isDir())
             throw InvalidStateError(
                 FStr() `File $(getFullName()) is a directory.`);
@@ -222,10 +282,11 @@ class MAWFSPath : RWPath {
     }
 
     void read(uint pos, WriteBuffer data) {
+        __checkExists();
         __rep.read(pos, data);
     }
 }
 
-Path _makeMAWFSPath(CachedNode node) {
-    return MAWFSPath(node);
+Path _makeMAWFSPath(CachedNode node, Path parent, String name) {
+    return MAWFSPath(node, MAWFSPath.cast(parent), name);
 }

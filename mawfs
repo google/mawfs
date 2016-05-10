@@ -246,8 +246,12 @@ void main() {
 
             StringArray fuseArgs = [argv[0]];
             fuseArgs.extend(argv.subarray(3));
+
             err = fuseLog = StandardFormatter(makePath('mawfs.log').writer());
-            runFuse(ChunkStore(makePath(argv[2]), FSInfo(password)), fuseArgs);
+            cerr `running fuse\n`;
+            chunkStore := ChunkStore(makePath(argv[2]), FSInfo(password));
+            runFuse(chunkStore, fuseArgs);
+            cerr `leaving fuse\n`;
         } else if (cmd == 'dump') {
             if (argv.count() != 3) {
                 cerr I`Usage: mawfs dump <path>`;
