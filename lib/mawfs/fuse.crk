@@ -14,318 +14,338 @@
 
 ## FUSE interface.
 
-import crack.ascii hex;
-import crack.cont.array Array;
+import mawfs.blockstore Node, NodeStore, MODE_DIR;
 import crack.cont.hashmap HashMap;
-import crack.ext._fuse FuseFileInfo;
-import crack.exp.fuse log, main, Context, FuseNode = Node, NodeImpl, LockedFilesystem;
-import crack.io cerr, Formatter;
-import crack.lang AssertionError, Buffer, Exception, ManagedBuffer, WriteBuffer;
-import crack.runtime free, Stat, S_IFDIR, S_IFREG;
-import crack.strutil StringArray;
-import mawfs.blockstore Entry, Node, NodeStore, MODE_DIR, MODE_EXE;
+import crack.exp.fuse log;
+import crack.ext._fuse fuse_main = main, get_context, DoubleTimeSpec,
+    FuseOperations, FuseFileInfo;
+import crack.fs Path;
+import crack.io SeekableReader, SeekableWriter, SEEK_SET;
+import crack.lang Buffer, WriteBuffer;
+import crack.runtime free, memcpy, Stat, EACCES, EEXIST, EINVAL, ENOENT,
+    ENOTDIR, O_CREAT, O_RDONLY, S_IFDIR, S_IFREG;
+import crack.strutil split, StringArray;
+import crack.threads Mutex, MutexLock;
+import mawfs.path MAWFSPath;
+import mawfs.cache Cache, CachedNode;
 
-uintz min(uintz a, uintz b) {
-    return (a < b) ? a : b;
+const int ENOSYS = 38;
+
+#import crack.ascii hex;
+#import crack.cont.array Array;
+#import crack.cont.hashmap HashMap;
+#import crack.ext._fuse FuseFileInfo;
+#import crack.exp.fuse log, main, Context, FuseNode = Node, NodeImpl, LockedFilesystem;
+#import crack.io cerr, Formatter;
+#import crack.lang AssertionError, Buffer, Exception, ManagedBuffer, WriteBuffer;
+#import crack.runtime free, Stat, S_IFDIR, S_IFREG;
+#import crack.strutil StringArray;
+
+## Stores information on an open file.
+class FileInfo {
+
+    ## File Handle.
+    uint64 fh;
+
+    SeekableReader reader;
+    SeekableWriter writer;
+
+    oper init(uint64 fh, SeekableReader reader, SeekableWriter writer) :
+        fh = fh,
+        reader = reader,
+        writer = writer {
+    }
 }
 
-## BlockIter lets you read and write to certain positions in a BlockStore node.
-## Note: this may not be a very good abstraction considering the way that
-## we're using it.
-class BlockIter {
-    Array[Node] nodeStack = {};
-    uintz pos;
+## A globally-locked filesystem.
+class LockedFilesystem {
+    Mutex mutex = {};
+    NodeStore store;
+    Cache cache;
+    Path root;
+    HashMap[int, FileInfo] files = {};
 
-    oper init(Node target) { nodeStack.append(target); }
+    oper init(NodeStore store) :
+        store = store,
+        cache(store) {
 
-    void setPos(uintz newPos) {
-        Node target = nodeStack[-1];
-        if (target.contents) {
-            if (pos < target.contents.size)
-                pos = newPos;
+        rootDigest := store.getRootDigest();
+        rootNode := store.getNode(rootDigest);
+        root = MAWFSPath(CachedNode(cache, rootDigest, rootNode));
+    }
+}
+
+## A filesystem context.  This is created when we come into a fuse entrypoint
+## and must be destroyed when the operation is complete.
+class Context {
+    LockedFilesystem __fs;
+    MutexLock __lock;
+
+    oper init(LockedFilesystem fs) :
+        __fs = fs,
+        __lock = MutexLock(__fs.mutex) {
+    }
+
+    @static Context get() {
+        fs := LockedFilesystem.unsafeCast(get_context().private_data);
+        context := Context(fs);
+        return context;
+    }
+
+    ## Get the path object for the fully qualified 'path', return null if
+    ## there is none.
+    Path getPath(byteptr path) {
+        pathStr := String(path);
+
+        # Special case the root directory.
+        if (pathStr == '/')
+            return __fs.root;
+
+        # Look up the Path object, return null if we get to a non-directory.
+        components := split(pathStr, b'/');
+        cur := __fs.root;
+        for (int i = 1; i < components.count(); ++i) {
+            if (cur && cur.isDir())
+                cur = cur[components[i]];
             else
-                pos = target.contents.size;
-        } else {
-            pos = 0;
+                return null;
         }
 
-        # TODO: deal with "elems"
+        return cur;
     }
 
-    int read(WriteBuffer result) {
-        Node target = nodeStack[-1];
-        if (!target.contents)
-            return 0;
-        size := min(target.contents.size - pos, result.cap);
-        result.move(0, target.contents.buffer + pos, size );
-        # TODO: deal with elems.
-        return size;
+    FileInfo makeFileInfo(SeekableReader reader, SeekableWriter writer) {
+        fh := __fs.files.count() + 1;
+        fi := FileInfo(fh, reader, writer);
+        __fs.files[fh] = fi;
+        return fi;
     }
 
-    int write(Buffer data) {
-        Node target = nodeStack[-1];
-        if (target.contents) {
-            if (pos <= target.contents.size) {
-                ManagedBuffer resultBuf = {
-                    (target.contents.size > pos + data.size) ?
-                        target.contents.size :
-                        pos + data.size
-                };
+    FileInfo getFileInfo(uint64 fh) {
+        return __fs.files.get(fh);
+    }
 
-                # Copy in the original data and the new data.
-                resultBuf.move(0, target.contents);
-                resultBuf.move(pos, data);
-
-                target.contents = String(resultBuf, true);
-            } else {
-                # It looks like a write() a position greater than the current size
-                # of the file resizes the file and pads with zeroes up to the
-                # write position.
-                throw AssertionError('Implement writes greater than size.');
-            }
-        } else {
-            target.contents = String(data);
-        }
-        return data.size;
+    void deleteFileInfo(uint64 fh) {
+        __fs.files.delete(fh);
     }
 }
 
-## A MAWFS filesystem node.
-class MAWFSNode : NodeImpl {
-    NodeStore __store;
-    Node __rep;
-    MAWFSNode __parent;
-    bool isRoot;
-
-    class Child {
-        ## The digest of the child node.
-        String digest;
-
-        ## Index of the child in its parent.
-        int index;
-
-        ## The MAWFS node of the child, may be null if the child hasn't been
-        ## loaded.
-        MAWFSNode node;
-
-        oper init(String digest, int index) : digest = digest, index = index {}
-
-        void formatTo(Formatter out) {
-            out `MAWFSNode.Child($(hex(digest)), $index)`;
-        }
+int _getattr(byteptr path, Stat stbuf)
+{
+    log `in getattr($path, $stbuf)\n`;
+    ctx := Context.get();
+    p := ctx.getPath(path);
+    if (p && p.exists()) {
+        stat := p.getStat();
+        stbuf.st_mode = stat.st_mode;
+        stbuf.st_nlink = stat.st_nlink;
+        stbuf.st_uid = stat.st_uid;
+        stbuf.st_gid = stat.st_gid;
+        stbuf.st_size = p.getSize();
+        return 0;
+    } else {
+        return -ENOENT;
     }
-    alias ChildMap = HashMap[String, Child];
-    ChildMap __children;
+}
 
-    ## The index of the node in it's parent's list.
-    int __indexInParent;
-
-    oper init(NodeStore store, Node rep) :
-        NodeImpl(040777, 1),
-        __store = store,
-        __rep = rep,
-        __parent = null {
-    }
-
-    oper init(MAWFSNode parent, Node rep) :
-        NodeImpl(040777, 1),
-        __store = parent.__store,
-        __rep = rep,
-        __parent = parent {
-    }
-
-    ## Gets the dictionary of children, populating it if necessary.
-    ChildMap __getChildren() {
-        if (__children is null) {
-            __children = ChildMap();
-
-            if (__rep.children) {
-                int i;
-                for (child :in __rep.children)
-                    __children[child.name] = Child(child.hash, i++);
-            }
-        }
-        return __children;
-    }
-
-    ## Returns the size of the underlying node.
-    uintz __getSize() {
-        if (__rep.contents)
-            # TODO: make this work for nested nodes.
-            return __rep.contents.count();
-        else
-            return 0;
-    }
-
-    ## Rewrite a parent node after changing the digest of a child.
-    void __changeChild(StringArray name, int index, String digest) {
-        child := __getChildren().get(name[index]);
-        if (!child) {
-            log I`Error: directory $(name.subarray(0, index)) does not have \
-                  child $(name[index])\n`;
-            return;
-        }
-
-        if (child.digest == digest)
-            return;
-
-        child.digest = digest;
-        __rep.children[child.index].hash = digest;
-        myDigest := __store.storeNode(__rep);
-
-        if (__parent)
-            __parent.__changeChild(name, index - 1, myDigest);
-        else
-            __store.storeRoot(myDigest);
-    }
-
-    void __changeChild(Context ctx, String digest) {
-        __changeChild(ctx.parsedPath, ctx.parsedPath.count() - 1, digest);
-    }
-
-    ## For testing only.
-    void setRep(Node rep) {
-        __rep = rep;
-    }
-
-    int readdir(Context ctx, voidptr buf,
-                function[int, voidptr, byteptr, Stat, uintz] filler,
-                uintz offset,
-                FuseFileInfo fi
-                ) {
-        Stat stat = {};
-        stat.st_mode = 040777;
-
+int _readdir(byteptr path, voidptr buf,
+             function[int, voidptr, byteptr, Stat, uintz] filler,
+             uintz offset,
+             FuseFileInfo fi
+             ) {
+    log `in readdir($path, buf, filler, $offset, $fi)\n`;
+    ctx := Context.get();
+    if (p := ctx.getPath(path)) {
         filler(buf, ".".buffer, null, 0);
         filler(buf, "..".buffer, null, 0);
 
-        stat.st_mode = 040777;
-        stat.st_nlink = 1;
-        stat.st_uid = 0;
-        stat.st_gid = 0;
-        if (__rep.children) {
-            for (child :in __rep.children) {
-                filler(buf, child.name.buffer, stat, 0);
-            }
-        }
-
-        free(stat);
-        return 0;
-    }
-
-    int open(Context ctx, FuseFileInfo fi) {
-        return 0;
-    }
-
-    int read(Context ctx, byteptr buf, uintz size, uintz offset,
-             FuseFileInfo fi
-             ) {
-        iter := BlockIter(__rep);
-        iter.setPos(offset);
-        return iter.read(WriteBuffer(buf, size));
-    }
-
-    int write(Context ctx, byteptr buf, uintz size, uintz offset,
-              FuseFileInfo fi
-              ) {
-        iter := BlockIter(__rep);
-        iter.setPos(offset);
-        result := iter.write(Buffer(buf, size));
-
-        digest := __store.storeNode(__rep);
-        if (__parent)
-            __parent.__changeChild(ctx, digest);
-
-        return result;
-    }
-
-    void __makeChild(Context ctx, int mode) {
-        # Create a new node and store it.
-        node := Node();
-        node.mode = int32(mode);
-        digest := __store.storeNode(node);
-        name := ctx.parsedPath[-1];
-
-        children := __getChildren();
-        child := children.get(name);
-        if (child) {
-            __rep.children[child.index].hash = digest;
-        } else {
-            entry := Entry();
-            entry.name = name;
-            entry.hash = digest;
-            children[name] = Child(digest,
-                                   __rep.children ? __rep.children.count() : 0
-                                   );
-            __rep.children_append(entry);
-        }
-
-        myDigest := __store.storeNode(__rep);
-        if (__parent) {
-            __parent.__changeChild(ctx.parsedPath, ctx.parsedPath.count() - 2,
-                                   myDigest
-                                   );
-        } else {
-            __store.storeRoot(myDigest);
-        }
-    }
-
-    int create(Context ctx, int mode, FuseFileInfo fi)  {
-        __makeChild(ctx, (mode & 0111) ? MODE_EXE : 0);
-        return 0;
-    }
-
-    int mkdir(Context ctx, int mode) {
-        __makeChild(ctx, MODE_DIR);
-        return 0;
-    }
-
-    int getattr(Context ctx, Stat stbuf) {
-        mode := 0666;
-        if (__rep.mode & MODE_EXE)
-            mode |= 0111;
-        if (__rep.mode & MODE_DIR)
-            mode |= S_IFDIR | 0111;
-        else
-            mode |= S_IFREG;
-        stbuf.st_mode = mode;
-        stbuf.st_nlink = 1;
-        stbuf.st_uid = 1000;
-        stbuf.st_gid = 1000;
-        stbuf.st_size = __getSize();
-        return 0;
-    }
-
-    int truncate(Context ctx, uintz size) {
-        if (__rep.contents && __rep.contents.size > size) {
-            __rep.contents = __rep.contents.substr(0, size);
-
-            digest := __store.storeNode(__rep);
-
-            if (__parent)
-                __parent.__changeChild(ctx, digest);
-        }
+        # Fill in all of the child entries.
+        for (item :in p.children())
+            filler(buf, item.getName().buffer, item.getStat(), 0);
 
         return 0;
+    } else {
+        return -ENOENT;
     }
+}
 
-    int ftruncate(Context ctx, uintz size, FuseFileInfo fi) {
-        return truncate(ctx, size);
+int _open(byteptr path, FuseFileInfo fi) {
+    log `in open($path, $fi)\n`;
+    ctx := Context.get();
+    p := ctx.getPath(path);
+    if (p && !p.isDir()) {
+        fi.fh = ctx.makeFileInfo(p.reader(), null).fh;
+        return 0;
+    } else {
+        return -ENOENT;
     }
+}
 
-    FuseNode lookUp(StringArray parsedPath, int start, int end) {
-        if (start == end)
-            return this;
-
-        children := __getChildren();
-        child := children.get(parsedPath[start]);
-        if (child) {
-            mawfsChild := MAWFSNode(this, __store.getNode(child.digest));
-            return mawfsChild.lookUp(parsedPath, start + 1, end);
-        } else {
-            return null;
-        }
+int _read(byteptr path, byteptr buf, uintz size, uintz offset,
+          FuseFileInfo fi
+          ) {
+    log `in read($path, buf, $size, $offset, $fi)\n`;
+    ctx := Context.get();
+    info := ctx.getFileInfo(fi.fh);
+    if (!((info ? info.reader : null) is null)) {
+        WriteBuffer temp = {buf, 0, size};
+        return info.reader.read(temp);
+    } else {
+        return -EINVAL;
     }
+}
+
+int _write(byteptr path, byteptr buf, uintz size, uintz offset,
+           FuseFileInfo fi
+           ) {
+    log `in write($path, buf, $size, $offset, $fi)\n`;
+    ctx := Context.get();
+    info := ctx.getFileInfo(fi.fh);
+    if (info && info.writer) {
+        info.writer.seek(uintz(offset), SEEK_SET);
+        info.writer.write(Buffer(buf, size));
+        return size;
+    } else {
+        return -EINVAL;
+    }
+}
+
+int _flush(byteptr path, FuseFileInfo fi) {
+    log `in flush($path, $fi)\n`;
+    ctx := Context.get();
+    info := ctx.getFileInfo(fi.fh);
+    if (info) {
+        if (info.writer)
+            info.writer.flush();
+        return 0;
+    } else {
+        return -ENOENT;
+    }
+}
+
+int _readlink(byteptr path, byteptr buffer, intz size) {
+    log `readlink not implemented\n`;
+    return -ENOSYS;
+}
+
+int _truncate(byteptr path, uintz size) {
+    log `in truncate($path, $size)\n`;
+#    ctx := Context.get(path);
+#    if (node := ctx.lookUp())
+#        return node.truncate(ctx, size);
+#    else
+        return -ENOENT;
+}
+
+int _ftruncate(byteptr path, uintz size, FuseFileInfo fi) {
+    log `in ftruncate($path, $size)\n`;
+#    ctx := Context.get(path);
+#    if (node := ctx.lookUp())
+#        return node.ftruncate(ctx, size, fi);
+#    else
+        return -ENOENT;
+}
+
+int _mknod(byteptr path, int major, int minor) {
+    log `mknod not implemented\n`;
+    return -ENOSYS;
+}
+
+int _create(byteptr path, int mode, FuseFileInfo fi) {
+    log `in create($path, mode, $fi)\n`;
+    ctx := Context.get();
+    p := ctx.getPath(path);
+    if (p) {
+        fi.fh = ctx.makeFileInfo(null, p.writer()).fh;
+        return 0;
+    } else {
+        return -ENOENT;
+    }
+}
+
+int _mkdir(byteptr path, int mode) {
+    log `in mkdir($path, $mode)\n`;
+#    ctx := Context.get(path);
+#    if (node := ctx.lookUpParent())
+#        return node.mkdir(ctx, mode);
+#    else
+        return -ENOENT;
+}
+
+int _chmod(byteptr path, int mode) {
+    log `in chmod($path, $mode)\n`;
+#    ctx := Context.get(path);
+#    if (node := ctx.lookUp())
+#        return node.chmod(ctx, mode);
+#    else
+        return -ENOENT;
+}
+
+int _access(byteptr path, int uid) {
+    log `in access($path, $uid)\n`;
+    return 0;
+}
+
+int _rename(byteptr path, byteptr newPath) {
+    log `in rename($path, $newPath)\n`;
+#    ctx := Context.get(path);
+#    if (node := ctx.lookUp())
+#        return node.rename(ctx, String(newPath));
+#    else
+        return -ENOENT;
+}
+
+int _chown(byteptr path, int uid, int gid) {
+    log `in chown($path, $uid, $gid)\n `;
+#    ctx := Context.get(path);
+#    if (node := ctx.lookUp())
+#        return node.chown(ctx, uid, gid);
+#    else
+        return -ENOENT;
+}
+
+int _utimens(byteptr path, DoubleTimeSpec times) {
+    log `in utimens($path, times)\n`;
+    # We don't currently have support for this at just about any level.
+    return 0;
+}
+
+int _release(byteptr path, FuseFileInfo fi) {
+    log `in release($path, $fi)\n`;
+    ctx := Context.get();
+    if (ctx.getFileInfo(fi.fh)) {
+        ctx.deleteFileInfo(fi.fh);
+        return 0;
+    } else {
+        return -EINVAL;
+    }
+}
+
+## Does fuse_main().  Do this if you're implementing a simple
+## filesystem-per-process.
+int main(StringArray argv, LockedFilesystem fs) {
+    ops := FuseOperations();
+    ops.getattr = _getattr;
+    ops.readdir = _readdir;
+    ops.open = _open;
+    ops.read = _read;
+    ops.write = _write;
+    ops.flush = _flush;
+    ops.truncate = _truncate;
+    ops.ftruncate = _ftruncate;
+    ops.readlink = _readlink;
+    ops.mknod = _mknod;
+    ops.create = _create;
+    ops.mkdir = _mkdir;
+    ops.chmod = _chmod;
+    ops.rename = _rename;
+    ops.chown = _chown;
+    ops.utimens = _utimens;
+    ops.release = _release;
+
+    # Create another link to the root object so we can safely exit.
+    fs.root.oper bind();
+    return fuse_main(argv.count(), argv.makePrimArray(), ops, fs);
 }
 
 void runFuse(NodeStore store, StringArray argv) {
@@ -337,5 +357,6 @@ void runFuse(NodeStore store, StringArray argv) {
         rootNode.mode = MODE_DIR;
         store.storeRoot(store.storeNode(rootNode));
     }
-    main(argv, LockedFilesystem(MAWFSNode(store, rootNode)));
+
+    main(argv, LockedFilesystem(store));
 }
