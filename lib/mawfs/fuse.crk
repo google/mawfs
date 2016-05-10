@@ -52,6 +52,7 @@ class LockedFilesystem {
     Mutex mutex = {};
     NodeStore store;
     Cache cache;
+    CachedNode cachedRoot;
     Path root;
     HashMap[int, FileInfo] files = {};
 
@@ -61,7 +62,8 @@ class LockedFilesystem {
 
         rootDigest := store.getRootDigest();
         rootNode := store.getNode(rootDigest);
-        root = MAWFSPath(CachedNode(cache, rootDigest, rootNode));
+        cachedRoot = CachedNode(cache, rootDigest, rootNode);
+        root = MAWFSPath(cachedRoot);
     }
 }
 
@@ -117,6 +119,10 @@ class Context {
 
     void deleteFileInfo(uint64 fh) {
         __fs.files.delete(fh);
+    }
+
+    void commit() {
+        __fs.store.storeRoot(__fs.cachedRoot.commit());
     }
 }
 
@@ -322,6 +328,13 @@ int _release(byteptr path, FuseFileInfo fi) {
     }
 }
 
+int _fsyncdir(byteptr path, int datasync, FuseFileInfo fi) {
+    info `in fsyncdir($path, $datasync, $fi)`;
+    ctx := Context.get();
+    ctx.commit();
+    return 0;
+}
+
 ## Does fuse_main().  Do this if you're implementing a simple
 ## filesystem-per-process.
 int main(StringArray argv, LockedFilesystem fs) {
@@ -343,6 +356,7 @@ int main(StringArray argv, LockedFilesystem fs) {
     ops.chown = _chown;
     ops.utimens = _utimens;
     ops.release = _release;
+    ops.fsyncdir = _fsyncdir;
 
     # Create another link to the root object so we can safely exit.
     fs.root.oper bind();
