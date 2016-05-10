@@ -116,6 +116,7 @@ cachedRoot.addChild('written', Node());
 cached := cachedRoot.getChild('written');
 cached.write(0, 'first data');
 @assert(cached.getContents() == 'first data');
+@assert(cached.getSize() == 10);
 
 
 # TODO:
