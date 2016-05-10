@@ -16,12 +16,12 @@
 
 import mawfs.blockstore Node, NodeStore, MODE_DIR;
 import crack.cont.hashmap HashMap;
-import crack.exp.fuse log;
 import crack.ext._fuse fuse_main = main, get_context, DoubleTimeSpec,
     FuseOperations, FuseFileInfo;
 import crack.fs Path;
 import crack.io SeekableReader, SeekableWriter, SEEK_SET;
 import crack.lang Buffer, SystemError, WriteBuffer;
+import crack.logger info;
 import crack.runtime free, memcpy, Stat, EACCES, EEXIST, EINVAL, ENOENT,
     ENOTDIR, O_CREAT, O_RDONLY, S_IFDIR, S_IFREG;
 import crack.strutil split, StringArray;
@@ -122,7 +122,7 @@ class Context {
 
 int _getattr(byteptr path, Stat stbuf)
 {
-    log `in getattr($path, $stbuf)\n`;
+    info `in getattr($path, $stbuf)`;
     ctx := Context.get();
     p := ctx.getPath(path);
     if (p && p.exists()) {
@@ -143,7 +143,7 @@ int _readdir(byteptr path, voidptr buf,
              uintz offset,
              FuseFileInfo fi
              ) {
-    log `in readdir($path, buf, filler, $offset, $fi)\n`;
+    info `in readdir($path, buf, filler, $offset, $fi)`;
     ctx := Context.get();
     if (p := ctx.getPath(path)) {
         filler(buf, ".".buffer, null, 0);
@@ -160,7 +160,7 @@ int _readdir(byteptr path, voidptr buf,
 }
 
 int _open(byteptr path, FuseFileInfo fi) {
-    log `in open($path, $fi)\n`;
+    info `in open($path, $fi)`;
     ctx := Context.get();
     p := ctx.getPath(path);
     if (p && !p.isDir()) {
@@ -174,7 +174,7 @@ int _open(byteptr path, FuseFileInfo fi) {
 int _read(byteptr path, byteptr buf, uintz size, uintz offset,
           FuseFileInfo fi
           ) {
-    log `in read($path, buf, $size, $offset, $fi)\n`;
+    info `in read($path, buf, $size, $offset, $fi)`;
     ctx := Context.get();
     info := ctx.getFileInfo(fi.fh);
     if (!((info ? info.reader : null) is null)) {
@@ -188,7 +188,7 @@ int _read(byteptr path, byteptr buf, uintz size, uintz offset,
 int _write(byteptr path, byteptr buf, uintz size, uintz offset,
            FuseFileInfo fi
            ) {
-    log `in write($path, buf, $size, $offset, $fi)\n`;
+    info `in write($path, buf, $size, $offset, $fi)`;
     ctx := Context.get();
     info := ctx.getFileInfo(fi.fh);
     if (info && info.writer) {
@@ -201,7 +201,7 @@ int _write(byteptr path, byteptr buf, uintz size, uintz offset,
 }
 
 int _flush(byteptr path, FuseFileInfo fi) {
-    log `in flush($path, $fi)\n`;
+    info `in flush($path, $fi)`;
     ctx := Context.get();
     info := ctx.getFileInfo(fi.fh);
     if (info) {
@@ -214,12 +214,12 @@ int _flush(byteptr path, FuseFileInfo fi) {
 }
 
 int _readlink(byteptr path, byteptr buffer, intz size) {
-    log `readlink not implemented\n`;
+    info `readlink not implemented\n`;
     return -ENOSYS;
 }
 
 int _truncate(byteptr path, uintz size) {
-    log `in truncate($path, $size)\n`;
+    info `in truncate($path, $size)`;
 #    ctx := Context.get(path);
 #    if (node := ctx.lookUp())
 #        return node.truncate(ctx, size);
@@ -228,7 +228,7 @@ int _truncate(byteptr path, uintz size) {
 }
 
 int _ftruncate(byteptr path, uintz size, FuseFileInfo fi) {
-    log `in ftruncate($path, $size)\n`;
+    info `in ftruncate($path, $size)`;
 #    ctx := Context.get(path);
 #    if (node := ctx.lookUp())
 #        return node.ftruncate(ctx, size, fi);
@@ -237,12 +237,12 @@ int _ftruncate(byteptr path, uintz size, FuseFileInfo fi) {
 }
 
 int _mknod(byteptr path, int major, int minor) {
-    log `mknod not implemented\n`;
+    info `mknod not implemented`;
     return -ENOSYS;
 }
 
 int _create(byteptr path, int mode, FuseFileInfo fi) {
-    log `in create($path, mode, $fi)\n`;
+    info `in create($path, mode, $fi)`;
     ctx := Context.get();
     p := ctx.getPath(path);
     if (p) {
@@ -254,7 +254,7 @@ int _create(byteptr path, int mode, FuseFileInfo fi) {
 }
 
 int _mkdir(byteptr path, int mode) {
-    log `in mkdir($path, $mode)\n`;
+    info `in mkdir($path, $mode)`;
     ctx := Context.get();
     p := ctx.getPath(path);
     if (p) {
@@ -263,7 +263,7 @@ int _mkdir(byteptr path, int mode) {
             return 0;
         } catch (SystemError ex) {
             # TODO: return error code from ex.
-            log `exception in mkdir: $ex\n`;
+            info `exception in mkdir: $ex`;
             return -EINVAL;
         }
     } else {
@@ -272,7 +272,7 @@ int _mkdir(byteptr path, int mode) {
 }
 
 int _chmod(byteptr path, int mode) {
-    log `in chmod($path, $mode)\n`;
+    info `in chmod($path, $mode)`;
 #    ctx := Context.get(path);
 #    if (node := ctx.lookUp())
 #        return node.chmod(ctx, mode);
@@ -281,12 +281,12 @@ int _chmod(byteptr path, int mode) {
 }
 
 int _access(byteptr path, int uid) {
-    log `in access($path, $uid)\n`;
+    info `in access($path, $uid)`;
     return 0;
 }
 
 int _rename(byteptr path, byteptr newPath) {
-    log `in rename($path, $newPath)\n`;
+    info `in rename($path, $newPath)`;
 #    ctx := Context.get(path);
 #    if (node := ctx.lookUp())
 #        return node.rename(ctx, String(newPath));
@@ -295,7 +295,7 @@ int _rename(byteptr path, byteptr newPath) {
 }
 
 int _chown(byteptr path, int uid, int gid) {
-    log `in chown($path, $uid, $gid)\n `;
+    info `in chown($path, $uid, $gid)\n `;
 #    ctx := Context.get(path);
 #    if (node := ctx.lookUp())
 #        return node.chown(ctx, uid, gid);
@@ -304,13 +304,13 @@ int _chown(byteptr path, int uid, int gid) {
 }
 
 int _utimens(byteptr path, DoubleTimeSpec times) {
-    log `in utimens($path, times)\n`;
+    info `in utimens($path, times)`;
     # We don't currently have support for this at just about any level.
     return 0;
 }
 
 int _release(byteptr path, FuseFileInfo fi) {
-    log `in release($path, $fi)\n`;
+    info `in release($path, $fi)`;
     ctx := Context.get();
     if (ctx.getFileInfo(fi.fh)) {
         ctx.deleteFileInfo(fi.fh);

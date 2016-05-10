@@ -17,17 +17,17 @@ import crack.ascii hex, radix;
 #import crack.exp.fuse fuseMain = main, LockedFilesystem, NodeImpl;
 import crack.lang InvalidArgumentError, SystemError;
 
-import crack.exp.fuse fuseLog = log;
 import crack.fs cwd, makePath, Path;
 import crack.runtime abort, backtrace, free, getLocation, memcmp, sigaction,
     strlen, SigAction, SigInfo, SA_SIGINFO, SIGFPE, SIGILL, SIGSEGV;
 import crack.strutil StringArray;
 import crack.sys argv, exit;
 import crack.io cin, cout, cerr, Formatter, FStr, Reader, StandardFormatter,
-    StringReader;
+    StringFormatter, StringReader;
 
 import crack.cont.array Array;
 import crack.lang AppendBuffer;
+import crack.logger error, setLogFile, setLogLevel, DEBUG;
 import crack.protobuf readMessageFromString;
 
 import mawfs.blockstore hashFile, unhex, ChunkStore, FSInfo, Node, BLOCK_SIZE;
@@ -45,8 +45,6 @@ import mawfs.fuse runFuse;
 
 const TESTPW := 'FooBar-boguspassFooBar-boguspass';
 
-Formatter err = cerr;
-
 # Lifted from crack.lang.
 
 const _ADDRS_SIZE := 100;
@@ -54,28 +52,31 @@ const array[voidptr] _addrs = {_ADDRS_SIZE};
 const array[byteptr] _addrInfo = {3};
 
 void trapHandler(int signal, SigInfo si, voidptr ucontext) {
-    err `Stack Trace\n`;
+    StringFormatter trace = {};
+    trace `Stack Trace\n`;
     numFrames := backtrace(_addrs, _ADDRS_SIZE);
     if (numFrames == _ADDRS_SIZE)
-        err `[stack trace truncated]\n`;
+        trace `    [stack trace truncated]\n`;
     for (int i = numFrames - 1; i; --i) {
         getLocation(_addrs[i], _addrInfo);
         if (strlen(_addrInfo[0]) >= 8 &&
             !memcmp(_addrInfo[0], ':unknown'.buffer, 8)) {
-            err `unknown address\n`;
+            trace `    unknown address\n`;
         } else {
-            err `$(_addrInfo[0])\n`;
+            trace `    $(_addrInfo[0])\n`;
         }
     }
 
     if (signal == SIGSEGV)
-        err `SIGSEGV received\n`;
+        trace `    SIGSEGV received\n`;
     else if (signal == SIGILL)
-        err `SIGILL received\n`;
+        trace `    SIGILL received\n`;
     else if (signal == SIGFPE)
-        err `SIGFPE received\n`;
+        trace `    SIGFPE received\n`;
     else
-        err `Unexpected signal received\n`;
+        trace `    Unexpected signal received\n`;
+
+    error `$(trace.string())\n`;
 
     abort();
 }
@@ -199,11 +200,10 @@ void main() {
             StringArray fuseArgs = [argv[0]];
             fuseArgs.extend(argv.subarray(3));
 
-            err = fuseLog = StandardFormatter(makePath('mawfs.log').writer());
-            cerr `running fuse\n`;
+            setLogFile('mawfs.log');
+            setLogLevel(DEBUG);
             chunkStore := ChunkStore(makePath(argv[2]), FSInfo(TESTPW));
             runFuse(chunkStore, fuseArgs);
-            cerr `leaving fuse\n`;
         } else if (cmd == 'dump') {
             if (argv.count() != 3) {
                 cerr I`Usage: mawfs dump <path>`;
@@ -230,9 +230,9 @@ void main() {
             exit(1);
         }
     } catch (SystemError ex) {
-        err `$(ex.text)\n`;
+        error `$(ex.text)`;
     } catch (InvalidArgumentError ex) {
-        err `$(ex.text)\n`;
+        error `$(ex.text)`;
     }
 }
 
