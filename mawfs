@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import crack.ascii hex, radix;
+import crack.enc.base64 altDecode, altEncode;
 #import crack.exp.fuse fuseMain = main, LockedFilesystem, NodeImpl;
 import crack.lang InvalidArgumentError, SystemError;
 
@@ -35,7 +36,7 @@ import crack.lang AppendBuffer, InvalidStateError;
 import crack.logger debug, error, setLogFile, setLogLevel, DEBUG;
 import crack.protobuf readMessageFromString;
 
-import mawfs.blockstore hashFile, unhex, ChunkStore, FSInfo, Node, BLOCK_SIZE;
+import mawfs.blockstore hashFile, ChunkStore, FSInfo, Node, BLOCK_SIZE;
 import mawfs.fuse runFuse;
 
 import 'libc.so.6' fsync;
@@ -231,7 +232,7 @@ void main() {
             password := readPassword();
 
             store := ChunkStore(cwd, FSInfo(password));
-            chunk := store.load(unhex(argv[2]));
+            chunk := store.load(altDecode(argv[2]));
             if (!chunk)
                 cerr `Chunk $(argv[2]) not found\n`;
             else
@@ -289,7 +290,7 @@ void main() {
 
             # See if this is a tag.
             if (contents.count() == 64 &&
-                ((refed := path.parent()/unhex(contents))).exists()
+                ((refed := path.parent()/altDecode(contents))).exists()
                 )
                 contents = refed.readAll();
 

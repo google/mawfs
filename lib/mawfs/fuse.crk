@@ -14,9 +14,9 @@
 
 ## FUSE interface.
 
-import crack.ascii hex;
 import mawfs.blockstore Commit, Node, NodeStore, MODE_DIR;
 import crack.cont.hashmap HashMap;
+import crack.enc.base64 altDecode, altEncode;
 import crack.ext._fuse fuse_main = main, get_context, DoubleTimeSpec,
     FuseOperations, FuseFileInfo;
 import crack.fs Path;
@@ -70,11 +70,11 @@ class LockedFilesystem {
         __branch = branch {
 
         commitDigest := getHead();
-        info `loading commit $(hex(commitDigest))`;
+        info `loading commit $(altEncode(commitDigest))`;
         commit := store.getCommit(commitDigest);
 
         # Get the root node, create the CachedNode and the MAWFSPath for it.
-        info `loading root $(hex(commit.root))`;
+        info `loading root $(altEncode(commit.root))`;
         rootNode := store.getNode(commit.root);
         cachedRoot = CachedNode(cache, commit.root, rootNode);
         root = MAWFSPath(cachedRoot);
@@ -146,8 +146,8 @@ class Context {
         commit.parent_append(__fs.getHead());
 
         __fs.setHead(commitDigest := __fs.store.storeCommit(commit));
-        info I`commit: digest = $(hex(commitDigest)), \
-               new root = $(hex(commit.root))`;
+        info I`commit: digest = $(altEncode(commitDigest)), \
+               new root = $(altEncode(commit.root))`;
     }
 }
 

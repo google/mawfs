@@ -15,9 +15,8 @@
 ## Low-level block-store API.
 
 #import crack.exp.fuse fuseMain = main, LockedFilesystem, NodeImpl;
-import crack.enc.base64 altEncode, altDecode;
 import crack.cont.array Array;
-import crack.ascii hex;
+import crack.enc.base64 altDecode, altEncode;
 import crack.hash Hash;
 import crack.hash.sha256 SHA256;
 import crack.lang cmp, makeHashVal, AppendBuffer, Buffer, Exception,
@@ -125,31 +124,6 @@ const BLOCK_SIZE := 65536;
 class BadDigestError : Exception {
     oper init() {}
     oper init(String message) : Exception(message) {}
-}
-
-## Converts a hex representation to binary (e.g. converts "616263" to "abc")
-String unhex(String src) {
-    if (src.size % 2)
-        throw InvalidArgumentError(
-            FStr() I`Hex strings must be of even length (got length \
-                     $(src.size))`
-        );
-    byte toNybble(byte b) {
-        if (b >= b'0' && b <= b'9')
-            return b - b'0';
-        else if (b >= b'a' && b <= b'f')
-            return b - b'a' + 10;
-        else if (b >= b'A' && b <= b'F')
-            return b - b'A' + 10;
-        else
-            throw InvalidArgumentError(
-                FStr() `invalid character "$(String(1, b))" in hex string.`
-            );
-    }
-    AppendBuffer result = {64};
-    for (int i = 0; i < src.size; i += 2)
-        result.append((toNybble(src[i]) << 4) | toNybble(src[i + 1]));
-    return String(result, true);
 }
 
 class HashAndWrite @impl Writer {
@@ -279,13 +253,13 @@ class ChunkStore @impl NodeStore {
     ## Verifies the chunk digest on read, throws BadDigestError if it doesn't
     ## match.
     Chunk load(String digest) {
-        path := __dir/hex(digest);
+        path := __dir/altEncode(digest);
         if (path.exists()) {
             result := __fsInfo.readChunk(path.reader());
             if (result.digest != digest)
                 throw BadDigestError(
-                    FStr() I`chunk $(hex(digest)) data integrity failure.
-                             Actual data digest is $(hex(result.digest))`
+                    FStr() I`chunk $(altEncode(digest)) data integrity failure.
+                             Actual data digest is $(altEncode(result.digest))`
                 );
             return result;
         } else {
@@ -298,7 +272,7 @@ class ChunkStore @impl NodeStore {
     ## Verifies the chunk digest on write, throws BadDigestError if it doesn't
     ## match.
     void store(Chunk chunk) {
-        path := __dir/hex(chunk.digest);
+        path := __dir/altEncode(chunk.digest);
         __fsInfo.writeChunk(path.writer(), chunk);
     }
 
@@ -306,7 +280,7 @@ class ChunkStore @impl NodeStore {
     String store(Buffer data) {
         path := __dir/(FStr() `tempchunk.$(uintz(data))`);
         digest := __fsInfo.writeChunk(path.writer(), data);
-        path.moveTo(__dir/hex(digest));
+        path.moveTo(__dir/altEncode(digest));
         return digest;
     }
 
@@ -344,7 +318,7 @@ class ChunkStore @impl NodeStore {
         rootFile := __dir/'root';
         if (!rootFile.exists())
             return null;
-        digest := unhex(rootFile.readAll());
+        digest := altDecode(rootFile.readAll());
         return getNode(digest);
     }
 
@@ -352,12 +326,12 @@ class ChunkStore @impl NodeStore {
         rootFile := __dir/'root';
         if (!rootFile.exists())
             return null;
-        return unhex(rootFile.readAll());
+        return altDecode(rootFile.readAll());
     }
 
     # Store the current root digest.
     void storeRoot(String digest) {
-        (__dir/'root').writeAll(hex(digest));
+        (__dir/'root').writeAll(altEncode(digest));
     }
 
     void writeToJournal(String digest, String contents) {
