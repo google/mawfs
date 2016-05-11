@@ -73,6 +73,14 @@ class TestFailure : Exception {
     void stopFS() {
         rc := Process(StringArray!['fusermount', '-u', 'fs']).run();
         if (rc != CRK_PROC_EXITED) {
+            # There seems to be a timing issue here. This doesn't always
+            # succeed on the first try.  So if the unmount fails, sleep and
+            # try again one more time.
+            sleep(1);
+            rc = Process(StringArray!['fusermount', '-u', 'fs']).run();
+        }
+
+        if (rc != CRK_PROC_EXITED) {
             cerr `fusermount failed`;
             cerr `$(makePath('mawfs.log').readAll())\n`;
         }
@@ -189,6 +197,7 @@ class SubDirFileTest : TestCase {
         fsync(fd);
         close(fd);
 
+        # Restart to verify that everything got committed properly.
         stopFS();
         startFS();
 
@@ -196,6 +205,21 @@ class SubDirFileTest : TestCase {
     }
 }
 SubDirFileTest().exec();
+
+class TruncateTest : TestCase {
+    void run() {
+        a := makePath('fs')/'a';
+        a.writeAll('some data');
+        a.truncate(0);
+        assertEqual(a.readAll(), '');
+
+        b := makePath('fs')/'b';
+        b.writeAll('more data');
+        b.truncate(10);
+        assertEqual(b.readAll(), 'more data\0');
+    }
+}
+TruncateTest().exec();
 
 /*
 String readNode(Node node, int pos, int size) {

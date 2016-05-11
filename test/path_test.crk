@@ -48,6 +48,9 @@ dir := root/'dir';
 dir.makeDir();
 @assert(dir.isDir());
 
-
+truncated := root/'truncated';
+truncated.writeAll('here is some data');
+truncated.truncate(4);
+@assert(truncated.readAll() == 'here');
 
 cerr `ok\n`;

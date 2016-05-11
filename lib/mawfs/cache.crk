@@ -21,7 +21,7 @@ import crack.io.fmtutil Indenter;
 import crack.io Formatter, FStr;
 import crack.cont.array Array;
 import crack.lang cmp, AppendBuffer, AssertionError, Buffer, Exception,
-    KeyError, WriteBuffer, makeHashVal;
+    KeyError, ManagedBuffer, WriteBuffer, makeHashVal;
 import crack.logger debug, error;
 import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
 import mawfs.blockstore Entry, Node, NodeStore, MODE_DIR;
@@ -46,7 +46,10 @@ const int32
 
     ## Write data to node contents (respecting all current rules about file
     ## size, layout etc).  Contains pos and data.
-    CHANGE_WRITE = 4;
+    CHANGE_WRITE = 4,
+
+    ## Resize node contents.  Contains newSize.
+    CHANGE_RESIZE = 5;
 
 @protobuf {
     declare Node;
@@ -70,6 +73,9 @@ const int32
 
         ## Data to be inserted in a write.
         optional bytes data = 6;
+
+        ## New size of the node for a resize.
+        optional int32 newSize = 7;
     }
 }
 
@@ -555,6 +561,54 @@ class CachedNode {
         __recordChange(change);
     }
 
+    void __resize(uint64 newSize) {
+        if (node.contents is null) {
+            # If the new size is zero, we don't have to do anything.
+            # Otherwise, create a new empty contents buffer.
+            if (newSize) {
+                ManagedBuffer buf = {newSize};
+                for (uint64 i = 0; i < newSize; ++i)
+                    buf.buffer[i] = 0;
+                buf.size = uintz(newSize);
+                node.contents = String(buf, true);
+            }
+        } if (node.contents.size > newSize) {
+            node.contents = node.contents.substr(0, newSize);
+        } else {
+            # Create a new buffer and move the existing contents to it.
+            AppendBuffer buf = {newSize};
+            buf.move(0, node.contents);
+
+            # Clear the rest of the buffer.
+            for (uint64 i = buf.size; i < newSize; ++i)
+                buf.buffer[i] = 0;
+            buf.size = newSize;
+
+            # Use it for contents.
+            node.contents = String(buf, true);
+        }
+    }
+
+    ## Resize contents to the specified size.  Truncate the node if less than
+    ## the existing size, pad with zeroes if greater than the existing size.
+    ## Returns false if unable to accomodate.
+    bool resize(uint64 newSize) {
+        # TODO: rewrite to use chunking.
+        if (node.children is null) {
+            __resize(newSize);
+
+            change := Change();
+            change.type = CHANGE_RESIZE;
+            change.newSize = int32(newSize);
+            __recordChange(change);
+
+            return true;
+        } else {
+            error `Can only do resize on content nodes at this time`;
+            return false;
+        }
+    }
+
     ## Commit all outstanding changes in the tree.  Returns the new digest.
     String commit() {
         # If our digest is up to date, we don't need to do anything.
@@ -619,6 +673,10 @@ class CachedNode {
             child.getNode().__applyChange(nested);
         } else if (change.type == CHANGE_WRITE) {
             __write(uint64(change.pos), change.data);
+        } else if (change.type == CHANGE_RESIZE) {
+            __resize(uint64(change.newSize));
+        } else {
+            error `Unrecognized change type $(change.type)`;
         }
     }
 

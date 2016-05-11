@@ -252,7 +252,10 @@ class MAWFSPath : RWPath {
 
     Path parent() { return __parent }
 
-    void truncate(uint64 newSize) {}
+    void truncate(uint64 newSize) {
+        __checkExists();
+        __rep.resize(newSize);
+    }
 
     void moveTo(Path other) {
         o := MAWFSPath.cast(other);

@@ -254,22 +254,30 @@ int _readlink(byteptr path, byteptr buffer, intz size) {
     return -ENOSYS;
 }
 
+int _truncateCommon(byteptr path, uintz size) {
+    try {
+        ctx := Context.get();
+        p := ctx.getPath(path);
+        if (p && p.exists()) {
+            p.truncate(size);
+            return 0;
+        } else {
+            return -ENOENT;
+        }
+    } catch (Exception ex) {
+        error `truncate: $ex`;
+        return -EINVAL;
+    }
+}
+
 int _truncate(byteptr path, uintz size) {
     info `in truncate($path, $size)`;
-#    ctx := Context.get(path);
-#    if (node := ctx.lookUp())
-#        return node.truncate(ctx, size);
-#    else
-        return -ENOENT;
+    return _truncateCommon(path, size);
 }
 
 int _ftruncate(byteptr path, uintz size, FuseFileInfo fi) {
     info `in ftruncate($path, $size)`;
-#    ctx := Context.get(path);
-#    if (node := ctx.lookUp())
-#        return node.ftruncate(ctx, size, fi);
-#    else
-        return -ENOENT;
+    return _truncateCommon(path, size);
 }
 
 int _mknod(byteptr path, int major, int minor) {

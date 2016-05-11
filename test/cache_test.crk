@@ -28,7 +28,7 @@ import mawfs.cache Cache, CachedNode;
 Node makeFileNode(String contents, int32 mode) {
     node := Node();
     node.contents = contents;
-    node.size = int32(node.contents.count());
+    node.size = contents ? int32(node.contents.count()) : 0;
     node.mode = mode;
 
     return node;
@@ -90,6 +90,24 @@ zzdir.deleteChild('deleted');
 zzfile := cachedRoot.getChild('zzdir').getChild('zzfile');
 zzfile.write(7, 'moar data');
 
+cachedRoot.addChild('zzzshrunk', makeFileNode('original file', 0));
+cachedRoot.getChild('zzzshrunk').resize(5);
+@assert(cachedRoot.getChild('zzzshrunk').getContents() == 'origi');
+
+cachedRoot.addChild('zzzenlarged', makeFileNode('original file', 0));
+cachedRoot.getChild('zzzenlarged').resize(16);
+@assert(cachedRoot.getChild('zzzenlarged').getContents() ==
+         'original file\0\0\0'
+        );
+
+cachedRoot.addChild('zzztruncated', makeFileNode('original file', 0));
+cachedRoot.getChild('zzztruncated').resize(0);
+@assert(!cachedRoot.getChild('zzztruncated').getContents());
+
+cachedRoot.addChild('zzzwasempty', makeFileNode(null, 0));
+cachedRoot.getChild('zzzwasempty').resize(5);
+@assert(cachedRoot.getChild('zzzwasempty').getContents() == '\0\0\0\0\0');
+
 void verifyContents() {
     @assert(cachedRoot.getChild(0).getContents() == 'alpha contents');
     @assert(cachedRoot.getChild(1).getContents() == 'contents of bar');
@@ -100,6 +118,12 @@ void verifyContents() {
     @assert(cachedRoot.getChild(5).getChild(0).getContents() ==
             'zzfile moar data');
     @assert(cachedRoot.getChild(5).getChildCount() == 1);
+    @assert(cachedRoot.getChild('zzzshrunk').getContents() == 'origi');
+    @assert(cachedRoot.getChild('zzzenlarged').getContents() ==
+             'original file\0\0\0'
+            );
+    @assert(!cachedRoot.getChild('zzztruncated').getContents());
+    @assert(cachedRoot.getChild('zzzwasempty').getContents() == '\0\0\0\0\0');
 }
 
 # TODO: test committing changes at this point as well as after replaying them
