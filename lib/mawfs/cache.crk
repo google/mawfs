@@ -76,11 +76,24 @@ const int32
 
         ## New size of the node for a resize.
         optional int32 newSize = 7;
+
+        ## The digest of the last Change.  Every change should have this
+        ## except for the first change after a commit, which should have a
+        ## 'commit' field.
+        optional bytes lastChange = 8;
+
+        ## The commit that this change should be applied to.  Only the first
+        ## change after a commit should have this field, all others should
+        ## have 'lastChange' instead.
+        optional bytes commit = 9;
     }
 }
 
 class Cache {
     NodeStore store;
+
+    String baselineCommit;
+    String lastChange;
 
     uint maxContentSize = DEFAULT_MAX_CONTENT_SIZE;
 
@@ -88,6 +101,12 @@ class Cache {
 
     @final void addChange(String digest, Change change) {
         store.writeToJournal(digest, change.toString());
+#        if (lastChange) {
+#            change.lastChange = lastChange;
+#        } else {
+#            change.commit = baselineCommit;
+#        }
+#        lastChange = store.writeToJournal(digest, change.toString());
     }
 
     @final String storeNode(Node node) {

@@ -14,7 +14,8 @@
 
 ## FUSE interface.
 
-import mawfs.blockstore Node, NodeStore, MODE_DIR;
+import crack.ascii hex;
+import mawfs.blockstore Commit, Node, NodeStore, MODE_DIR;
 import crack.cont.hashmap HashMap;
 import crack.ext._fuse fuse_main = main, get_context, DoubleTimeSpec,
     FuseOperations, FuseFileInfo;
@@ -47,7 +48,8 @@ class FileInfo {
     }
 }
 
-## A globally-locked filesystem.
+## A globally-locked filesystem.  A filesystem is "pointed at" a backing store
+## and a branch.
 class LockedFilesystem {
     Mutex mutex = {};
     NodeStore store;
@@ -55,15 +57,31 @@ class LockedFilesystem {
     CachedNode cachedRoot;
     Path root;
     HashMap[int, FileInfo] files = {};
+    String __branch;
 
-    oper init(NodeStore store) :
+    ## Returns the latest commit digest on the current branch.
+    String getHead() {
+        return store.getHead(__branch);
+    }
+
+    oper init(NodeStore store, String branch) :
         store = store,
-        cache(store) {
+        cache(store),
+        __branch = branch {
 
-        rootDigest := store.getRootDigest();
-        rootNode := store.getNode(rootDigest);
-        cachedRoot = CachedNode(cache, rootDigest, rootNode);
+        commitDigest := getHead();
+        info `loading commit $(hex(commitDigest))`;
+        commit := store.getCommit(commitDigest);
+
+        # Get the root node, create the CachedNode and the MAWFSPath for it.
+        info `loading root $(hex(commit.root))`;
+        rootNode := store.getNode(commit.root);
+        cachedRoot = CachedNode(cache, commit.root, rootNode);
         root = MAWFSPath(cachedRoot);
+    }
+
+    void setHead(String commitDigest) {
+        store.setHead(__branch, commitDigest);
     }
 }
 
@@ -122,7 +140,14 @@ class Context {
     }
 
     void commit() {
-        __fs.store.storeRoot(__fs.cachedRoot.commit());
+        newRoot := __fs.cachedRoot.commit();
+        Commit commit = {};
+        commit.root = newRoot;
+        commit.parent_append(__fs.getHead());
+
+        __fs.setHead(commitDigest := __fs.store.storeCommit(commit));
+        info I`commit: digest = $(hex(commitDigest)), \
+               new root = $(hex(commit.root))`;
     }
 }
 
@@ -420,15 +445,24 @@ int main(StringArray argv, LockedFilesystem fs) {
     return fuse_main(argv.count(), argv.makePrimArray(), ops, fs);
 }
 
-void runFuse(NodeStore store, StringArray argv) {
+void runFuse(NodeStore store, StringArray argv, String branch) {
 
     # Get the existing root node or create one if this is an empty filesystem.
-    rootNode := store.getRoot();
-    if (!rootNode) {
-        rootNode = Node();
+    commitDigest := store.getHead(branch);
+    if (!commitDigest) {
+        info `creating new filesystem`;
+
+        # Create an empty root node.
+        rootNode := Node();
         rootNode.mode = MODE_DIR;
-        store.storeRoot(store.storeNode(rootNode));
+        rootDigest := store.storeNode(rootNode);
+
+        # Store the first commit under "master".
+        commit := Commit();
+        commit.root = rootDigest;
+        commitDigest := store.storeCommit(commit);
+        store.setHead(branch, commitDigest);
     }
 
-    main(argv, LockedFilesystem(store));
+    main(argv, LockedFilesystem(store, branch));
 }

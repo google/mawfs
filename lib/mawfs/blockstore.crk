@@ -222,11 +222,18 @@ class FSInfo {
 ## Interface for a node store.
 @interface NodeStore {
 
-    ## Store the node, return its digest.
+    ## Store a chunk, return its digest.
     @abstract String storeNode(Node node);
 
     ## Get the node at the given digest, null if it's not currently stored.
     @abstract Node getNode(String digest);
+
+    ## Stores a Commit, returns its digest.
+    @abstract String storeCommit(Commit commit);
+
+    ## Retrieves a commit object from its digest, null if it's not currently
+    ## stored.
+    @abstract Commit getCommit(String digest);
 
     # Get the root node (null if there is no root).
     @abstract Node getRoot();
@@ -316,6 +323,20 @@ class ChunkStore @impl NodeStore {
     ## Stores the node, returns its digest.
     String storeNode(Node node) {
         return store(node.toString());
+    }
+
+    Commit getCommit(String digest) {
+        chunk := load(digest);
+        if (!chunk)
+            return null;
+
+        Commit commit = {};
+        readMessageFromString(commit, chunk.contents);
+        return commit;
+    }
+
+    String storeCommit(Commit commit) {
+        return store(commit.toString());
     }
 
     ## Returns the root node or null if there is none.

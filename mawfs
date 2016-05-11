@@ -19,9 +19,9 @@ import crack.lang InvalidArgumentError, SystemError;
 
 import crack.fs cwd, makePath, Path;
 import crack.process Process, CRK_PIPE_STDERR, CRK_PIPE_STDOUT;
-import crack.runtime abort, backtrace, free, getLocation, isatty, memcmp,
-    sigaction, strlen, SigAction, SigInfo, SA_SIGINFO, SIGFPE, SIGILL,
-    SIGSEGV;
+import crack.runtime abort, backtrace, close, free, getLocation, isatty,
+    memcmp, open, sigaction, strlen, SigAction, SigInfo, O_RDONLY,
+    SA_SIGINFO, SIGFPE, SIGILL, SIGSEGV;
 import crack.strutil StringArray;
 import crack.sys argv, exit;
 import crack.io cin, cout, cerr, Formatter, FStr, Reader, StandardFormatter,
@@ -37,6 +37,9 @@ import crack.protobuf readMessageFromString;
 
 import mawfs.blockstore hashFile, unhex, ChunkStore, FSInfo, Node, BLOCK_SIZE;
 import mawfs.fuse runFuse;
+
+import 'libc.so.6' fsync;
+int fsync(int fd);
 
 #class DirNode : NodeImpl {
 #    @static DirNode readFrom(Reader src) {
@@ -233,6 +236,21 @@ void main() {
                 cerr `Chunk $(argv[2]) not found\n`;
             else
                 cout `$(chunk.contents)`;
+        } else if (cmd == 'commit') {
+            if (argv.count() < 3) {
+                cerr I`Usage: commit <mount-point>\n`;
+                exit(1);
+            }
+
+            fd := open(argv[2].buffer, O_RDONLY, 0);
+            if (fd == -1) {
+                cerr `Unable to open $(argv[2]): c_strerror()\n`;
+                exit(1);
+            } else {
+                fsync(fd);
+                close(fd);
+                cerr `Synced.\n`;
+            }
         } else if (cmd == 'run') {
             if (argv.count() < 4) {
                 cerr I`Usage: mawfs run <backing-dir> [fuse-options] \
@@ -257,7 +275,7 @@ void main() {
             setLogFile('mawfs.log');
             setLogLevel(DEBUG);
             chunkStore := ChunkStore(makePath(argv[2]), FSInfo(password));
-            runFuse(chunkStore, fuseArgs);
+            runFuse(chunkStore, fuseArgs, 'master');
         } else if (cmd == 'dump') {
             if (argv.count() != 3) {
                 cerr I`Usage: mawfs dump <path>`;
