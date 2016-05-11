@@ -20,8 +20,8 @@ import crack.ext._fuse fuse_main = main, get_context, DoubleTimeSpec,
     FuseOperations, FuseFileInfo;
 import crack.fs Path;
 import crack.io SeekableReader, SeekableWriter, SEEK_SET;
-import crack.lang Buffer, SystemError, WriteBuffer;
-import crack.logger info;
+import crack.lang Buffer, Exception, SystemError, WriteBuffer;
+import crack.logger info, error;
 import crack.runtime free, memcpy, Stat, EACCES, EEXIST, EINVAL, ENOENT,
     ENOTDIR, O_CREAT, O_RDONLY, S_IFDIR, S_IFREG;
 import crack.strutil split, StringArray;
@@ -195,13 +195,18 @@ int _write(byteptr path, byteptr buf, uintz size, uintz offset,
            FuseFileInfo fi
            ) {
     info `in write($path, buf, $size, $offset, $fi)`;
-    ctx := Context.get();
-    info := ctx.getFileInfo(fi.fh);
-    if (info && info.writer) {
-        info.writer.seek(uintz(offset), SEEK_SET);
-        info.writer.write(Buffer(buf, size));
-        return size;
-    } else {
+    try {
+        ctx := Context.get();
+        info := ctx.getFileInfo(fi.fh);
+        if (info && info.writer) {
+            info.writer.seek(uintz(offset), SEEK_SET);
+            info.writer.write(Buffer(buf, size));
+            return size;
+        } else {
+            return -EINVAL;
+        }
+    } catch (Exception ex) {
+        error `write: $ex`;
         return -EINVAL;
     }
 }

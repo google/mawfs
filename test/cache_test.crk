@@ -86,6 +86,10 @@ zzdir.addChild('zzfile', makeFileNode('zzfile contents', 0));
 zzdir.addChild('deleted', makeFileNode('deleted file', 0));
 zzdir.deleteChild('deleted');
 
+# Test a write in a subdirectory (propagation code was broken).
+zzfile := cachedRoot.getChild('zzdir').getChild('zzfile');
+zzfile.write(7, 'moar data');
+
 void verifyContents() {
     @assert(cachedRoot.getChild(0).getContents() == 'alpha contents');
     @assert(cachedRoot.getChild(1).getContents() == 'contents of bar');
@@ -94,7 +98,7 @@ void verifyContents() {
     @assert(cachedRoot.getChild(4).getContents() == 'zeta contents');
     @assert(cachedRoot.getChild(5).getMode() == MODE_DIR);
     @assert(cachedRoot.getChild(5).getChild(0).getContents() ==
-            'zzfile contents');
+            'zzfile moar data');
     @assert(cachedRoot.getChild(5).getChildCount() == 1);
 }
 
@@ -117,7 +121,6 @@ cached := cachedRoot.getChild('written');
 cached.write(0, 'first data');
 @assert(cached.getContents() == 'first data');
 @assert(cached.getSize() == 10);
-
 
 # TODO:
 #   - create a directory and then a child node to verify that when we do

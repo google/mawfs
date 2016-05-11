@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import crack.cont.hashmap HashMap;
 import crack.fs cwd, makePath, Path;
 import crack.io cerr, FStr, SEEK_SET;
 import crack.lang Exception, ManagedBuffer;
@@ -20,9 +21,19 @@ import crack.strutil StringArray;
 import crack.sys argv;
 import crack.runtime sleep;
 
+import crack.runtime open, close, O_RDONLY;
+import 'libc.so.6' fsync;
+int fsync(int fd);
+
 @import crack.ann assert, impl;
 
+# Change directory to the parent of this file.
 cwd.set(makePath(argv[0]).parent().parent());
+
+# The rest of the command line arguments are test names.
+HashMap[String, bool] tests = {};
+for (test :in argv.subarray(1))
+    tests[test] = true;
 
 class TestFailure : Exception {
     oper init(String text) : Exception(text) {}
@@ -38,12 +49,7 @@ class TestFailure : Exception {
         return backing;
     }
 
-    void setUp() {
-        deleteBacking().makeDir();
-        fsDir := makePath('fs');
-        if (!fsDir.exists())
-            fsDir.makeDir();
-
+    void startFS() {
         proc := Process(StringArray!['./mawfs', 'run', 'backing', 'fs'],
                         CRK_PIPE_STDIN
                         );
@@ -54,18 +60,33 @@ class TestFailure : Exception {
             throw Exception('Failed in startup');
     }
 
+    void setUp() {
+        deleteBacking().makeDir();
+        fsDir := makePath('fs');
+        if (!fsDir.exists())
+            fsDir.makeDir();
+        startFS();
+    }
+
     @abstract void run();
 
-    void tearDown() {
+    void stopFS() {
         rc := Process(StringArray!['fusermount', '-u', 'fs']).run();
         if (rc != CRK_PROC_EXITED) {
             cerr `fusermount failed`;
             cerr `$(makePath('mawfs.log').readAll())\n`;
         }
+    }
+
+    void tearDown() {
+        stopFS();
         deleteBacking();
     }
 
     void exec() {
+        if (tests && !tests.get(String(this.class.name)))
+            return;
+
         cerr `$(this.class.name)...`;
         try {
             setUp();
@@ -156,6 +177,25 @@ class MoveTest : TestCase {
     }
 }
 MoveTest().exec();
+
+class SubDirFileTest : TestCase {
+    void run() {
+        dir := makePath('fs')/'dir';
+        dir.makeDir();
+        foo := dir/'foo';
+        foo.writeAll('test data');
+
+        fd := open(makePath('fs').getFullName().buffer, O_RDONLY, 0);
+        fsync(fd);
+        close(fd);
+
+        stopFS();
+        startFS();
+
+        assertEqual(foo.readAll(), 'test data');
+    }
+}
+SubDirFileTest().exec();
 
 /*
 String readNode(Node node, int pos, int size) {

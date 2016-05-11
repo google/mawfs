@@ -16,6 +16,7 @@
 module;
 
 import crack.ascii hex;
+import crack.cont.hashmap HashMap;
 import crack.io.fmtutil Indenter;
 import crack.io Formatter, FStr;
 import crack.cont.array Array;
@@ -73,9 +74,6 @@ const int32
 }
 
 class Cache {
-    ## The raw cached blocks.
-#    HashMap[String, Node] blcoks;
-
     NodeStore store;
 
     uint maxContentSize = DEFAULT_MAX_CONTENT_SIZE;
@@ -337,14 +335,14 @@ class CachedNode {
         if (!cachedEntry) {
             entry := node.children[index];
 
-            node := __cache.getNode(entry.hash);
+            node := _getCachedNode(__cache, entry.hash);
             if (!node) {
                 error `Unable to load node $(entry.hash)`;
                 return null;
             }
 
             cachedEntry = __children[index] =
-                CachedEntry(entry, CachedNode(__cache, entry.hash, node));
+                CachedEntry(entry, node);
         }
 
         return cachedEntry;
@@ -430,7 +428,7 @@ class CachedNode {
             __cache.addChange(digest, change);
         } else {
             @assert(parent);
-            __recordChildChange(this, change);
+            parent.__recordChildChange(this, change);
         }
 
     }
@@ -520,8 +518,10 @@ class CachedNode {
             } else {
                 throw Exception('tree building not implemented yet');
             }
-        } else if (!(node.contents is null) && !digest) {
+        } else if (!(node.contents is null)) { #
             # This is a pristine content-only node.
+            # TODO: add " && !digest" to the condition above once we have a
+            # tree.
             if (pos + data.size > __cache.maxContentSize) {
                 # This buffer would make the node greater than the maximum
                 # size.
