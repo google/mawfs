@@ -27,6 +27,7 @@ import mawfs.blockstore Node, NodeStore;
 class MemNodeStore @impl NodeStore {
     HashMap[String, Node] __nodes = {};
     HashMap[String, Array[String]] __journal = {};
+    HashMap[String, String] __branches = {};
     String __root;
 
     String __digest(Node node) {
@@ -58,6 +59,14 @@ class MemNodeStore @impl NodeStore {
 
     void storeRoot(String digest) {
         __root = digest;
+    }
+
+    void setHead(String branch, String head) {
+        __branches[branch] = head;
+    }
+
+    String getHead(String branch) {
+        return __branches.get(branch);
     }
 
     void writeToJournal(String digest, String contents) {

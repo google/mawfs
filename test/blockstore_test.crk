@@ -1,0 +1,21 @@
+
+import crack.fs makePath, cwd;
+import crack.io cerr;
+import crack.sys argv;
+import mawfs.blockstore ChunkStore;
+
+@import crack.ann assert;
+
+# Change directory to the parent of this file.
+cwd.set(makePath(argv[0]).parent().parent());
+
+testRoot := makePath('blockstore_test');
+testRoot.makeDirs();
+store := ChunkStore(testRoot, /* fsInfo, not needed for this */ null);
+@assert(store.getHead('master') is null);
+store.setHead('master', 'head digest');
+@assert(store.getHead('master') == 'head digest');
+
+testRoot.deleteTree();
+
+cerr `ok\n`;

@@ -15,6 +15,7 @@
 ## Low-level block-store API.
 
 #import crack.exp.fuse fuseMain = main, LockedFilesystem, NodeImpl;
+import crack.enc.base64 altEncode, altDecode;
 import crack.cont.array Array;
 import crack.ascii hex;
 import crack.hash Hash;
@@ -78,24 +79,17 @@ const int
 #        repeated Node elems = 4;
     }
 
-    message Directory {
-        repeated Entry entry = 1;
-    }
+    ## A commit.  These objects track the history of an entire filesystem.
+    message Commit {
+        ## The digest of the "parent" commits.  There should generally be one
+        ## of these.
+        ## The first tree of the filesystem will have no parents.
+        ## A "merge" commit (which merges two filesystems) will have more than
+        ## one parent.
+        repeated bytes parent = 1;
 
-    ## A change record to be stored in the journal.
-    message Change {
-        ## Types are the CHANGE_* constants.
-        required int32 type = 1;
-
-        ## Child name.
-        optional string name = 2;
-
-        ## Node to be added.
-        optional Node node = 3;
-
-        ## Change to be applied to a nested child (should be another Changes
-        ## message).
-        optional bytes nested = 4;
+        ## The digest of the root of the filesystem at the point of the commit.
+        optional bytes root = 2;
     }
 }
 
@@ -243,7 +237,14 @@ class FSInfo {
     ## Store the digest of the root node.
     @abstract void storeRoot(String digest);
 
-    ## Write a change to the journal for a node.
+    ## Returns the digest of the head commit of a given branch.   Returns
+    ## null if the branch is not defined.
+    @abstract String getHead(String branch);
+
+    ## Sets the digest of the head commit for the branch.
+    @abstract void setHead(String branch, String digest);
+
+    ## Write a change to the journal.
     @abstract void writeToJournal(String digest, String change);
 
     ## Delete the journal for a node.
@@ -348,6 +349,20 @@ class ChunkStore @impl NodeStore {
 
     Array[String] getJournalEntries(String digest) {
         return null;
+    }
+
+    String getHead(String branch) {
+        branchFile := __dir/branch;
+        if (!branchFile.exists())
+            return null;
+        return altDecode(branchFile.readAll());
+    }
+
+    void setHead(String branch, String digest) {
+        branchFile := __dir/branch;
+        if (!branchFile.parent().exists())
+            branchFile.parent().makeDirs();
+        branchFile.writeAll(altEncode(digest));
     }
 
     ## Store an entire directory in the blockstore.  Returns its digest.
