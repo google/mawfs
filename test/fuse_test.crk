@@ -19,11 +19,11 @@ import crack.lang Exception, ManagedBuffer;
 import crack.process Process, CRK_PROC_EXITED, CRK_PIPE_STDIN;
 import crack.strutil StringArray;
 import crack.sys argv;
-import crack.runtime sleep;
+import crack.runtime open, close, sleep, O_RDONLY;
 
-import crack.runtime open, close, O_RDONLY;
-import 'libc.so.6' fsync;
+import 'libc.so.6' fsync, chown;
 int fsync(int fd);
+int chown(byteptr path, int user, int group);
 
 @import crack.ann assert, impl;
 
@@ -220,6 +220,21 @@ class TruncateTest : TestCase {
     }
 }
 TruncateTest().exec();
+
+## Tests the "no-op" functions (chmod and chown).
+class NopTest : TestCase {
+    void run() {
+        a := makePath('fs')/'a';
+        a.writeAll('funky file');
+        a.setMode(0777);
+        chown(a.getFullName().buffer, 1234, 1234);
+
+        # The change is a no-op, so we can't really verify anything.  Just
+        # make sure the file is still as we expect it.
+        @assert(a.readAll() == 'funky file');
+    }
+}
+NopTest().exec();
 
 /*
 String readNode(Node node, int pos, int size) {
