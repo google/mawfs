@@ -129,18 +129,23 @@ class Context {
 int _getattr(byteptr path, Stat stbuf)
 {
     info `in getattr($path, $stbuf)`;
-    ctx := Context.get();
-    p := ctx.getPath(path);
-    if (p && p.exists()) {
-        stat := p.getStat();
-        stbuf.st_mode = stat.st_mode;
-        stbuf.st_nlink = stat.st_nlink;
-        stbuf.st_uid = stat.st_uid;
-        stbuf.st_gid = stat.st_gid;
-        stbuf.st_size = p.getSize();
-        return 0;
-    } else {
-        return -ENOENT;
+    try {
+        ctx := Context.get();
+        p := ctx.getPath(path);
+        if (p && p.exists()) {
+            stat := p.getStat();
+            stbuf.st_mode = stat.st_mode;
+            stbuf.st_nlink = stat.st_nlink;
+            stbuf.st_uid = stat.st_uid;
+            stbuf.st_gid = stat.st_gid;
+            stbuf.st_size = p.getSize();
+            return 0;
+        } else {
+            return -ENOENT;
+        }
+    } catch (Exception ex) {
+        error `getattr: $ex`;
+        return -EINVAL;
     }
 }
 
@@ -150,30 +155,40 @@ int _readdir(byteptr path, voidptr buf,
              FuseFileInfo fi
              ) {
     info `in readdir($path, buf, filler, $offset, $fi)`;
-    ctx := Context.get();
-    if (p := ctx.getPath(path)) {
-        filler(buf, ".".buffer, null, 0);
-        filler(buf, "..".buffer, null, 0);
+    try {
+        ctx := Context.get();
+        if (p := ctx.getPath(path)) {
+            filler(buf, ".".buffer, null, 0);
+            filler(buf, "..".buffer, null, 0);
 
-        # Fill in all of the child entries.
-        for (item :in p.children())
-            filler(buf, item.getName().buffer, item.getStat(), 0);
+            # Fill in all of the child entries.
+            for (item :in p.children())
+                filler(buf, item.getName().buffer, item.getStat(), 0);
 
-        return 0;
-    } else {
-        return -ENOENT;
+            return 0;
+        } else {
+            return -ENOENT;
+        }
+    } catch (Exception ex) {
+        error `readdir: $ex`;
+        return -EINVAL;
     }
 }
 
 int _open(byteptr path, FuseFileInfo fi) {
     info `in open($path, $fi)`;
-    ctx := Context.get();
-    p := ctx.getPath(path);
-    if (p && !p.isDir()) {
-        fi.fh = ctx.makeFileInfo(p.reader(), null).fh;
-        return 0;
-    } else {
-        return -ENOENT;
+    try {
+        ctx := Context.get();
+        p := ctx.getPath(path);
+        if (p && !p.isDir()) {
+            fi.fh = ctx.makeFileInfo(p.reader(), null).fh;
+            return 0;
+        } else {
+            return -ENOENT;
+        }
+    } catch (Exception ex) {
+        error `open: $ex`;
+        return -EINVAL;
     }
 }
 
@@ -181,12 +196,17 @@ int _read(byteptr path, byteptr buf, uintz size, uintz offset,
           FuseFileInfo fi
           ) {
     info `in read($path, buf, $size, $offset, $fi)`;
-    ctx := Context.get();
-    info := ctx.getFileInfo(fi.fh);
-    if (!((info ? info.reader : null) is null)) {
-        WriteBuffer temp = {buf, 0, size};
-        return info.reader.read(temp);
-    } else {
+    try {
+        ctx := Context.get();
+        info := ctx.getFileInfo(fi.fh);
+        if (!((info ? info.reader : null) is null)) {
+            WriteBuffer temp = {buf, 0, size};
+            return info.reader.read(temp);
+        } else {
+            return -EINVAL;
+        }
+    } catch (Exception ex) {
+        error `read: $ex`;
         return -EINVAL;
     }
 }
@@ -213,14 +233,19 @@ int _write(byteptr path, byteptr buf, uintz size, uintz offset,
 
 int _flush(byteptr path, FuseFileInfo fi) {
     info `in flush($path, $fi)`;
-    ctx := Context.get();
-    info := ctx.getFileInfo(fi.fh);
-    if (info) {
-        if (info.writer)
-            info.writer.flush();
-        return 0;
-    } else {
-        return -ENOENT;
+    try {
+        ctx := Context.get();
+        info := ctx.getFileInfo(fi.fh);
+        if (info) {
+            if (info.writer)
+                info.writer.flush();
+            return 0;
+        } else {
+            return -ENOENT;
+        }
+    } catch (Exception ex) {
+        error `flush: $ex`;
+        return -EINVAL;
     }
 }
 
@@ -254,31 +279,41 @@ int _mknod(byteptr path, int major, int minor) {
 
 int _create(byteptr path, int mode, FuseFileInfo fi) {
     info `in create($path, mode, $fi)`;
-    ctx := Context.get();
-    p := ctx.getPath(path);
-    if (p) {
-        fi.fh = ctx.makeFileInfo(null, p.writer()).fh;
-        return 0;
-    } else {
-        return -ENOENT;
+    try {
+        ctx := Context.get();
+        p := ctx.getPath(path);
+        if (p) {
+            fi.fh = ctx.makeFileInfo(null, p.writer()).fh;
+            return 0;
+        } else {
+            return -ENOENT;
+        }
+    } catch (Exception ex) {
+        error `create: $ex`;
+        return -EINVAL;
     }
 }
 
 int _mkdir(byteptr path, int mode) {
     info `in mkdir($path, $mode)`;
-    ctx := Context.get();
-    p := ctx.getPath(path);
-    if (p) {
-        try {
-            p.makeDir();
-            return 0;
-        } catch (SystemError ex) {
-            # TODO: return error code from ex.
-            info `exception in mkdir: $ex`;
-            return -EINVAL;
+    try {
+        ctx := Context.get();
+        p := ctx.getPath(path);
+        if (p) {
+            try {
+                p.makeDir();
+                return 0;
+            } catch (SystemError ex) {
+                # TODO: return error code from ex.
+                info `exception in mkdir: $ex`;
+                return -EINVAL;
+            }
+        } else {
+            return -ENOENT;
         }
-    } else {
-        return -ENOENT;
+    } catch (Exception ex) {
+        error `mkdir: $ex`;
+        return -EINVAL;
     }
 }
 
@@ -298,13 +333,18 @@ int _access(byteptr path, int uid) {
 
 int _rename(byteptr path, byteptr newPath) {
     info `in rename($path, $newPath)`;
-    ctx := Context.get();
-    p0 := ctx.getPath(path);
-    p1 := ctx.getPath(newPath);
-    if (!p0 || !p0.exists() || !p1 || !p1.parent().exists())
-        return -ENOENT;
-    p0.moveTo(p1);
-    return 0;
+    try {
+        ctx := Context.get();
+        p0 := ctx.getPath(path);
+        p1 := ctx.getPath(newPath);
+        if (!p0 || !p0.exists() || !p1 || !p1.parent().exists())
+            return -ENOENT;
+        p0.moveTo(p1);
+        return 0;
+    } catch (Exception ex) {
+        error `rename: $ex`;
+        return -EINVAL;
+    }
 }
 
 int _chown(byteptr path, int uid, int gid) {
@@ -324,20 +364,30 @@ int _utimens(byteptr path, DoubleTimeSpec times) {
 
 int _release(byteptr path, FuseFileInfo fi) {
     info `in release($path, $fi)`;
-    ctx := Context.get();
-    if (ctx.getFileInfo(fi.fh)) {
-        ctx.deleteFileInfo(fi.fh);
-        return 0;
-    } else {
+    try {
+        ctx := Context.get();
+        if (ctx.getFileInfo(fi.fh)) {
+            ctx.deleteFileInfo(fi.fh);
+            return 0;
+        } else {
+            return -EINVAL;
+        }
+    } catch (Exception ex) {
+        error `release: $ex`;
         return -EINVAL;
     }
 }
 
 int _fsyncdir(byteptr path, int datasync, FuseFileInfo fi) {
     info `in fsyncdir($path, $datasync, $fi)`;
-    ctx := Context.get();
-    ctx.commit();
-    return 0;
+    try {
+        ctx := Context.get();
+        ctx.commit();
+        return 0;
+    } catch (Exception ex) {
+        error `fsyncdir: $ex`;
+        return -EINVAL;
+    }
 }
 
 ## Does fuse_main().  Do this if you're implementing a simple
