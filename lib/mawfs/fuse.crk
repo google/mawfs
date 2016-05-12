@@ -66,12 +66,15 @@ class LockedFilesystem {
 
     oper init(NodeStore store, String branch) :
         store = store,
-        cache(store, branch),
+        cache(store, branch, null),
         __branch = branch {
 
         commitDigest := getHead();
         info `loading commit $(altEncode(commitDigest))`;
         commit := store.getCommit(commitDigest);
+
+        # Store the commit digest now that we've got it.
+        cache.baselineCommit = commitDigest;
 
         # Get the root node, create the CachedNode and the MAWFSPath for it.
         info `loading root $(altEncode(commit.root))`;
@@ -148,6 +151,7 @@ class Context {
         commit.parent_append(__fs.getHead());
 
         __fs.setHead(commitDigest := __fs.store.storeCommit(commit));
+        __fs.cache.recordCommit(commitDigest);
         info I`commit: digest = $(altEncode(commitDigest)), \
                new root = $(altEncode(commit.root))`;
     }

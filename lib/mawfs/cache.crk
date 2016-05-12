@@ -21,7 +21,8 @@ import crack.io.fmtutil Indenter;
 import crack.io Formatter, FStr;
 import crack.cont.array Array;
 import crack.lang cmp, AppendBuffer, AssertionError, Buffer, Exception,
-    InvalidArgumentError, KeyError, ManagedBuffer, WriteBuffer, makeHashVal;
+    InvalidArgumentError, InvalidStateError, KeyError, ManagedBuffer,
+    WriteBuffer, makeHashVal;
 import crack.logger debug, error;
 import mawfs.blockstore Entry, Change, JournalIter, Node, NodeStore, MODE_DIR;
 
@@ -53,19 +54,19 @@ class Cache {
 
     uint maxContentSize = DEFAULT_MAX_CONTENT_SIZE;
 
-    oper init(NodeStore store, String branch) :
+    oper init(NodeStore store, String branch, String baselineCommit) :
         store = store,
-        branch = branch {
+        branch = branch,
+        baselineCommit = baselineCommit {
     }
 
     @final void addChange(Change change) {
-        store.writeToJournal(branch, change);
-#        if (lastChange) {
-#            change.lastChange = lastChange;
-#        } else {
-#            change.commit = baselineCommit;
-#        }
-#        lastChange = store.writeToJournal(digest, change.toString());
+        if (lastChange) {
+            change.lastChange = lastChange;
+        } else {
+            change.commit = baselineCommit;
+        }
+        lastChange = store.writeToJournal(branch, change);
     }
 
     @final String storeNode(Node node) {
@@ -82,6 +83,12 @@ class Cache {
 
     @final JournalIter makeJournalIter() {
         return store.makeJournalIter(branch);
+    }
+
+    ## Records the digest of a new commit.
+    @final void recordCommit(String commit) {
+        lastChange = null;
+        baselineCommit = commit;
     }
 }
 
@@ -656,11 +663,37 @@ class CachedNode {
                                         'root node.'
                                        );
 
-        for (change :in __cache.makeJournalIter()) {
+        String lastChangeDigest;
+        for (entry :in __cache.makeJournalIter()) {
+            change := entry.change;
+            if (!lastChangeDigest) {
+                # First change after a commit.  Verify that the change has a
+                # commit hash that matches the last commit.
+                if (!change.commit)
+                    throw InvalidStateError('First change in the journal '
+                                             'does not have a commit field.'
+                                            );
+                if (change.commit != __cache.baselineCommit)
+                    throw InvalidStateError(
+                        FStr() I`First change in the journal is for commit \
+                                 $(altEncode(change.commit)), current commit \
+                                 is $(altEncode(__cache.baselineCommit))`
+                    );
+            } else if (lastChangeDigest != change.lastChange) {
+                throw InvalidStateError(
+                    FStr() I`Change $(altEncode(entry.digest)) should be \
+                             applied to $(altEncode(change.lastChange)). \
+                             last change was $(altEncode(lastChangeDigest)).`
+                );
+            }
             node := __lookup(change, 0);
             @assert(node);
             node.__applyChange(change);
+            lastChangeDigest = entry.digest;
         }
+
+        # Give this to the cache.
+        __cache.lastChange = lastChangeDigest;
     }
 
     uint read(uint64 pos, WriteBuffer buffer) {

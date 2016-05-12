@@ -16,17 +16,20 @@
 
 import crack.cont.array Array;
 import crack.cont.hashmap HashMap;
+import crack.enc.base64 altEncode;
 import crack.hash.sha256 SHA256;
 import crack.io StringWriter;
+import crack.logger debug;
 import crack.protobuf readMessageFromString, Message, ProtoWriter;
-import mawfs.blockstore Change, Chunk, Commit, JournalIter, Node, NodeStore;
+import mawfs.blockstore Change, ChangeEntry, Chunk, Commit, JournalIter,
+    Node, NodeStore;
 
 @import crack.ann impl;
 
 ## A NodeStore implemented entirely in memory.
 class MemNodeStore @impl NodeStore {
     HashMap[String, String] __objs = {};
-    HashMap[String, Array[Change]] __journal = {};
+    HashMap[String, Array[String]] __journal = {};
     HashMap[String, String] __branches = {};
     String __root;
 
@@ -93,11 +96,26 @@ class MemNodeStore @impl NodeStore {
         return __branches.get(branch);
     }
 
+    @static String __digest(String data) {
+        SHA256 hasher = {};
+        hasher.update(data);
+        return hasher.digest();
+    }
+
     class __JIter @impl JournalIter {
-        Array[Change].ArrayIter __iter;
-        oper init(Array[Change].ArrayIter iter) : __iter = iter {}
-        Change elem() {
-            return __iter ? __iter.elem() : null }
+        Array[String].ArrayIter __iter;
+
+        oper init(Array[String].ArrayIter iter) : __iter = iter {}
+
+        ChangeEntry elem() {
+            if (!__iter)
+                return null;
+
+            Change change = {};
+            readMessageFromString(change, __iter.elem());
+            return ChangeEntry(__digest(__iter.elem()), change);
+        }
+
         void next() { if (iter) __iter.next() }
         bool isTrue() { return __iter }
     }
@@ -107,11 +125,13 @@ class MemNodeStore @impl NodeStore {
         return __JIter(arr ? arr.iter() : null);
     }
 
-    void writeToJournal(String branch, Change contents) {
+    String writeToJournal(String branch, Change change) {
         arr := __journal.get(branch);
         if (!arr)
-            __journal[branch] = arr = Array[Change]();
-        arr.append(contents);
+            __journal[branch] = arr = Array[String]();
+        data := change.toString();
+        arr.append(data);
+        return __digest(data);
     }
 
     void deleteJournal(String digest) {
@@ -119,4 +139,3 @@ class MemNodeStore @impl NodeStore {
             __journal.delete(digest);
     }
 }
-

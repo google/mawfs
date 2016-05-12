@@ -36,9 +36,10 @@ try {
     }
 
     int i = 0;
-    for (change :in store.makeJournalIter('foo')) {
-        if (change.type != i)
-            cerr `Bad change record, got type $(change.type), expected $i\n`;
+    for (entry :in store.makeJournalIter('foo')) {
+        if (entry.change.type != i)
+            cerr I`Bad change record, got type $(entry.change.type), \
+                   expected $i\n`;
         ++i;
     }
 

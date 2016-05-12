@@ -48,7 +48,7 @@ const int
     ## under that entry.
     message Entry {
         ## The sha256 hash of the encrypted object.
-        required bytes hash = 1;
+        optional bytes hash = 1;
 
         ## The name of the object (for a directory entry).
         optional string name = 2;
@@ -238,8 +238,18 @@ class FSInfo {
     }
 }
 
+class ChangeEntry {
+    String digest;
+    Change change;
+
+    oper init(String digest, Change change) :
+        digest = digest,
+        change = change {
+    }
+}
+
 @interface JournalIter {
-    @abstract Change elem();
+    @abstract ChangeEntry elem();
     @abstract void next();
 
     JournalIter iter() { return this; }
@@ -277,8 +287,9 @@ class FSInfo {
     ## Sets the digest of the head commit for the branch.
     @abstract void setHead(String branch, String digest);
 
-    ## Write a change to the journal for the branch.
-    @abstract void writeToJournal(String branch, Change change);
+    ## Write a change to the journal for the branch.  Returns the digest of
+    ## the change.
+    @abstract String writeToJournal(String branch, Change change);
 
     ## Delete the journal for a node.
     @abstract void deleteJournal(String branch);
@@ -373,7 +384,7 @@ class ChunkStore @impl NodeStore {
 
     ## Returns the root node or null if there is none.
     Node getRoot() {
-        rootFile := __dir/'root';
+        rootFile := __dir/'refs/root';
         if (!rootFile.exists())
             return null;
         digest := altDecode(rootFile.readAll());
@@ -381,7 +392,7 @@ class ChunkStore @impl NodeStore {
     }
 
     String getRootDigest() {
-        rootFile := __dir/'root';
+        rootFile := __dir/'refs/root';
         if (!rootFile.exists())
             return null;
         return altDecode(rootFile.readAll());
@@ -389,10 +400,10 @@ class ChunkStore @impl NodeStore {
 
     # Store the current root digest.
     void storeRoot(String digest) {
-        (__dir/'root').writeAll(altEncode(digest));
+        (__dir/'refs/root').writeAll(altEncode(digest));
     }
 
-    void writeToJournal(String branch, Change change) {
+    String writeToJournal(String branch, Change change) {
         journalDir := __dir/'journals';
         if (!journalDir.exists())
             journalDir.makeDirs();
@@ -406,10 +417,12 @@ class ChunkStore @impl NodeStore {
 
         # Encrypt the data into the buffer.
         StringWriter tmp = {};
-        __fsInfo.writeChunk(tmp, change.toString());
+        digest := __fsInfo.writeChunk(tmp, change.toString());
 
         # We can just write this directly to the SerialWriter.
         dst.write(tmp);
+
+        return digest;
     }
 
     void deleteJournal(String branch) {
@@ -420,7 +433,7 @@ class ChunkStore @impl NodeStore {
 
     class __JIter @impl JournalIter {
         SerialReader __src;
-        Change __cur;
+        ChangeEntry __cur;
         FSInfo __fsInfo;
 
         void __readOne() {
@@ -433,20 +446,21 @@ class ChunkStore @impl NodeStore {
             }
 
             chunk := __fsInfo.readChunk(StringReader(buf));
-            __cur = Change();
-            readMessageFromString(__cur, chunk.contents);
+            Change change = {};
+            readMessageFromString(change, chunk.contents);
+            __cur = ChangeEntry(chunk.digest, change);
         }
 
         oper init(Reader src, FSInfo fsInfo) : __src(src), __fsInfo = fsInfo {
             __readOne();
         }
-        Change elem() { return __cur }
+        ChangeEntry elem() { return __cur }
         void next() { __readOne(); }
         bool isTrue() { return __cur }
     }
 
     class __NullJIter @impl JournalIter {
-        Change elem() { return null }
+        ChangeEntry elem() { return null }
         void next() {}
         bool isTrue() { return false }
     }

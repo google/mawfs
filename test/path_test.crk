@@ -26,7 +26,7 @@ setLogLevel(DEBUG);
 
 # Create an empty filesystem.
 nodeStore := MemNodeStore();
-cache := Cache(nodeStore, 'master');
+cache := Cache(nodeStore, 'master', 'Branch Commit Digest');
 rootNode := CachedNode(cache, null, Node());
 rootNode.node.mode = MODE_DIR;
 rootNode.node.children = Array[Entry]();

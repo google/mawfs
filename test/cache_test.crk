@@ -57,7 +57,9 @@ root.children_append(entry);
 digest = nodeStore.storeNode(root);
 nodeStore.storeRoot(digest);
 
-cache := Cache(nodeStore, 'master');
+# NOTE: We should be passing a commit digest to this, but the root digest
+# (or any other non-empty string) should work just as well for this exercise.
+cache := Cache(nodeStore, 'master', digest);
 cachedRoot := CachedNode(cache, digest, root);
 cachedNode := cachedRoot.getChild(0);
 @assert(cachedNode.getContents() == 'contents of foo');
