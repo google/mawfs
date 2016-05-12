@@ -88,7 +88,7 @@ class Cache {
 class CachedNode;
 
 ## Creates a CachedNode.
-CachedNode _makeCachedNode(Cache cache, String digest);
+CachedNode _makeCachedNode(CachedNode parent, Cache cache, String digest);
 
 class CachedNode {
     Cache __cache;
@@ -113,13 +113,19 @@ class CachedNode {
         Entry entry;
         Cache __cache;
         CachedNode node;
+        CachedNode __parent;
 
-        oper init(Cache cache, Entry entry) :
+        oper init(Cache cache, Entry entry, CachedNode parent) :
             entry = entry,
-            __cache = cache {
+            __cache = cache,
+            __parent = parent {
         }
 
-        oper init(Entry entry, CachedNode node) : entry = entry, node = node {
+        oper init(Entry entry, CachedNode node, CachedNode parent) :
+            entry = entry,
+            node = node,
+            __parent = parent {
+
             # We shouldn't really need the cache if we've already got the
             # node, but this gives us a clean invariant.
             __cache = node.__cache;
@@ -145,7 +151,7 @@ class CachedNode {
         @final CachedNode getNode() {
             # Lazy load the node.
             if (!node)
-                node = _makeCachedNode(__cache, entry.hash);
+                node = _makeCachedNode(__parent, __cache, entry.hash);
             return node;
         }
 
@@ -291,7 +297,8 @@ class CachedNode {
                 node.children = Array[Entry]();
             __makeChildren();
             for (iter :on node.children)
-                __children[iter.index] = CachedEntry(__cache, iter.elem());
+                __children[iter.index] =
+                    CachedEntry(__cache, iter.elem(), this);
             return true;
         } else {
             return false;
@@ -307,14 +314,13 @@ class CachedNode {
         if (!cachedEntry) {
             entry := node.children[index];
 
-            node := _makeCachedNode(__cache, entry.hash);
+            node := _makeCachedNode(this, __cache, entry.hash);
             if (!node) {
                 error `Unable to load node $(entry.hash)`;
                 return null;
             }
 
-            cachedEntry = __children[index] =
-                CachedEntry(entry, node);
+            cachedEntry = __children[index] = CachedEntry(entry, node, this);
         }
 
         return cachedEntry;
@@ -415,7 +421,7 @@ class CachedNode {
         child := CachedNode(__cache, null, node);
         child.parent = this;
 
-        CachedEntry entry = {Entry(), child};
+        CachedEntry entry = {Entry(), child, this};
         entry.entry.name = name;
 
         __populateChildren(true);
@@ -531,7 +537,7 @@ class CachedNode {
                 buf.size = uintz(newSize);
                 node.contents = String(buf, true);
             }
-        } if (node.contents.size > newSize) {
+        } else if (node.contents.size > newSize) {
             node.contents = node.contents.substr(0, newSize);
         } else {
             # Create a new buffer and move the existing contents to it.
@@ -706,6 +712,7 @@ class CachedNode {
     void formatTo(Formatter out) {
         indent := Indenter.wrap(out);
         indent `CachedNode {\n`;
+        __populateChildren(false);
         ++indent;
         indent I`hash: $(digest ? altEncode(digest) : 'null')
                  contents: $(!(node.contents is null) ?
@@ -718,10 +725,12 @@ class CachedNode {
     }
 }
 
-CachedNode _makeCachedNode(Cache cache, String digest) {
+CachedNode _makeCachedNode(CachedNode parent, Cache cache, String digest) {
     node := cache.getNode(digest);
     if (!node)
         return null;
 
-    return CachedNode(cache, digest, node);
+    result := CachedNode(cache, digest, node);
+    result.parent = parent;
+    return result;
 }
