@@ -287,7 +287,6 @@ class FSInfo {
     @abstract JournalIter makeJournalIter(String branch);
 }
 
-
 ## Lets you store and load chunks from a persistent back-end.
 ## This is currently implemented as a thin wrapper around a directory, but it
 ## should eventually be an interface wrapping any place fine chunks are
@@ -305,7 +304,7 @@ class ChunkStore @impl NodeStore {
     ## Verifies the chunk digest on read, throws BadDigestError if it doesn't
     ## match.
     Chunk load(String digest) {
-        path := __dir/altEncode(digest);
+        path := __dir/'objects'/altEncode(digest);
         if (path.exists()) {
             result := __fsInfo.readChunk(path.reader());
             if (result.digest != digest)
@@ -319,20 +318,27 @@ class ChunkStore @impl NodeStore {
         }
     }
 
+    Path __objectsDir() {
+        objectsDir := __dir/'objects';
+        if (!objectsDir.exists())
+            objectsDir.makeDir();
+        return objectsDir;
+    }
+
     ## Store the chunk.
     ##
     ## Verifies the chunk digest on write, throws BadDigestError if it doesn't
     ## match.
     void store(Chunk chunk) {
-        path := __dir/altEncode(chunk.digest);
+        path := __objectsDir()/altEncode(chunk.digest);
         __fsInfo.writeChunk(path.writer(), chunk);
     }
 
     ## Stores a chunk without a hash.  Returns the digest.
     String store(Buffer data) {
-        path := __dir/(FStr() `tempchunk.$(uintz(data))`);
+        path := __objectsDir()/(FStr() `tempchunk.$(uintz(data))`);
         digest := __fsInfo.writeChunk(path.writer(), data);
-        path.moveTo(__dir/altEncode(digest));
+        path.moveTo(__objectsDir()/altEncode(digest));
         return digest;
     }
 
@@ -457,14 +463,14 @@ class ChunkStore @impl NodeStore {
     }
 
     String getHead(String branch) {
-        branchFile := __dir/branch;
+        branchFile := __dir/'refs'/branch;
         if (!branchFile.exists())
             return null;
         return altDecode(branchFile.readAll());
     }
 
     void setHead(String branch, String digest) {
-        branchFile := __dir/branch;
+        branchFile := __dir/'refs'/branch;
         if (!branchFile.parent().exists())
             branchFile.parent().makeDirs();
         branchFile.writeAll(altEncode(digest));
