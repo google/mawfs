@@ -177,7 +177,9 @@ class MAWFSPath : RWPath {
 
     int getCreateTime() { return 0 }
 
-    String getFullName() { return null }
+    String getFullName() {
+        return FStr() `$(__parent ? __parent.getFullName() : '')/$__name`;
+    }
 
     int getModTime() { return 0 }
 
