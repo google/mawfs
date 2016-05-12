@@ -22,9 +22,9 @@ import crack.ext._fuse fuse_main = main, get_context, DoubleTimeSpec,
 import crack.fs Path;
 import crack.io SeekableReader, SeekableWriter, SEEK_SET;
 import crack.lang Buffer, Exception, SystemError, WriteBuffer;
-import crack.logger info, error;
+import crack.logger debug, error, info;
 import crack.runtime free, memcpy, Stat, EACCES, EEXIST, EINVAL, ENOENT,
-    ENOTDIR, O_CREAT, O_RDONLY, S_IFDIR, S_IFREG;
+    ENOTDIR, O_CREAT, O_RDONLY, O_RDWR, O_WRONLY, S_IFDIR, S_IFREG;
 import crack.strutil split, StringArray;
 import crack.threads Mutex, MutexLock;
 import mawfs.path MAWFSPath;
@@ -78,6 +78,8 @@ class LockedFilesystem {
         rootNode := store.getNode(commit.root);
         cachedRoot = CachedNode(cache, commit.root, rootNode);
         root = MAWFSPath(cachedRoot);
+
+        cachedRoot.replayJournal();
     }
 
     void setHead(String commitDigest) {
@@ -201,12 +203,22 @@ int _readdir(byteptr path, voidptr buf,
 }
 
 int _open(byteptr path, FuseFileInfo fi) {
-    info `in open($path, $fi)`;
+    info `in open($path, $fi) (flags = $(fi.flags))`;
     try {
         ctx := Context.get();
         p := ctx.getPath(path);
         if (p && !p.isDir()) {
-            fi.fh = ctx.makeFileInfo(p.reader(), null).fh;
+            SeekableReader reader;
+            SeekableWriter writer;
+            flags := fi.flags & 3;
+            if (flags == O_RDONLY || flags == O_RDWR) {
+                reader = p.reader();
+            }
+            if (flags == O_WRONLY || flags == O_RDWR) {
+                writer = p.writer();
+            }
+
+            fi.fh = ctx.makeFileInfo(reader, writer).fh;
             return 0;
         } else {
             return -ENOENT;
