@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import crack.ascii hex;  # For debugging hash values.
+import crack.enc.base64 altEncode;  # For debugging hash values.
 import crack.cont.array Array;
 import crack.hash.sha256 SHA256;
 import crack.io cerr, StringWriter;
@@ -57,7 +57,7 @@ root.children_append(entry);
 digest = nodeStore.storeNode(root);
 nodeStore.storeRoot(digest);
 
-cache := Cache(nodeStore);
+cache := Cache(nodeStore, 'master');
 cachedRoot := CachedNode(cache, digest, root);
 cachedNode := cachedRoot.getChild(0);
 @assert(cachedNode.getContents() == 'contents of foo');

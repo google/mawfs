@@ -19,8 +19,11 @@ import crack.cont.array Array;
 import crack.enc.base64 altDecode, altEncode;
 import crack.hash Hash;
 import crack.hash.sha256 SHA256;
+import crack.io StringReader;
 import crack.lang cmp, makeHashVal, AppendBuffer, Buffer, Exception,
     InvalidArgumentError, ManagedBuffer;
+import crack.logger debug;
+import crack.serial SerialReader, SerialWriter;
 
 import crack.fs Path;
 import crack.io FStr, Reader, StringWriter, Writer;
@@ -89,6 +92,48 @@ const int
 
         ## The digest of the root of the filesystem at the point of the commit.
         optional bytes root = 2;
+    }
+
+    ## Change is like a lightweight Commit for purposes of storing changes in
+    ## the filesystem journal.
+    message Change {
+        ## Types are the CHANGE_* constants.
+        required int32 type = 1;
+
+        ## List of child indexes representing a path to the node to be
+        ## modified.
+        repeated int32 path = 10;
+
+        ## Child name.
+        optional string name = 2;
+
+        ## Node to be added.
+        optional Node node = 3;
+
+        ## Change to be applied to a nested child (should be another Changes
+        ## message).
+        optional bytes nested = 4;
+
+        ## Position to insert data into for a write.
+        optional int32 pos = 5;
+
+        ## Data to be inserted in a write.
+        optional bytes data = 6;
+
+        ## New size of the node for a resize.
+        optional int32 newSize = 7;
+
+        ## The digest of the last Change.  Every change should have this
+        ## except for the first change after a commit, which should have a
+        ## 'commit' field.
+        optional bytes lastChange = 8;
+
+        ## The commit that this change should be applied to.  Only the first
+        ## change after a commit should have this field, all others should
+        ## have 'lastChange' instead.
+        optional bytes commit = 9;
+
+        # last tag: 10
     }
 }
 
@@ -193,6 +238,13 @@ class FSInfo {
     }
 }
 
+@interface JournalIter {
+    @abstract Change elem();
+    @abstract void next();
+
+    JournalIter iter() { return this; }
+}
+
 ## Interface for a node store.
 @interface NodeStore {
 
@@ -225,14 +277,14 @@ class FSInfo {
     ## Sets the digest of the head commit for the branch.
     @abstract void setHead(String branch, String digest);
 
-    ## Write a change to the journal.
-    @abstract void writeToJournal(String digest, String change);
+    ## Write a change to the journal for the branch.
+    @abstract void writeToJournal(String branch, Change change);
 
     ## Delete the journal for a node.
-    @abstract void deleteJournal(String digest);
+    @abstract void deleteJournal(String branch);
 
-    ## Return all journal entries for the node with the given digest.
-    @abstract Array[String] getJournalEntries(String digest);
+    ## Return an iterator over the journal
+    @abstract JournalIter makeJournalIter(String branch);
 }
 
 
@@ -334,12 +386,70 @@ class ChunkStore @impl NodeStore {
         (__dir/'root').writeAll(altEncode(digest));
     }
 
-    void writeToJournal(String digest, String contents) {
-#        dst := (__dir/'root').appender();
-#        ProtoWriter
+    void writeToJournal(String branch, Change change) {
+        journalDir := __dir/'journals';
+        if (!journalDir.exists())
+            journalDir.makeDirs();
+        journalFile := journalDir/branch;
+        Writer writer;
+        if (journalFile.exists())
+            writer = journalFile.appender();
+        else
+            writer = journalFile.writer();
+        dst := SerialWriter(writer);
+
+        # Encrypt the data into the buffer.
+        StringWriter tmp = {};
+        __fsInfo.writeChunk(tmp, change.toString());
+
+        # We can just write this directly to the SerialWriter.
+        dst.write(tmp);
     }
 
-    void deleteJournal(String digest) {
+    void deleteJournal(String branch) {
+        file := __dir/'journals'/branch;
+        if (file.exists())
+            file.delete();
+    }
+
+    class __JIter @impl JournalIter {
+        SerialReader __src;
+        Change __cur;
+        FSInfo __fsInfo;
+
+        void __readOne() {
+
+            # Read the next entry, we're done if we run out of data.
+            buf := __src.readString(false);
+            if (!buf) {
+                __cur = null;
+                return;
+            }
+
+            chunk := __fsInfo.readChunk(StringReader(buf));
+            __cur = Change();
+            readMessageFromString(__cur, chunk.contents);
+        }
+
+        oper init(Reader src, FSInfo fsInfo) : __src(src), __fsInfo = fsInfo {
+            __readOne();
+        }
+        Change elem() { return __cur }
+        void next() { __readOne(); }
+        bool isTrue() { return __cur }
+    }
+
+    class __NullJIter @impl JournalIter {
+        Change elem() { return null }
+        void next() {}
+        bool isTrue() { return false }
+    }
+
+    JournalIter makeJournalIter(String branch) {
+        src := __dir/'journals'/branch;
+        if (!src.exists())
+            return __NullJIter();
+        return __JIter(src.reader(), __fsInfo);
     }
 
     Array[String] getJournalEntries(String digest) {

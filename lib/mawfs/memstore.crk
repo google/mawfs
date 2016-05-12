@@ -18,45 +18,59 @@ import crack.cont.array Array;
 import crack.cont.hashmap HashMap;
 import crack.hash.sha256 SHA256;
 import crack.io StringWriter;
-import crack.protobuf Message, ProtoWriter;
-import mawfs.blockstore Commit, Node, NodeStore;
+import crack.protobuf readMessageFromString, Message, ProtoWriter;
+import mawfs.blockstore Change, Chunk, Commit, JournalIter, Node, NodeStore;
 
 @import crack.ann impl;
 
 ## A NodeStore implemented entirely in memory.
 class MemNodeStore @impl NodeStore {
-    HashMap[String, Node] __nodes = {};
-    HashMap[String, Commit] __commits = {};
-    HashMap[String, Array[String]] __journal = {};
+    HashMap[String, String] __objs = {};
+    HashMap[String, Array[Change]] __journal = {};
     HashMap[String, String] __branches = {};
     String __root;
 
-    String __digest(Message message) {
+    Chunk __toChunk(Message message) {
         # Construct a digest from the object contents.
         StringWriter temp = {};
         ProtoWriter pw = {temp};
         message.serialize(pw);
         hasher := SHA256();
-        hasher.update(temp.string());
-        return hasher.digest();
+        serialized := temp.string();
+        hasher.update(serialized);
+        return Chunk(serialized, hasher.digest());
+    }
+
+    String __store(Message message) {
+        chunk := __toChunk(message);
+        __objs[chunk.digest] = chunk.contents;
+        return chunk.digest;
     }
 
     String storeNode(Node node) {
-        __nodes[result := __digest(node)] = node;
-        return result;
+        return __store(node);
     }
 
     Node getNode(String digest) {
-        return __nodes.get(digest);
-    }
-
-    String storeCommit(Commit commit) {
-        __commits[result := __digest(commit)] = commit;
+        serialized := __objs.get(digest);
+        if (serialized is null)
+            return null;
+        Node result = {};
+        readMessageFromString(result, serialized);
         return result;
     }
 
+    String storeCommit(Commit commit) {
+        return __store(commit);
+    }
+
     Commit getCommit(String digest) {
-        return __commits.get(digest);
+        serialized := __objs.get(digest);
+        if (serialized is null)
+            return null;
+        Commit result = {};
+        readMessageFromString(result, serialized);
+        return result;
     }
 
     Node getRoot() {
@@ -79,15 +93,25 @@ class MemNodeStore @impl NodeStore {
         return __branches.get(branch);
     }
 
-    void writeToJournal(String digest, String contents) {
-        arr := __journal.get(digest);
-        if (!arr)
-            __journal[digest] = arr = Array[String]();
-        arr.append(contents);
+    class __JIter @impl JournalIter {
+        Array[Change].ArrayIter __iter;
+        oper init(Array[Change].ArrayIter iter) : __iter = iter {}
+        Change elem() {
+            return __iter ? __iter.elem() : null }
+        void next() { if (iter) __iter.next() }
+        bool isTrue() { return __iter }
     }
 
-    Array[String] getJournalEntries(String digest) {
-        return __journal.get(digest);
+    JournalIter makeJournalIter(String branch) {
+        arr := __journal.get(branch);
+        return __JIter(arr ? arr.iter() : null);
+    }
+
+    void writeToJournal(String branch, Change contents) {
+        arr := __journal.get(branch);
+        if (!arr)
+            __journal[branch] = arr = Array[Change]();
+        arr.append(contents);
     }
 
     void deleteJournal(String digest) {

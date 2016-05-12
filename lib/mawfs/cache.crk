@@ -15,19 +15,17 @@
 ## The node cache.
 module;
 
-import crack.ascii hex;
+import crack.enc.base64 altEncode;
 import crack.cont.hashmap HashMap;
 import crack.io.fmtutil Indenter;
 import crack.io Formatter, FStr;
 import crack.cont.array Array;
 import crack.lang cmp, AppendBuffer, AssertionError, Buffer, Exception,
-    KeyError, ManagedBuffer, WriteBuffer, makeHashVal;
+    InvalidArgumentError, KeyError, ManagedBuffer, WriteBuffer, makeHashVal;
 import crack.logger debug, error;
-import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
-import mawfs.blockstore Entry, Node, NodeStore, MODE_DIR;
+import mawfs.blockstore Entry, Change, JournalIter, Node, NodeStore, MODE_DIR;
 
 @import crack.ann assert, impl;
-@import crack.protobuf.ann protobuf;
 
 # Allow initial blocks of up to one meg.
 const DEFAULT_MAX_CONTENT_SIZE := 1024 * 1024;
@@ -39,68 +37,29 @@ const int32
     ## Delete a child (contains a name).
     CHANGE_DELETE_CHILD = 2,
 
-    ## Make a change to a nested child.  Contains a 'name' (the name of the
-    ## child) and the 'nested' field containing the change to be applied to
-    ## that child.
-    CHANGE_NESTED = 3,
-
     ## Write data to node contents (respecting all current rules about file
     ## size, layout etc).  Contains pos and data.
-    CHANGE_WRITE = 4,
+    CHANGE_WRITE = 3,
 
     ## Resize node contents.  Contains newSize.
-    CHANGE_RESIZE = 5;
-
-@protobuf {
-    declare Node;
-
-    message Change {
-        ## Types are the CHANGE_* constants.
-        required int32 type = 1;
-
-        ## Child name.
-        optional string name = 2;
-
-        ## Node to be added.
-        optional Node node = 3;
-
-        ## Change to be applied to a nested child (should be another Changes
-        ## message).
-        optional bytes nested = 4;
-
-        ## Position to insert data into for a write.
-        optional int32 pos = 5;
-
-        ## Data to be inserted in a write.
-        optional bytes data = 6;
-
-        ## New size of the node for a resize.
-        optional int32 newSize = 7;
-
-        ## The digest of the last Change.  Every change should have this
-        ## except for the first change after a commit, which should have a
-        ## 'commit' field.
-        optional bytes lastChange = 8;
-
-        ## The commit that this change should be applied to.  Only the first
-        ## change after a commit should have this field, all others should
-        ## have 'lastChange' instead.
-        optional bytes commit = 9;
-    }
-}
+    CHANGE_RESIZE = 4;
 
 class Cache {
     NodeStore store;
 
     String baselineCommit;
     String lastChange;
+    String branch;
 
     uint maxContentSize = DEFAULT_MAX_CONTENT_SIZE;
 
-    oper init(NodeStore store) : store = store {}
+    oper init(NodeStore store, String branch) :
+        store = store,
+        branch = branch {
+    }
 
-    @final void addChange(String digest, Change change) {
-        store.writeToJournal(digest, change.toString());
+    @final void addChange(Change change) {
+        store.writeToJournal(branch, change);
 #        if (lastChange) {
 #            change.lastChange = lastChange;
 #        } else {
@@ -117,31 +76,19 @@ class Cache {
         return store.getNode(digest);
     }
 
-    @final void clearJournal(String digest) {
-        store.deleteJournal(digest);
+    @final void clearJournal() {
+        store.deleteJournal(branch);
     }
 
-    @final Array[Change] getJournalEntries(String digest) {
-        # Get changes for the node if there are any.
-        unparsedChanges := store.getJournalEntries(digest);
-        if (!unparsedChanges)
-            return null;
-
-        Array[Change] changes = {};
-        for (serializedChange :in unparsedChanges) {
-            Change parsedChange = {};
-            readMessageFromString(parsedChange, serializedChange);
-            changes.append(parsedChange);
-        }
-        return changes;
+    @final JournalIter makeJournalIter() {
+        return store.makeJournalIter(branch);
     }
 }
 
 class CachedNode;
 
-## Returns an up-to-date (i.e. the journal has been replayed) cached node
-## from the cache.
-CachedNode _getCachedNode(Cache cache, String digest);
+## Creates a CachedNode.
+CachedNode _makeCachedNode(Cache cache, String digest);
 
 class CachedNode {
     Cache __cache;
@@ -198,7 +145,7 @@ class CachedNode {
         @final CachedNode getNode() {
             # Lazy load the node.
             if (!node)
-                node = _getCachedNode(__cache, entry.hash);
+                node = _makeCachedNode(__cache, entry.hash);
             return node;
         }
 
@@ -293,10 +240,10 @@ class CachedNode {
                 dig := child.getDigest();
                 String digest;
                 if (dig)
-                    digest := hex(dig);
+                    digest := altEncode(dig);
                 out I`$(child.getName().getRepr()):\n`;
                 ++indent;
-                out I`digest: $(digest ? hex(digest) : 'null')
+                out I`digest: $(digest ? altEncode(digest) : 'null')
                       node: `;
                 out `$(child.node)\n`;
                 --indent;
@@ -360,7 +307,7 @@ class CachedNode {
         if (!cachedEntry) {
             entry := node.children[index];
 
-            node := _getCachedNode(__cache, entry.hash);
+            node := _makeCachedNode(__cache, entry.hash);
             if (!node) {
                 error `Unable to load node $(entry.hash)`;
                 return null;
@@ -433,43 +380,33 @@ class CachedNode {
         if (parent) parent.__markDirty();
     }
 
-    void __recordChildChange(CachedNode child, Change childChange) {
+    void __makePath(Array[int32] path) {
+        if (!parent)
+            return;
 
-        # Find the name of the child.
-        String childName;
-        for (c :in __children) {
-            if (c.node is child)
-                childName = c.getName();
+        # Lookup the index of the child (it is always safe to assume
+        # __children has been populated for a parent).
+        uint i = 0;
+        for (child :in parent.__children) {
+
+            # We use .node here instead of getNode(), if the node hasn't been
+            # lazy loaded it can't be this one, and we don't want to lazy load
+            # any new nodes.
+            if (child.node is this)
+                break;
+            ++i;
         }
 
-        @assert(childName);
-
-        # Create a change for the child.
-        change := Change();
-        change.type = CHANGE_NESTED;
-        change.name = childName;
-        change.nested = childChange.toString();
-        if (digest) {
-            __cache.addChange(digest, change);
-        } else {
-            @assert(parent);
-            parent.__recordChildChange(this, change);
-        }
-
+        parent.__makePath(path);
+        path.append(int32(i));
     }
 
     ## Record a change in the journal for this node or for the appropriate
     ## parent node if this node doesn't have a digest yet.
     void __recordChange(Change change) {
-        # If we have a digest, we can create a change record against this
-        # node.  If not, we have to recurse back to the first parent that has
-        # a digest and apply the change to its journal.
-        if (digest) {
-            __cache.addChange(digest, change);
-        } else {
-            @assert(parent);
-            parent.__recordChildChange(this, change);
-        }
+        change.path = Array[int32]();
+        __makePath(change.path);
+        __cache.addChange(change);
     }
 
     ## Internal add child method, which does everything but create a change
@@ -519,6 +456,7 @@ class CachedNode {
         change.type = CHANGE_DELETE_CHILD;
         change.name = name;
         __recordChange(change);
+        __markDirty();
 
         return true;
     }
@@ -567,6 +505,8 @@ class CachedNode {
         } else {
             throw Exception('Full monty not supported yet.');
         }
+
+        __markDirty();
     }
 
     void write(uint64 pos, Buffer data) {
@@ -606,6 +546,8 @@ class CachedNode {
             # Use it for contents.
             node.contents = String(buf, true);
         }
+
+        __markDirty();
     }
 
     ## Resize contents to the specified size.  Truncate the node if less than
@@ -666,7 +608,7 @@ class CachedNode {
 
         digest = __cache.storeNode(node);
         dirty = false;
-        __cache.clearJournal(orgDigest);
+        __cache.clearJournal();
 
         return digest;
     }
@@ -676,20 +618,7 @@ class CachedNode {
             __addChild(change.name, change.node);
         } else if (change.type == CHANGE_DELETE_CHILD) {
             __children.delete(change.name);
-        } else if (change.type == CHANGE_NESTED) {
-
-            # Get the requested child.
-            child := __children.get(change.name);
-            if (!child) {
-                error I`Change for child $(change.name) of node $digest \
-                        found, but child doesn't exist.`;
-                return;
-            }
-
-            # Extract the neste change and apply it to the child.
-            Change nested = {};
-            readMessageFromString(nested, change.nested);
-            child.getNode().__applyChange(nested);
+            __markDirty();
         } else if (change.type == CHANGE_WRITE) {
             __write(uint64(change.pos), change.data);
         } else if (change.type == CHANGE_RESIZE) {
@@ -699,21 +628,33 @@ class CachedNode {
         }
     }
 
+    ## Lookup a change in the descendent tree, return the descendant that the
+    ## change applies to.
+    CachedNode __lookup(Change change, int index) {
+        if (!change || !change.path || index >= change.path.count())
+            return this;
+
+        # Get the child index from the path.
+        childIndex := change.path[index];
+        @assert(node.children && childIndex < node.children.count());
+        __populateChildren(false);
+        return __children[childIndex].getNode().__lookup(change, index + 1);
+    }
+
     ## Replay all journal entries against the node.  If the node doesn't have
-    ## a digest or there are no changes, does nothing.
+    ## a digest or there are no changes, does nothing.  Should only be used on
+    ## the root node.
     void replayJournal() {
+        if (parent)
+            throw InvalidArgumentError('Replay journal only works against the '
+                                        'root node.'
+                                       );
 
-        # Don't do this for a node that hasn't been saved.
-        if (!digest)
-            return;
-
-        changes := __cache.getJournalEntries(digest);
-        if (!changes)
-            return;
-
-        # Apply all of the changes in sequence.
-        for (change :in changes)
-            __applyChange(change);
+        for (change :in __cache.makeJournalIter()) {
+            node := __lookup(change, 0);
+            @assert(node);
+            node.__applyChange(change);
+        }
     }
 
     uint read(uint64 pos, WriteBuffer buffer) {
@@ -766,7 +707,7 @@ class CachedNode {
         indent := Indenter.wrap(out);
         indent `CachedNode {\n`;
         ++indent;
-        indent I`hash: $(digest ? hex(digest) : 'null')
+        indent I`hash: $(digest ? altEncode(digest) : 'null')
                  contents: $(!(node.contents is null) ?
                                 node.contents.getRepr() :
                                 'null'
@@ -777,8 +718,10 @@ class CachedNode {
     }
 }
 
-CachedNode _getCachedNode(Cache cache, String digest) {
-    node := CachedNode(cache, digest, cache.getNode(digest));
-    node.replayJournal();
-    return node;
+CachedNode _makeCachedNode(Cache cache, String digest) {
+    node := cache.getNode(digest);
+    if (!node)
+        return null;
+
+    return CachedNode(cache, digest, node);
 }

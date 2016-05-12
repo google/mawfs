@@ -1,8 +1,9 @@
 
 import crack.fs makePath, cwd;
 import crack.io cerr;
+import crack.lang Exception;
 import crack.sys argv;
-import mawfs.blockstore ChunkStore;
+import mawfs.blockstore Change, ChunkStore, FSInfo;
 
 @import crack.ann assert;
 
@@ -10,12 +11,50 @@ import mawfs.blockstore ChunkStore;
 cwd.set(makePath(argv[0]).parent().parent());
 
 testRoot := makePath('blockstore_test');
-testRoot.makeDirs();
-store := ChunkStore(testRoot, /* fsInfo, not needed for this */ null);
-@assert(store.getHead('master') is null);
-store.setHead('master', 'head digest');
-@assert(store.getHead('master') == 'head digest');
+if (testRoot.exists())
+    testRoot.deleteTree();
+
+try {
+
+    testRoot.makeDirs();
+    store := ChunkStore(testRoot, FSInfo('01234567890123456789012345678901'));
+
+    # Verify that a branch starts out as null.
+    @assert(store.getHead('master') is null);
+
+    # Verify that we can store and retrieve a value.
+    store.setHead('master', 'head digest');
+    @assert(store.getHead('master') == 'head digest');
+
+    # Test reading/writing the journal.
+    if (true) {
+        change := Change();
+        for (int i = 0; i < 4; ++i) {
+            change.type = int32(i);
+            store.writeToJournal('foo', change);
+        }
+    }
+
+    int i = 0;
+    for (change :in store.makeJournalIter('foo')) {
+        if (change.type != i)
+            cerr `Bad change record, got type $(change.type), expected $i\n`;
+        ++i;
+    }
+
+    if (i != 4)
+        cerr `Expected 4 changes, got $i\n`;
+
+    store.deleteJournal('foo');
+    for (change :in store.makeJournalIter('foo'))
+        cerr `Got change in deleted journal!\n`;
+
+    cerr `ok\n`;
+
+    # XXX test delete journal and reading from an empty journal.
+} catch (Exception ex) {
+    cerr `Exception:\n$ex\n`;
+}
 
 testRoot.deleteTree();
 
-cerr `ok\n`;
