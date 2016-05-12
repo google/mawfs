@@ -163,7 +163,9 @@ class MAWFSPath : RWPath {
             throw SystemError('Node is not a directory', ENOTDIR);
     }
 
-    void delete() {}
+    void delete() {
+        __parent.__rep.deleteChild(__name);
+    }
 
     void deleteTree() {}
 

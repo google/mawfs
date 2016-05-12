@@ -30,7 +30,7 @@ import crack.threads Mutex, MutexLock;
 import mawfs.path MAWFSPath;
 import mawfs.cache Cache, CachedNode;
 
-const int ENOSYS = 38;
+const int ENOSYS = 38, ENOTEMPTY = 39, EISDIR = 21;
 
 ## Stores information on an open file.
 class FileInfo {
@@ -429,6 +429,48 @@ int _fsyncdir(byteptr path, int datasync, FuseFileInfo fi) {
     }
 }
 
+int _rmdir(byteptr path) {
+    info `in rmdir($path)`;
+    try {
+        ctx := Context.get();
+        p := ctx.getPath(path);
+        if (p && p.exists()) {
+            if (!p.isDir())
+                return -ENOTDIR;
+            try {
+                p.delete();
+            } catch (SystemError ex) {
+                return -ENOTEMPTY;
+            }
+        } else {
+            return -ENOENT;
+        }
+        return 0;
+    } catch (Exception ex) {
+        error `rmdir: $ex`;
+        return -EINVAL;
+    }
+}
+
+int _unlink(byteptr path) {
+    info `in unlink($path)`;
+    try {
+        ctx := Context.get();
+        p := ctx.getPath(path);
+        if (p && p.exists()) {
+            if (p.isDir())
+                return -EISDIR;
+            p.delete();
+        } else {
+            return -ENOENT;
+        }
+        return 0;
+    } catch (Exception ex) {
+        error `unlink: $ex`;
+        return -EINVAL;
+    }
+}
+
 ## Does fuse_main().  Do this if you're implementing a simple
 ## filesystem-per-process.
 int main(StringArray argv, LockedFilesystem fs) {
@@ -451,6 +493,8 @@ int main(StringArray argv, LockedFilesystem fs) {
     ops.utimens = _utimens;
     ops.release = _release;
     ops.fsyncdir = _fsyncdir;
+    ops.rmdir = _rmdir;
+    ops.unlink = _unlink;
 
     # Create another link to the root object so we can safely exit.
     fs.root.oper bind();

@@ -236,6 +236,34 @@ class NopTest : TestCase {
 }
 NopTest().exec();
 
+class UnlinkTest : TestCase {
+    void run() {
+        a := makePath('fs')/'a';
+        a.writeAll('some data');
+        a.delete();
+
+        @assert(!a.exists());
+
+        dir := makePath('fs')/'dir';
+        dir.makeDir();
+        b := dir/'b';
+        b.writeAll('more data');
+        b.delete();
+        @assert(!b.exists());
+    }
+}
+UnlinkTest().exec();
+
+class RmDirTest : TestCase {
+    void run() {
+        dir := makePath('fs')/'dir';
+        dir.makeDir();
+        dir.delete();
+        @assert(!dir.exists());
+    }
+}
+RmDirTest().exec();
+
 /*
 String readNode(Node node, int pos, int size) {
     ManagedBuffer buf = {size};
