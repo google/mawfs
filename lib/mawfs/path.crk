@@ -167,8 +167,6 @@ class MAWFSPath : RWPath {
         __parent.__rep.deleteChild(__name);
     }
 
-    void deleteTree() {}
-
     bool exists() {
         return __rep;
     }
