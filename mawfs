@@ -37,6 +37,7 @@ import crack.logger debug, error, setLogFile, setLogLevel, DEBUG;
 import crack.protobuf readMessageFromString;
 
 import mawfs.blockstore hashFile, ChunkStore, FSInfo, Node, BLOCK_SIZE;
+import mawfs.configstore ConfigStore;
 import mawfs.fuse runFuse;
 
 import 'libc.so.6' fsync;
@@ -275,6 +276,7 @@ void main() {
 
             setLogFile('mawfs.log');
             setLogLevel(DEBUG);
+            configStore := ConfigStore(makePath(argv[2]), 'peers');
             chunkStore := ChunkStore(makePath(argv[2]), FSInfo(password));
             runFuse(chunkStore, fuseArgs, 'master');
         } else if (cmd == 'dump') {
