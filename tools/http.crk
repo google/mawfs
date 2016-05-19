@@ -1,0 +1,115 @@
+#!/usr/local/bin/crack
+
+import crack.io cout, cerr;
+import crack.net.httpsrv HTTPServer, RequestHandler, HTTPRequest;
+import crack.fs makePath, Path;
+import crack.threads Thread;
+import crack.sys argv, exit;
+import crack.ascii parseInt;
+@import crack.ann impl;
+
+cerr `running HTTP server`;
+
+class FSRequestHandler @impl RequestHandler {
+    String __backing_path;
+
+    oper init(String backing_path) {
+        __backing_path = backing_path;
+    }
+
+    bool onGet(HTTPRequest req) {
+        path := req.getParsedPath();
+
+        # path should only be one or two segments long
+        if (path.count() > 2 || path.count() == 0) {
+            cerr `invalid path: $req.path`;
+            req.sendReply(404, 'text/plain', 'invalid path');
+            return true;
+        }
+
+        # path segments should never be '..'
+        for (int i = 0; i < path.count(); ++i) {
+            if (path[i] == '..') {
+                cerr `invalid path: $req.path`;
+                req.sendReply(404, 'text/plain', 'invalid path');
+                return true;
+            }
+        }
+
+        Path file_path;
+        if (path.count() == 1) { # get a block
+            block := path[0];
+            file_path = makePath(__backing_path)/'objects'/block;
+        } else { # get a ref head
+            branch := path[0];
+            file_path = makePath(__backing_path)/'refs'/branch;
+        }
+
+        if (!file_path.exists()) {
+            req.sendReply(404, 'text/plain', 'path does not exist');
+            return true;
+        }
+
+        req.sendReply(200, 'application/octet-stream', file_path.makeFullReader().readAll());
+        return true;
+    }
+
+    bool onPut(HTTPRequest req) {
+        return true;
+    }
+
+    bool onPost(HTTPRequest req) {
+        return true;
+    }
+
+    bool oper call(HTTPRequest req) {
+        if (req.method == 'GET')
+            return onGet(req);
+        else if (req.method == 'POST')
+            return onPost(req);
+        else if (req.method == 'PUT')
+            return onPut(req);
+        else {
+            return false;
+        }
+    }
+}
+
+void usage() {
+    cerr I`\
+        Usage:
+            http <backing> <port>
+                Serve a mawfs backing on <port>.
+        `;
+}
+
+class FSHTTPServer : Thread {
+    HTTPServer http_server;
+
+    oper init(String backing_path, int port) {
+        rh := FSRequestHandler(backing_path);
+        http_server = HTTPServer(port);
+        http_server.addHandler(rh);
+    }
+
+    void run() {
+        http_server.run();
+    }
+}
+
+void main() {
+    if (argv.count() < 3) {
+        usage();
+        exit(1);
+    }
+
+    backing_path := argv[1];
+    port := argv[2];
+
+    http_server := FSHTTPServer(backing_path, parseInt(port));
+    http_server.start();
+    cerr `HTTP server started`;
+    http_server.join();
+}
+
+main();
