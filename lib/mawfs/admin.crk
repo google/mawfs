@@ -1,0 +1,295 @@
+# Copyright 2016 Google Inc. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+## MAWFS admin interface.  This provides the ".mawfs" directory allowing
+## interactions with the underlying filesystem daemon.
+
+import crack.cont.array Array;
+import crack.cont.treemap TreeMap;
+import crack.io FStr, SeekableReader, SeekableWriter;
+import crack.functor Functor1, Function1, Functor0, Function0;
+import crack.fs Path, PathIter, PathStat;
+import crack.lang AppendBuffer, Buffer, SystemError, WriteBuffer;
+import crack.logger debug;
+import crack.runtime ENOENT, ENOTDIR, EINVAL, S_IFDIR, S_IFREG, SEEK_CUR,
+    SEEK_END, SEEK_SET;
+import mawfs.cache CachedNode;
+
+@import crack.ann impl;
+
+alias PathMap = TreeMap[String, Path];
+
+class AdminPathIter : PathIter {
+    PathMap.Iter __iter;
+    oper init(PathMap.Iter iter) : __iter = iter {}
+    Path elem() { return __iter.elem().val }
+    bool next() { return __iter.next() }
+    bool isTrue() { return __iter; }
+}
+
+## Writes a request and then calls a callback when complete
+class RequestWriter @impl SeekableWriter {
+    AppendBuffer buf = {1024};
+    Functor1[void, Buffer] callback;
+
+    oper init(Functor1[void, Buffer] callback) : callback = callback {}
+
+    void write(Buffer data) {
+        buf.extend(data);
+    }
+
+    ## Implement seek, but we ignore it.  Users of admin interfaces are
+    ## expected to write sequentially.
+    intz seek(intz offset, int whence) {
+        return buf.size;
+    }
+
+    oper del() {
+        callback(buf);
+    }
+}
+
+## TODO: put this in crack.
+class StringReader : Object, SeekableReader {
+
+    uint __pos;
+    Buffer __src;
+
+    oper init(Buffer src) : __src = src {}
+
+    uint read(WriteBuffer buf) {
+        if (__pos >= __src.size) {
+            buf.size = 0;
+            return 0;
+        }
+
+        count :=
+            (__pos + buf.cap > __src.size) ? __src.size - __pos : buf.cap;
+        buf.move(0, __src.buffer + __pos, count);
+        __pos += count;
+        buf.size = count;
+        return count;
+    }
+
+    intz seek(intz offset, int whence) {
+#        int pos = __pos;
+#        if (whence == SEEK_SET)
+#            pos = offset;
+#        else if (whence == SEEK_CUR)
+#            pos += offset;
+#        else if (whence == SEEK_END)
+#            pos = __src.size + offset;
+#
+#        if (pos < 0)
+#            __pos = 0;
+#        else if (pos >= __src.size)
+#            __pos = __src.size;
+#        else
+#            __pos = pos;
+#        return __pos;
+        return 0;
+    }
+
+    Object oper from SeekableReader() { return this; }
+}
+
+class AdminPath : Path {
+
+    String name;
+    bool __exists;
+    PathMap _children;
+    Path __parent;
+
+    ## Functor called when we write to the file.  If null, the file is not
+    ## writable.
+    Functor1[void, Buffer] onWrite;
+
+    ## Functor called to get the contents before we read from the file.  If
+    ## null, the file is not readable.
+#    Functor0[String] onRead;
+
+    String _getContents() {
+        debug `calling AdminPath._getContents() for $(this.class.name)`;
+        return null;
+    }
+
+    oper init(String name, bool exists) : name = name, __exists = exists {}
+
+    SeekableWriter appender() {
+        if (!onWrite)
+            throw SystemError('Append not supported.', EINVAL);
+        return RequestWriter(onWrite);
+    }
+
+    PathIter children() {
+        if (_children is null)
+            throw SystemError('Not a directory', ENOTDIR);
+        return AdminPathIter(_children.iter());
+    }
+
+    # delete() is implemented as a no-op so we can delete directories.
+    void delete() {}
+
+    bool exists() { return __exists }
+
+    int getAccessTime() { return 0 }
+
+    int getCreateTime() { return 0 }
+
+    String getFullName() {
+        return FStr() `$(__parent ? __parent.getFullName() : '')/$name`;
+    }
+
+    int getModTime() { return 0 }
+
+    int getMode() {
+        if (_children is null)
+            return 0644;
+        else
+            return 0755;
+    }
+
+    String getName() { return name }
+
+    uint64 getSize() {
+        contents := _getContents();
+        if (contents)
+            return contents.size;
+        else if (isDir())
+            return 4096;
+        else
+            return 0;
+    }
+
+    PathStat getStat() {
+        if (!__exists)
+            throw SystemError('Does not exist.', ENOENT);
+        PathStat stat = {};
+
+        # The only attributes for the underlying filesystem are "directory"
+        # and "executable".  Everything else is a normal file.
+        # TODO: Make permissions configurable at the cache level.
+        if (isDir())
+            stat.st_mode = 0755 | S_IFDIR;
+        else
+            stat.st_mode = 0644 | S_IFREG;
+
+        # TODO: change this to the user/group that started the server.
+        stat.st_uid = 0;
+        stat.st_gid = 0;
+        stat.st_nlink = 1;
+        return stat;
+    }
+
+    bool isDir() {
+        return !(_children is null);
+    }
+
+    bool isExecutable() { return false }
+    bool isLink() { return false }
+
+    void makeDir(bool errorOnExists) {
+        throw SystemError("You can't create a directory here.", EINVAL);
+    }
+
+    SeekableReader reader() {
+        if (!__exists || isDir())
+            throw SystemError('Does not exists', ENOENT);
+        contents := _getContents();
+        if (contents is null)
+            throw SystemError('File is not readable', EINVAL);
+        return StringReader(contents);
+    }
+
+    SeekableWriter writer() {
+        if (!__exists || isDir())
+            throw SystemError('Does not exist', ENOENT);
+        return RequestWriter(onWrite);
+    }
+
+    Path parent() { return __parent }
+
+    void truncate(uint64 newSize) {
+        throw SystemError('Truncate unsupported', EINVAL);
+    }
+
+    void moveTo(Path other) {
+        throw SystemError('Move unsupported', EINVAL);
+    }
+
+    Path oper [](String child) {
+        if (_children && realChild := _children.get(child))
+            return realChild;
+        return AdminPath(child, isDir() && _children.hasKey(child));
+    }
+
+    Path oper /(String other) {
+        return this[other];
+    }
+
+    void setMode(int mode) {
+        throw SystemError('chmod unsupported', EINVAL);
+    }
+
+    Path moveToDir(Path other) {
+        throw SystemError('mv unsupported', EINVAL);
+    }
+
+    Path _createNode(String  path) { return null }
+}
+
+## Readme file with basic info on the filesystem.
+class READMEFile : AdminPath {
+    String _getContents() {
+        return I'\
+            MAWFS Filesystem.
+            Copyright 2016 Google Inc. All Rights Reserved.
+
+            Licensed under the Apache License, Version 2.0 (the "License");
+            you may not use this file except in compliance with the License.
+            You may obtain a copy of the License at
+
+                http://www.apache.org/licenses/LICENSE-2.0
+
+            Unless required by applicable law or agreed to in writing, software
+            distributed under the License is distributed on an "AS IS" BASIS,
+            WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+            See the License for the specific language governing permissions and
+            limitations under the License.
+            ';
+    }
+    oper init(String name) : AdminPath(name, true) {}
+}
+
+## .mawfs/branch file.  Contents is the current branch name.
+class BranchFile : AdminPath {
+    CachedNode root;
+    oper init(CachedNode root, String name) :
+        AdminPath(name, true),
+        root = root {
+    }
+
+    String _getContents() {
+        return root.getCache().branch;
+    }
+}
+
+## File object for the root of the admin tree (the '.mawfs' directory).
+class AdminRoot : AdminPath {
+    oper init(CachedNode root, String name) : AdminPath(name, true) {
+        _children = PathMap();
+        _children['README'] = READMEFile('README');
+        _children['branch'] = BranchFile(root, 'branch');
+    }
+}

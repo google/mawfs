@@ -264,6 +264,14 @@ class RmDirTest : TestCase {
 }
 RmDirTest().exec();
 
+class AdminFSTest : TestCase {
+    void run() {
+        admin := makePath('fs')/'.mawfs';
+        assertEqual((admin/'branch').readAll(), 'master');
+        @assert((admin/'README').readAll().lfind('Copyright') >= 0);
+    }
+}
+
 /*
 String readNode(Node node, int pos, int size) {
     ManagedBuffer buf = {size};

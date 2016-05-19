@@ -484,6 +484,19 @@ class CachedNode {
         return node.children ? node.children.count() : 0;
     }
 
+    ## Returns the root of the cached filesystem.
+    CachedNode getRoot() {
+        if (!parent)
+            return this;
+        else
+            return parent.getRoot();
+    }
+
+    ## Returns the cache object for the node.
+    Cache getCache() {
+        return __cache;
+    }
+
     void __write(uint64 pos, Buffer data) {
         if (node.children is null && node.contents is null) {
             # The trivial case: build a tree or add a node depending on the

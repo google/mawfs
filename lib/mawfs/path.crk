@@ -23,6 +23,7 @@ import crack.lang Buffer, Exception, InvalidArgumentError, InvalidStateError,
     WriteBuffer, SystemError;
 import crack.logger debug;
 import crack.runtime S_IFDIR, S_IFREG;
+import mawfs.admin AdminRoot;
 import mawfs.blockstore Node, MODE_DIR, MODE_EXE;
 import mawfs.cache CachedNode;
 
@@ -71,10 +72,6 @@ class RWPathAppender : _Seekable @implements SeekableWriter {
     void write(Buffer data) {
         _path.write(_pos, data);
         _pos += data.size;
-    }
-
-    void write(Buffer data) {
-        _path.write(_pos, data);
     }
 
     intz seek(intz offset, int whence) {
@@ -270,6 +267,10 @@ class MAWFSPath : RWPath {
 
     Path oper [](String child) {
         __checkExists();
+
+        if (isDir() && child == '.mawfs')
+            return AdminRoot(__rep.getRoot(), '.mawfs');
+
         childNode := __rep.getChild(child);
         return MAWFSPath(childNode, this, child);
     }
