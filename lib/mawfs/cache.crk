@@ -157,8 +157,13 @@ class CachedNode {
         ## Returns the node referenced by this child object.
         @final CachedNode getNode() {
             # Lazy load the node.
-            if (!node)
+            if (!node) {
+                if (!entry.hash)
+                    throw InvalidStateError(
+                        FStr() `No hash or node for $(entry.name)`
+                    );
                 node = _makeCachedNode(__parent, __cache, entry.hash);
+            }
             return node;
         }
 
@@ -384,7 +389,7 @@ class CachedNode {
         # Find the child in the parent and invalidate all instances.
         if (parent) {
             for (child :in parent.__children) {
-                if (child.entry is this || child.getDigest() == digest)
+                if (child.entry is this)
                     child.setDigest(null);
             }
         }
@@ -626,11 +631,58 @@ class CachedNode {
         return digest;
     }
 
+    ## Utility class for formatting a Change message.  This is useful for
+    ## debugging problems during journal replay.
+    class ChangeFormatter {
+        CachedNode node;
+        Change change;
+        oper init(CachedNode node, Change change) :
+            node = node,
+            change = change {
+        }
+
+        void formatChange(Formatter out) {
+            if (change.type == CHANGE_ADD_CHILD) {
+                out ` add child $(change.name)`;
+            } else if (change.type == CHANGE_DELETE_CHILD) {
+                out ` delete child $(change.name)`;
+            } else if (change.type == CHANGE_WRITE) {
+                out ` write\n`;
+            } else if (change.type == CHANGE_RESIZE) {
+                out ` resize to $(change.newSize)`;
+            }
+        }
+
+        void formatTo(Formatter out, CachedNode n, int index) {
+            if (change.path && index < change.path.count()) {
+                n.__populateChildren(true);
+                entry := n.__children[change.path[index]];
+                out I`$(entry.entry.name)`;
+                out `($(change.path[index]))/`;
+                if (!entry.node && !entry.entry.hash) {
+                    out `<NULL HASH>`;
+                    formatChange(out);
+                    return;
+                }
+                formatTo(out, entry.getNode(), ++index);
+            } else {
+                formatChange(out);
+            }
+        }
+
+        void formatTo(Formatter out) {
+            formatTo(out, node, 0);
+        }
+    }
+
     void __applyChange(Change change) {
         if (change.type == CHANGE_ADD_CHILD) {
             __addChild(change.name, change.node);
         } else if (change.type == CHANGE_DELETE_CHILD) {
-            __children.delete(change.name);
+            if (!__populateChildren(false) || !__children.delete(change.name))
+                throw InvalidStateError(
+                    FStr() `replaying delete: can't delete child $(change.name)`
+                );
             __markDirty();
         } else if (change.type == CHANGE_WRITE) {
             __write(uint64(change.pos), change.data);
