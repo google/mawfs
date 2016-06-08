@@ -1,0 +1,149 @@
+## Contains the "Chunkers" - chunkers are just Writers that break up large
+## buffers into a set of smaller buffers.
+
+import crack.lang AppendBuffer, Buffer, ManagedBuffer;
+import crack.cont.array Array;
+import crack.io cout, Reader, StringReader, Writer;
+import crack.logger debug, setLogLevel, DEBUG;
+import crack.strutil StringArray;
+
+@import crack.ann impl;
+
+# A prime constant that's around 8K.
+const q := 7919;
+
+## The multiplicative inverse of 256 mod q.
+const MI := 7455;
+
+class RabinFingerprinter {
+
+    # This is a ring-buffer that contains the window that we're hashing.
+    # 'pos' is the index of the oldest byte in the ring-buffer.
+    ManagedBuffer data = {32};
+    int pos;
+
+    # This is the accumulator containing the Rabin fingerprint of the window
+    # mod q.
+    uint accum;
+
+    ## Seeds the data window and accumulator from 'src'.
+    void seed(Buffer src) {
+        # Clear everything out first.
+        accum = 0;
+        data.size = data.cap;
+
+        int i;
+        for (i = 0; i < src.size && i < data.size; ++i) {
+            data.buffer[i] = src[i];
+            accum = ((accum << 8) + src[i]) % q;
+        }
+        pos = i >= data.size ? 0 : i;
+
+        # Clear out the remainder of the data area.
+        for (; i < data.size; ++i)
+            data.buffer[i] = 0;
+    }
+
+    oper init(Buffer src) {
+        seed(src);
+    }
+
+    oper init() {}
+
+    ## Calculate the oldest term of the polynomial from the byte.
+    uint calcOldest(byte b) {
+        uint oldest = b;
+        for (int i = 0; i < data.size - 1; ++i)
+            oldest = (oldest << 8) % q;
+        return oldest;
+    }
+
+    ## Adds a single byte to the window and returns true if the fingerprint
+    ## matches.
+    @final bool add(byte b) {
+        # Subtract the oldest*256^size
+        uint oldest = calcOldest(data.buffer[pos]);
+        accum = (((accum - oldest) << 8) + b) % q;
+
+        # Store the byte in the ring bufer.
+        data.buffer[pos++] = b;
+        if (pos >= data.size)
+            pos = 0;
+
+        return accum == 0;
+    }
+
+    ## Add a complete buffer full of data through the window.  Returns the
+    ## index of the end of the chunk if a chunk boundary is discovered,
+    ## otherwise returns -1.
+    @final intz add(Buffer data) {
+        intz i;
+        for (i = 0; i < data.size; ++i) {
+            if (add(data.buffer[i]))
+                return i + 1;
+        }
+        return -1;
+    }
+
+    void shiftBack(byte b) {
+        if (pos == 0)
+            pos = data.size;
+        --pos;
+
+        newest := data.buffer[pos];
+
+        # Subtract the newest and divide by 256.  We divide by 256 using the
+        # multiplicative inverse of 256 mod q.
+        accum = ((accum - newest) * MI) % q;
+
+        # Add back the oldest.
+        accum = (accum + calcOldest(b)) % q;
+    }
+}
+
+const MAX_CHUNK_SIZE := 16384;
+const MIN_CHUNK_SIZE := 2048;
+
+## Finds the next chunk of data that is written to it and writes it in a
+## single write to the underlying writer.
+class RabinChunker @impl Writer {
+
+    Writer __rep;
+    AppendBuffer __buffer = {8192};
+    RabinFingerprinter __fp = {};
+
+    oper init(Writer rep) : __rep = rep {}
+
+    void __writeChunk(uintz chunkSize) {
+        __rep.write(Buffer(__buffer.buffer, chunkSize));
+        __buffer.compact(chunkSize);
+        __fp.seed(__buffer);
+    }
+
+    void write(Buffer data) {
+        orgSize := __buffer.size;
+        __buffer.extend(data);
+
+        if (__buffer.size >= MAX_CHUNK_SIZE) {
+            # If we're bigger than the max size, cut it off at the chunk size.
+            __writeChunk(MAX_CHUNK_SIZE);
+            return;
+        }
+
+        s := __fp.add(data);
+        if (s >= 0 && orgSize + s >= MIN_CHUNK_SIZE) {
+            # If we got a fingerprint and the new chunk is greater than the
+            # minimum chunk size, cut it off here.
+            __writeChunk(orgSize + s);
+        }
+    }
+
+    void flush() {
+        if (__buffer)
+            __writeChunk(__buffer.size);
+    }
+
+    oper del() {
+        flush();
+    }
+}

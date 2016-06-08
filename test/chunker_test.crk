@@ -1,0 +1,76 @@
+
+import crack.io cerr, Reader, StringReader, Writer;
+import crack.lang AppendBuffer, Buffer;
+import crack.logger debug, setLogLevel, DEBUG;
+import crack.random random, srandom;
+import crack.strutil StringArray;
+import mawfs.chunker RabinChunker, RabinFingerprinter, MAX_CHUNK_SIZE, 
+    MIN_CHUNK_SIZE;
+
+@import crack.ann assert, impl;
+
+void copy(Reader src, Writer dst) {
+    while (data := src.read(1024))
+        dst.write(data);
+}
+
+setLogLevel(DEBUG);
+
+# FIll a buffer full of random data. (first 4 bytes of the sha1 sum of
+# "this is some beautiful text\n").
+srandom(0x58f28595);
+const BUF_SIZE := 71912;
+AppendBuffer buf = {BUF_SIZE};
+for (int i = 0; i < BUF_SIZE; ++i)
+    buf.append(byte(random()));
+
+# Make sure we can move the window backwards and forwards.  (We don't 
+# really use backwards, this is just a sanity check of the math.
+if (true) {
+    RabinFingerprinter fp = {buf};
+    orgAccum := fp.accum;
+    fp.add(buf[fp.data.size + 1]);
+    @assert(fp.accum != orgAccum);
+    fp.shiftBack(buf[0]);
+    @assert(fp.accum == orgAccum);
+}
+
+# Verify that seeding produces the same result as multiple adds.
+if (true) {
+    RabinFingerprinter fp1 = {buf};
+    RabinFingerprinter fp2 = {''};
+    
+    for (int i = 0; i < fp2.data.cap; ++i)
+        fp2.add(buf.buffer[i]);
+    
+    @assert(fp1.accum == fp2.accum);
+}
+    
+# Verify that we can chunk a file.
+if (true) {
+    class TestWriter @impl Writer {
+        StringArray contents = {};
+        void write(Buffer data) {
+            contents.append(String(data));
+        }
+    }
+    
+    TestWriter dst = {};
+    RabinChunker chunker = {dst};
+    copy(StringReader(buf), chunker);
+    chunker.flush();
+    
+    @assert(dst.contents.count() > 1);
+    joined := dst.contents.join('');
+    @assert(dst.contents.join('') == String(buf));
+    int i = 0;
+    for (elem :in dst.contents) {
+        @assert(elem.size <= MAX_CHUNK_SIZE);
+        @assert(elem.size >= MIN_CHUNK_SIZE);
+        ++i;
+    }
+}
+
+cerr `ok\n`;
+
+
