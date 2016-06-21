@@ -15,9 +15,10 @@
 import crack.enc.base64 altEncode;  # For debugging hash values.
 import crack.cont.array Array;
 import crack.hash.sha256 SHA256;
-import crack.io cerr, StringWriter;
+import crack.io cerr, FStr, StringWriter;
 import crack.protobuf ProtoWriter;
 import crack.cont.hashmap HashMap;
+import crack.lang AppendBuffer;
 import crack.logger debug, setLogLevel, DEBUG;
 import mawfs.blockstore Entry, Node, NodeStore, MODE_DIR;
 import mawfs.memstore MemNodeStore;
@@ -28,7 +29,7 @@ import mawfs.cache Cache, CachedNode;
 Node makeFileNode(String contents, int32 mode) {
     node := Node();
     node.contents = contents;
-    node.size = contents ? int32(node.contents.count()) : 0;
+    node.size = contents ? node.contents.count() : 0;
     node.mode = mode;
 
     return node;
@@ -147,6 +148,32 @@ cached := cachedRoot.getChild('written');
 cached.write(0, 'first data');
 @assert(cached.getContents() == 'first data');
 @assert(cached.getSize() == 10);
+
+# Test appending children.
+if (true) {
+    cache := Cache(nodeStore, 'master', digest);
+    cache.maxChildren = 4;
+    CachedNode root = {cache, digest, Node()};
+
+    AppendBuffer originalData = {4096};
+    for (int i = 0; i < 100; ++i) {
+        line := FStr() `this is $i\n`;
+        root.append(line);
+        originalData.extend(line);
+        size := root.verify();
+    }
+
+    import crack.lang ManagedBuffer;
+    AppendBuffer readData = {4096};
+    ManagedBuffer temp = {256};
+    uint64 pos;
+    while (rc := root.read(pos, temp)) {
+        pos += rc;
+        readData.extend(temp);
+    }
+
+    @assert(readData == originalData);
+}
 
 # TODO:
 #   - create a directory and then a child node to verify that when we do

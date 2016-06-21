@@ -58,7 +58,7 @@ const int
         optional int32 org_checksum = 3;
 
         ## The size of the total contents of the subtree (for a blob entry).
-        optional int32 size = 4;
+        optional uint64 size = 4;
     }
 
     ## A filesystem node.  MAWFS is agnostic to the difference between files
@@ -69,7 +69,7 @@ const int
         optional string contents = 2;
 
         ## 'size' is the size of the data in all children.
-        optional int32 size = 4;
+        optional uint64 size = 4;
         repeated Entry children = 3;
 
         ## See the MODE_* constants above.  'mode' should be present for all
@@ -115,13 +115,13 @@ const int
         optional bytes nested = 4;
 
         ## Position to insert data into for a write.
-        optional int32 pos = 5;
+        optional uint64 pos = 5;
 
         ## Data to be inserted in a write.
         optional bytes data = 6;
 
         ## New size of the node for a resize.
-        optional int32 newSize = 7;
+        optional uint64 newSize = 7;
 
         ## The digest of the last Change.  Every change should have this
         ## except for the first change after a commit, which should have a

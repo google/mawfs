@@ -30,6 +30,7 @@ import mawfs.blockstore Entry, Change, JournalIter, Node, NodeStore, MODE_DIR;
 
 # Allow initial blocks of up to one meg.
 const DEFAULT_MAX_CONTENT_SIZE := 1024 * 1024;
+const DEFAULT_MAX_CHILDREN := 256;
 
 const int32
     ## Add child (contains a Node and a name)
@@ -53,6 +54,7 @@ class Cache {
     String branch;
 
     uint maxContentSize = DEFAULT_MAX_CONTENT_SIZE;
+    uint maxChildren = DEFAULT_MAX_CHILDREN;
 
     oper init(NodeStore store, String branch, String baselineCommit) :
         store = store,
@@ -170,30 +172,37 @@ class CachedNode {
         @final int getMode() {
             return getNode().getMode();
         }
+
+        @final void setParent(CachedNode parent) {
+            __parent = parent;
+        }
     }
 
     ## A list of children sorted by name.  Retrieval/insertion by name is
     ## supported.
     ## node.children must exist for this to be created.
-    class __ChildArray : Array[CachedEntry] {
+    class __ChildArray {
 
-        # Underlying representation.
+        # Underlying representation (stored in the Node).
         Array[Entry] __rep;
 
+        # Cached entries.
+        Array[CachedEntry] __cached;
+
         oper init(Array[Entry] rep) :
-            Array[CachedEntry](rep.count(), null),
-            __rep = rep {
+            __rep = rep,
+            __cached(rep.count(), null) {
         }
 
         ## Recursive helper for __findIndex(String).
         @final int __findIndex(String name, uint start, uint end) {
 
-            if (!count())
+            if (!__cached.count())
                 return -1;
 
             uint midpoint = (end - start) / 2 + start;
             if (midpoint == start) {
-                comparison := cmp(name, this[midpoint].getName());
+                comparison := cmp(name, __cached[midpoint].getName());
                 if (comparison == 0)
                     return start;
                 else if (comparison < 0)
@@ -202,10 +211,10 @@ class CachedNode {
                     return -(end + 1);
             }
 
-            if (name == this[midpoint].getName())
+            if (name == __cached[midpoint].getName())
                 return midpoint;
 
-            if (name < this[midpoint].getName())
+            if (name < __cached[midpoint].getName())
                 return __findIndex(name, start, midpoint);
             else
                 return __findIndex(name, midpoint, end);
@@ -217,25 +226,26 @@ class CachedNode {
         ## at index 0, we would return -1).  Returns the index of the element
         ## if it was found as an ordinary positive integer.
         @final int findIndex(String name) {
-            return __findIndex(name, 0, count());
+            return __findIndex(name, 0, __cached.count());
         }
 
         ## Return the entry identified by the name, null if it doesn't exist.
         @final CachedEntry get(String name) {
-            i := __findIndex(name, 0, count());
+            i := __findIndex(name, 0, __cached.count());
             if (i < 0)
                 return null;
             else
-                return this[i];
+                return __cached[i];
         }
 
+        ## Adds a child to the array by order of name.
         @final void add(CachedEntry entry) {
             i := findIndex(entry.getName());
             if (i >= 0) {
-                this[i] = entry;
+                __cached[i] = entry;
                 __rep[i] = entry.entry;
             } else {
-                insert(-i - 1, entry);
+                __cached.insert(-i - 1, entry);
                 __rep.insert(-i - 1, entry.entry);
             }
         }
@@ -243,7 +253,7 @@ class CachedNode {
         @final bool delete(String name) {
             i := findIndex(name);
             if (i >= 0) {
-                this.delete(i);
+                __cached.delete(i);
                 __rep.delete(i);
                 return true;
             } else {
@@ -251,15 +261,38 @@ class CachedNode {
             }
         }
 
+        @final void append(CachedEntry entry) {
+            __cached.append(entry);
+            __rep.append(entry.entry);
+        }
+
+        @final uint count() {
+            return __cached.count();
+        }
+
+        @final CachedEntry oper [](int index) {
+            return __cached[index];
+        }
+
+        @final CachedEntry oper []=(int index, CachedEntry entry) {
+            return __cached[index] = entry;
+        }
+
+        @final Array[CachedEntry].ArrayIter iter() { return __cached.iter() }
+
         void formatTo(Formatter out) {
             indent := Indenter.wrap(out);
             out `CachedEntries![\n`;
-            for (child :in this) {
+            for (child :in __cached) {
                 dig := child.getDigest();
                 String digest;
                 if (dig)
                     digest := altEncode(dig);
-                out I`$(child.getName().getRepr()):\n`;
+                name := child.getName();
+                if (name is null)
+                    out `-   `;
+                else
+                    out I`$(name.getRepr()):\n`;
                 ++indent;
                 out I`digest: $(digest ? altEncode(digest) : 'null')
                       node: `;
@@ -271,7 +304,7 @@ class CachedNode {
     }
 
     # A sparse-array version of Node.children.  These get filled in as they
-    # are accessed.
+    # are accessed or when __populateChildren() is called.
     __ChildArray __children;
 
     ## digest should be null for a new node.
@@ -300,7 +333,8 @@ class CachedNode {
     ## null, and also create an empty node.children.
     ## If createEmpty is false and children is null or empty, do nothing and
     ## return false.
-    ## Return true if the scaffold exists, false if not.
+    ## Return true if the scaffold exists at the end of the method, false if
+    ## not.
     @final bool __populateChildren(bool createEmpty) {
         if (!(__children is null))
             return true;
@@ -497,6 +531,142 @@ class CachedNode {
         return __cache;
     }
 
+    ## Make a new unnamed entry for the node parented by 'this'.
+    CachedEntry __makeUnnamedEntry(CachedNode node) {
+        entry := Entry();
+        entry.size = node.getSize();
+        cachedEntry := CachedEntry(__cache, entry, this);
+        cachedEntry.node = node;
+        return cachedEntry;
+    }
+
+    ## Split the node if it exceeds the maximum number of children.  If the
+    ## node is split, return the new node full of the higher children.
+    ## Otherwise return null.
+    CachedNode __maybeSplit() {
+        if (__children.count() <= __cache.maxChildren)
+            return null;
+
+        # Number of nodes in the new first child.
+        newSize := __cache.maxChildren;
+
+        # Make a copy of the children and reset.
+        children := __children;
+        __children = null;
+        node.children = null;
+        node.size = 0;
+        __populateChildren(true);
+
+        # Copy the lower children to the receiver.
+        int i;
+        for (; i < newSize; ++i) {
+            __children.append(children[i]);
+            node.size += children[i].getSize();
+        }
+
+        # Create a new node and copy the higher children.
+        CachedNode newNode = {__cache, null, Node()};
+        newNode.__populateChildren(true);
+        for (; i < children.count(); ++i) {
+            newNode.__children.append(children[i]);
+            newNode.node.size += children[i].getSize();
+        }
+
+        return newNode;
+    }
+
+    ## Append a new child to the end of the tree.  If the insertion of the
+    ## child results in an intermediate node being split, return the new
+    ## intermediate node.  Otherwise return null.
+    ## 'child' must be a content node.
+    CachedNode __appendChild(CachedNode child) {
+        if (!__populateChildren(false)) {
+            # Content node.  Just return the new child as the extra node,
+            # parent will append.
+            return child;
+        } else if (__children[0].getNode().node.children is null) {
+            # The children of this node are content nodes, append here.
+            __children.append(ent := __makeUnnamedEntry(child));
+            node.size += ent.getSize();
+            return __maybeSplit();
+        } else {
+            node.size += child.node.size;
+
+            # Recurse to last child, update the size in the entry.
+            lastChild := __children[-1];
+            extra := lastChild.getNode().__appendChild(child);
+            if (extra) {
+                __children.append(ent := __makeUnnamedEntry(extra));
+                return __maybeSplit();
+            } else {
+                # If we added to the last child without a split, we need to
+                # update the entry's size.
+                lastChild.entry.size += child.node.size;
+            }
+        }
+
+        return null;
+    }
+
+    ## Reset the node object associated with the cached node and also reset
+    ## all fields dependent on the node and mark the cached node as dirty.
+    void __resetNode(Node node) {
+        this.node = node;
+        __children = null;
+        digest = null;
+        dirty = true;
+    }
+
+    ## Append a new content string to the end of the tree.
+    ## XXX this code probably doesn't work with persistence.
+    void append(String contents) {
+        newNode := Node();
+        newNode.contents = contents;
+        newNode.size = contents.size;
+        cached := CachedNode(__cache, null, newNode);
+        extra := __appendChild(cached);
+        if (extra) {
+            # If this is a content node, we need to convert it to an
+            # intermediate node.
+            if (node.children is null) {
+                CachedNode firstChild;
+                if (node.contents != null)
+                    firstChild = CachedNode(__cache, null, node);
+
+                # Create a new node with a child array.
+                __resetNode(Node());
+                __populateChildren(true);
+
+                if (firstChild) {
+                    __children.append(ent := __makeUnnamedEntry(firstChild));
+                    node.size += ent.getSize();
+                    firstChild.parent = this;
+                }
+            } else {
+                # The current node is the top-level intermediate node and it
+                # has been split.
+
+                @assert(__populateChildren(false));
+
+                # Create a new node to hold the existing children.
+                firstChild := CachedNode(__cache, null, node);
+                firstChild.__children = __children;
+
+                # Create a new node with a child array.
+                __resetNode(Node());
+                __populateChildren(true);
+
+                __children.append(ent := __makeUnnamedEntry(firstChild));
+                node.size += ent.getSize();
+                firstChild.parent = this;
+            }
+            __children.append(ent := __makeUnnamedEntry(extra));
+            extra.parent = this;
+            # XXX we need to "maybeSplit" after this and then do the same
+            # switch we did above.
+        }
+    }
+
     void __write(uint64 pos, Buffer data) {
         if (node.children is null && node.contents is null) {
             # The trivial case: build a tree or add a node depending on the
@@ -546,7 +716,7 @@ class CachedNode {
         change := Change();
         change.type = CHANGE_WRITE;
         @assert(pos < 0x100000000);
-        change.pos = int32(pos);
+        change.pos = pos;
         change.data = String(data);
         __recordChange(change);
     }
@@ -591,7 +761,7 @@ class CachedNode {
 
             change := Change();
             change.type = CHANGE_RESIZE;
-            change.newSize = int32(newSize);
+            change.newSize = newSize;
             __recordChange(change);
 
             return true;
@@ -762,6 +932,10 @@ class CachedNode {
     }
 
     uint read(uint64 pos, WriteBuffer buffer) {
+        if (pos > node.size)
+            return 0;
+
+        buffer.size = 0;
         if (node.contents) {
 
             # We've got contents, read from there.
@@ -780,7 +954,6 @@ class CachedNode {
             }
         } else if (node.children) {
 
-            uint64 pos;
             WriteBuffer frame = {null, 0, 0};
             for (child :in __children) {
                 if (pos < child.getSize()) {
@@ -789,22 +962,54 @@ class CachedNode {
 
                     # Make the frame buffer the remaining part of the input
                     # buffer.
-                    frame.buffer = buffer.buffer + frame.size;
-                    frame.cap = buffer.cap - frame.size;
+                    frame.buffer = buffer.buffer + buffer.size;
+                    frame.cap = buffer.cap - buffer.size;
+                    frame.size = 0;
 
                     # Pass this off to the child.
-                    buffer.size += child.getNode().read(pos, frame);
+                    amtRead := child.getNode().read(pos, frame);
+                    buffer.size += amtRead;
+
+                    # Quit if we've filled the buffer.
                     if (buffer.size == buffer.cap)
                         break;
-                }
 
-                # Fix the position to be relative to the start of the next
-                # child.
-                pos -= child.getSize();
+                    # Reset pos to zero so we start at the end of the next
+                    # child.
+                    pos = 0;
+                } else {
+                    # Fix the position to be relative to the start of the next
+                    # child.
+                    pos -= child.getSize();
+                }
             }
         }
 
         return buffer.size;
+    }
+
+    uint64 verify() {
+        if (node.contents) {
+            @assert(node.contents.size == node.size);
+            return node.contents.size;
+        } else if (node.children) {
+            @assert(__populateChildren(false));
+            uint64 totalSize;
+            for (child :in __children) {
+                size := child.getNode().verify();
+                if (child.getSize() != size) {
+                    import crack.lang AssertionError;
+                    throw AssertionError();
+                }
+
+                @assert(child.getSize() == child.getNode().verify());
+                totalSize += child.getSize();
+            }
+
+            return totalSize;
+        } else {
+            return 0;
+        }
     }
 
     void formatTo(Formatter out) {
