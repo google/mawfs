@@ -44,16 +44,16 @@ import mawfs.cache CachedNode;
 }
 
 class _Seekable {
-    intz _pos;
+    int64 _pos;
     RWPath _path;
 
     oper init(RWPath path) : _path = path {}
 
-    @final intz _seek(intz offset, int whence) {
+    @final int64 _seek(int64 offset, int whence) {
         if (whence == SEEK_CUR)
             _pos = offset;
         else if (whence == SEEK_END)
-            _pos = _path.getSize() + offset;
+            _pos = int64(_path.getSize()) + offset;
         else if (whence == SEEK_SET)
             _pos = offset;
         else
@@ -71,25 +71,29 @@ class RWPathAppender : _Seekable @implements SeekableWriter {
 
     void write(Buffer data) {
         _path.write(_pos, data);
-        _pos += data.size;
+        _pos += int64(data.size);
     }
 
-    intz seek(intz offset, int whence) {
+    int64 seek(int64 offset, int whence) {
         return _seek(offset, whence);
     }
+
+    int64 tell() { return _pos }
 }
 
 class RWPathReader : _Seekable @implements SeekableReader {
 
     oper init(RWPath path) : _Seekable(path) {}
 
-    intz seek(intz offset, int whence) {
+    int64 seek(int64 offset, int whence) {
         return _seek(offset, whence);
     }
 
+    int64 tell() { return _pos }
+
     uint read(WriteBuffer buffer) {
         _path.read(_pos, buffer);
-        _pos += buffer.size;
+        _pos += int64(buffer.size);
         return buffer.size;
     }
 }

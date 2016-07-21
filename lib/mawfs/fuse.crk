@@ -260,7 +260,7 @@ int _write(byteptr path, byteptr buf, uintz size, uintz offset,
         ctx := Context.get();
         info := ctx.getFileInfo(fi.fh);
         if (info && info.writer) {
-            info.writer.seek(uintz(offset), SEEK_SET);
+            info.writer.seek(int64(offset), SEEK_SET);
             info.writer.write(Buffer(buf, size));
             return size;
         } else {
