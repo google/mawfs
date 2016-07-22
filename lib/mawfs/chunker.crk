@@ -1,3 +1,17 @@
+# Copyright 2016 Google Inc. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 ## Contains the "Chunkers" - chunkers are just Writers that break up large
 ## buffers into a set of smaller buffers.
 
@@ -48,7 +62,12 @@ class RabinFingerprinter {
         seed(src);
     }
 
-    oper init() {}
+    oper init() {
+        # Clear the history ring.
+        data.size = data.cap;
+        for (int i; i < data.size; ++i)
+            data.buffer[i] = 0;
+    }
 
     ## Calculate the oldest term of the polynomial from the byte.
     uint calcOldest(byte b) {
@@ -124,18 +143,44 @@ class RabinChunker @impl Writer {
         orgSize := __buffer.size;
         __buffer.extend(data);
 
-        if (__buffer.size >= MAX_CHUNK_SIZE) {
-            # If we're bigger than the max size, cut it off at the chunk size.
-            __writeChunk(MAX_CHUNK_SIZE);
-            return;
-        }
+        # This will keep track of the remaining data as we extract chunks.
+        remaining := Buffer(data.buffer, data.size);
 
-        s := __fp.add(data);
-        if (s >= 0 && orgSize + s >= MIN_CHUNK_SIZE) {
-            # If we got a fingerprint and the new chunk is greater than the
-            # minimum chunk size, cut it off here.
-            __writeChunk(orgSize + s);
+        # Loop through the contents of the buffer until we can't create any
+        # more chunks.
+        while (remaining) {
+            s := __fp.add(remaining);
+            if (s >= 0) {
+                # We found the fingerprint.
+
+                # If the new chunk is greater than the minimum chunk size,
+                # cut it off here.
+                if (orgSize + s >= MIN_CHUNK_SIZE) {
+                    __writeChunk(orgSize + s);
+                    orgSize = 0;
+                } else {
+                    # Reset the orgSize: we're now based off the last
+                    # fingerprint.
+                    orgSize = orgSize + s;
+                }
+                remaining.buffer += s;
+                remaining.size -= s;
+            } else if (__buffer.size >= MAX_CHUNK_SIZE) {
+                # If we're bigger than the max size, cut it off at the chunk
+                # size.
+                __writeChunk(MAX_CHUNK_SIZE);
+                remaining.buffer -= MAX_CHUNK_SIZE - orgSize;
+                remaining.buffer += MAX_CHUNK_SIZE - orgSize;
+                orgSize = 0;
+            } else {
+                # No more chunks in this buffer.
+                break;
+            }
         }
+    }
+
+    @final void writeZeros(uintz count) {
+        write(String(uintz(count), 0));
     }
 
     void flush() {

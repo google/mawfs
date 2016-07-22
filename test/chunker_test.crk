@@ -1,30 +1,34 @@
+# Copyright 2016 Google Inc. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+import crack.cont.array Array;
 import crack.io cerr, Reader, StringReader, Writer;
 import crack.lang AppendBuffer, Buffer;
 import crack.logger debug, setLogLevel, DEBUG;
 import crack.random random, srandom;
 import crack.strutil StringArray;
-import mawfs.chunker RabinChunker, RabinFingerprinter, MAX_CHUNK_SIZE, 
+import mawfs.chunker RabinChunker, RabinFingerprinter, MAX_CHUNK_SIZE,
     MIN_CHUNK_SIZE;
+import mawfs.testutil copy, makeRandomData;
 
 @import crack.ann assert, impl;
 
-void copy(Reader src, Writer dst) {
-    while (data := src.read(1024))
-        dst.write(data);
-}
-
 setLogLevel(DEBUG);
 
-# FIll a buffer full of random data. (first 4 bytes of the sha1 sum of
-# "this is some beautiful text\n").
-srandom(0x58f28595);
-const BUF_SIZE := 71912;
-AppendBuffer buf = {BUF_SIZE};
-for (int i = 0; i < BUF_SIZE; ++i)
-    buf.append(byte(random()));
+buf := makeRandomData();
 
-# Make sure we can move the window backwards and forwards.  (We don't 
+# Make sure we can move the window backwards and forwards.  (We don't
 # really use backwards, this is just a sanity check of the math.
 if (true) {
     RabinFingerprinter fp = {buf};
@@ -39,38 +43,65 @@ if (true) {
 if (true) {
     RabinFingerprinter fp1 = {buf};
     RabinFingerprinter fp2 = {''};
-    
+
     for (int i = 0; i < fp2.data.cap; ++i)
         fp2.add(buf.buffer[i]);
-    
+
     @assert(fp1.accum == fp2.accum);
 }
-    
-# Verify that we can chunk a file.
-if (true) {
-    class TestWriter @impl Writer {
-        StringArray contents = {};
-        void write(Buffer data) {
-            contents.append(String(data));
-        }
+
+Array[uintz] sizes = {};
+
+class TestWriter @impl Writer {
+    StringArray contents = {};
+    void write(Buffer data) {
+        contents.append(String(data));
     }
     
+    void checkContents() {
+        @assert(contents.count() > 1);
+        joined := contents.join('');
+        @assert(contents.join('') == String(buf));
+
+        # If we've been through this before, verify that we sliced the chunks
+        # up to the same sizes.
+        bool makeSizes;
+        if (sizes) {
+            @assert(sizes.count() == contents.count());
+        } else {
+            makeSizes = true;
+        }
+
+        for (iter :on contents) {
+            elem := iter.elem();
+            @assert(elem.size <= MAX_CHUNK_SIZE);
+            @assert(elem.size >= MIN_CHUNK_SIZE);
+            if (makeSizes)
+                sizes.append(elem.size);
+            else
+                @assert(sizes[iter.index] == elem.size);
+        }
+    }
+}
+
+# Verify that we can chunk a file.
+if (true) {
     TestWriter dst = {};
     RabinChunker chunker = {dst};
     copy(StringReader(buf), chunker);
     chunker.flush();
+
+    dst.checkContents();
+}
+
+# Test chunking of very large single writes.
+if (true) {
+    TestWriter dst = {};
+    RabinChunker chunker = {dst};
+    chunker.write(buf);
+    chunker.flush();
     
-    @assert(dst.contents.count() > 1);
-    joined := dst.contents.join('');
-    @assert(dst.contents.join('') == String(buf));
-    int i = 0;
-    for (elem :in dst.contents) {
-        @assert(elem.size <= MAX_CHUNK_SIZE);
-        @assert(elem.size >= MIN_CHUNK_SIZE);
-        ++i;
-    }
+    dst.checkContents();
 }
 
 cerr `ok\n`;
-
-
