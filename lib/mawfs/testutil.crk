@@ -1,0 +1,37 @@
+# Copyright 2016 Google Inc. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import crack.io Reader, Writer;
+import crack.lang AppendBuffer;
+import crack.runtime random, srandom;
+
+## Fill a buffer full of 70K of random data (the same data every time).
+AppendBuffer makeRandomData() {
+    # The seed is the first 4 bytes of the sha1 sum of "this is some
+    # beautiful text\n").
+    srandom(0x58f28595);
+    const BUF_SIZE := 71912;
+    AppendBuffer buf = {BUF_SIZE};
+    for (int i = 0; i < BUF_SIZE; ++i)
+        buf.append(byte(random()));
+
+    return buf;
+}
+
+void copy(Reader src, Writer dst) {
+    while (data := src.read(1024))
+        dst.write(data);
+}
+
+
