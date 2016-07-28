@@ -18,13 +18,15 @@ module;
 import crack.enc.base64 altEncode;
 import crack.cont.hashmap HashMap;
 import crack.io.fmtutil Indenter;
-import crack.io Formatter, FStr;
+import crack.io Formatter, FStr, Writer;
 import crack.cont.array Array;
 import crack.lang cmp, AppendBuffer, AssertionError, Buffer, Exception,
     InvalidArgumentError, InvalidStateError, KeyError, ManagedBuffer,
     WriteBuffer, makeHashVal;
 import crack.logger debug, error;
+import crack.strutil StringArray;
 import mawfs.blockstore Entry, Change, JournalIter, Node, NodeStore, MODE_DIR;
+import mawfs.chunker RabinChunker;
 
 @import crack.ann assert, impl;
 
@@ -109,6 +111,8 @@ class CachedNode {
     ## The parent node (the directory that this node is in).
     CachedNode parent;
 
+    uint64 verify();
+
     ## Gets the node's mode.
     @final int getMode() {
         return node.mode;
@@ -173,8 +177,11 @@ class CachedNode {
             return getNode().getMode();
         }
 
+        @final CachedNode getParent() { return __parent }
         @final void setParent(CachedNode parent) {
             __parent = parent;
+            if (node)
+                node.parent = parent;
         }
     }
 
@@ -261,9 +268,20 @@ class CachedNode {
             }
         }
 
+        ## Deletes a child by index.
+        @final void delete(uint index) {
+            __cached.delete(index);
+            __rep.delete(index);
+        }
+
         @final void append(CachedEntry entry) {
             __cached.append(entry);
             __rep.append(entry.entry);
+        }
+
+        @final void insert(uint index, CachedEntry entry) {
+            __cached.insert(index, entry);
+            __rep.insert(index, entry.entry);
         }
 
         @final uint count() {
@@ -398,10 +416,6 @@ class CachedNode {
     }
 
 
-    @final String getContents() {
-        return node.contents;
-    }
-
     ## Returns the total size of the node.
     @final uint64 getSize() {
         # TODO: Store this information in the node as well as its children.
@@ -416,6 +430,24 @@ class CachedNode {
             return 0;
         }
     }
+
+    @final String getContents() {
+        if (!(node.contents is null)) {
+            return node.contents;
+        } else if (node.children != null) {
+            AppendBuffer buf = {getSize()};
+            __populateChildren(false);
+            for (child :in __children)
+                buf.extend(child.getNode().getContents());
+            return String(buf, true);
+        } else {
+            return null;
+        }
+
+    }
+
+    ## Returns true if this is a content node (a leaf).
+    @final bool isContentNode() { return node.contents }
 
     ## Mark the node as diry and do the same for all parent nodes.
     void __markDirty() {
@@ -532,11 +564,12 @@ class CachedNode {
     }
 
     ## Make a new unnamed entry for the node parented by 'this'.
-    CachedEntry __makeUnnamedEntry(CachedNode node) {
+    CachedEntry __makeUnnamedEntry(CachedNode node, CachedNode parent) {
         entry := Entry();
         entry.size = node.getSize();
         cachedEntry := CachedEntry(__cache, entry, this);
         cachedEntry.node = node;
+        cachedEntry.setParent(parent);
         return cachedEntry;
     }
 
@@ -568,7 +601,8 @@ class CachedNode {
         CachedNode newNode = {__cache, null, Node()};
         newNode.__populateChildren(true);
         for (; i < children.count(); ++i) {
-            newNode.__children.append(children[i]);
+            newNode.__children.append(child := children[i]);
+            child.setParent(newNode);
             newNode.node.size += children[i].getSize();
         }
 
@@ -586,8 +620,9 @@ class CachedNode {
             return child;
         } else if (__children[0].getNode().node.children is null) {
             # The children of this node are content nodes, append here.
-            __children.append(ent := __makeUnnamedEntry(child));
+            __children.append(ent := __makeUnnamedEntry(child, this));
             node.size += ent.getSize();
+            @assert(ent.getParent() is this);
             return __maybeSplit();
         } else {
             node.size += child.node.size;
@@ -596,7 +631,8 @@ class CachedNode {
             lastChild := __children[-1];
             extra := lastChild.getNode().__appendChild(child);
             if (extra) {
-                __children.append(ent := __makeUnnamedEntry(extra));
+                __children.append(ent := __makeUnnamedEntry(extra, this));
+                @assert(ent.getParent() is this);
                 return __maybeSplit();
             } else {
                 # If we added to the last child without a split, we need to
@@ -617,12 +653,37 @@ class CachedNode {
         dirty = true;
     }
 
-    ## Append a new content string to the end of the tree.
-    ## XXX this code probably doesn't work with persistence.
-    void append(String contents) {
+    Node __makeNode(String contents) {
         newNode := Node();
         newNode.contents = contents;
         newNode.size = contents.size;
+        return newNode;
+    }
+
+    ## Add a new tier to a top-level node by creating a new child node and
+    ## moving all of the children to it.
+    void __addTier() {
+        @assert(__populateChildren(false));
+
+        # Create a new node to hold the existing children.
+        firstChild := CachedNode(__cache, null, node);
+        firstChild.__children = __children;
+        for (child :in __children)
+            child.setParent(firstChild);
+
+        # Create a new node with a child array.
+        __resetNode(Node());
+        __populateChildren(true);
+
+        __children.append(ent := __makeUnnamedEntry(firstChild, this));
+        node.size += ent.getSize();
+        firstChild.parent = this;
+    }
+
+    ## Append a new content string to the end of the tree.
+    ## XXX this code probably doesn't work with persistence.
+    void append(String contents) {
+        newNode := __makeNode(contents);
         cached := CachedNode(__cache, null, newNode);
         extra := __appendChild(cached);
         if (extra) {
@@ -638,73 +699,303 @@ class CachedNode {
                 __populateChildren(true);
 
                 if (firstChild) {
-                    __children.append(ent := __makeUnnamedEntry(firstChild));
+                    __children.append(ent := __makeUnnamedEntry(firstChild,
+                                                                this));
                     node.size += ent.getSize();
-                    firstChild.parent = this;
                 }
             } else {
                 # The current node is the top-level intermediate node and it
                 # has been split.
-
-                @assert(__populateChildren(false));
-
-                # Create a new node to hold the existing children.
-                firstChild := CachedNode(__cache, null, node);
-                firstChild.__children = __children;
-
-                # Create a new node with a child array.
-                __resetNode(Node());
-                __populateChildren(true);
-
-                __children.append(ent := __makeUnnamedEntry(firstChild));
-                node.size += ent.getSize();
-                firstChild.parent = this;
+                __addTier();
             }
-            __children.append(ent := __makeUnnamedEntry(extra));
-            extra.parent = this;
+            __children.append(ent := __makeUnnamedEntry(extra, this));
+            node.size += ent.getSize();
             # XXX we need to "maybeSplit" after this and then do the same
             # switch we did above.
         }
     }
 
-    void __write(uint64 pos, Buffer data) {
-        if (node.children is null && node.contents is null) {
-            # The trivial case: build a tree or add a node depending on the
-            # size of the data.
-            if (pos + data.size <= __cache.maxContentSize) {
-                if (pos) {
-                    AppendBuffer buf = {pos + data.size};
-                    buf.move(0, data);
-                    node.contents = String(buf, true);
-                } else {
-                    node.contents = String(data);
-                }
-            } else {
-                throw Exception('tree building not implemented yet');
+    ## Write the beginning of the chunk containing 'pos' up to 'pos'.
+    ## Returns the
+    uint64 __writeChunkPrefix(Writer out, uint64 pos) {
+
+        # If we've got contents, write the beginning of the contents.
+        if (node.contents) {
+            out.write(Buffer(node.contents.buffer,
+                             node.contents.size - uintz(pos)
+                             )
+                      );
+            return 0;
+        }
+
+        # Otherwise find the child containing the position.
+        uint64 base;
+        for (child :in __children) {
+            if (pos < base + child.getSize()) {
+                return base + child.getNode().__writeChunkPrefix(out, pos);
             }
-        } else if (!(node.contents is null)) { #
-            # This is a pristine content-only node.
-            # TODO: add " && !digest" to the condition above once we have a
-            # tree.
-            if (pos + data.size > __cache.maxContentSize) {
-                # This buffer would make the node greater than the maximum
-                # size.
-                throw Exception('splitting not implemented yet.');
-            } else {
-                # This is the easy case.  We can just inject the data into the
-                # contents.
-                dataEnd := pos + data.size;
-                AppendBuffer buf = {node.contents.size > dataEnd ?
-                                    node.contents.size :
-                                    dataEnd};
-                buf.extend(node.contents.substr(0, pos));
-                buf.extend(data);
-                if (node.contents.size > dataEnd)
-                    buf.extend(node.contents.substr(dataEnd));
-                node.contents = String(buf, true);
+
+            base += child.getSize();
+        }
+
+        # We shouldn't get here, the position begins after all children.
+        return base;
+    }
+
+    ## Write the end of the chunk containing pos (from pos to the end of the
+    ## chunk).
+    ## Returns the position of the end of the chunk.
+    uint64 __writeChunkSuffix(Writer out, uint64 pos) {
+        if (node.contents) {
+            out.write(Buffer(node.contents.buffer + pos,
+                             node.contents.size - pos
+                             )
+                      );
+            return node.contents.size;
+        }
+
+        uint64 base;
+        for (child :in __children) {
+            if (pos < base + child.getSize())
+                return base +
+                       child.getNode().__writeChunkSuffix(out, pos - base);
+            base += child.getSize();
+        }
+
+        # Once again, shouldn't end up here.
+        return base;
+    }
+
+    ## Delete all chunks between start and end, but don't collapse intermediate
+    ## levels - tree height stays the same unless all nodes are in the range,
+    ## in which case we get a node full of empty children.
+    ## Returns the amount deleted.
+    uint64 __deleteContentNodes(uint64 start, uint64 end) {
+        if (node.contents)
+            return node.contents.size;
+
+        uint64 base, removedSize;
+        uint deleteStart = __children.count();
+        uint i;
+        for (child :in __children) {
+            if (base >= end)
+                # Passed the end of the range.
+                break;
+
+            if (base >= start) {
+                # We're in range.
+
+                # Mark the start index if we don't have one.
+                if (i < deleteStart)
+                    deleteStart = i;
+
+                # Recurse on all children.
+                removedSize += child.getNode().__deleteContentNodes(start - base,
+                                                                    end - base
+                                                                    );
+
+            }
+
+            base += child.getSize();
+
+            # We're want 'i' to be the index of the node after the last child
+            # to be deleted, so we only update it if we're still in range and
+            # the entire child node can be deleted.
+            if (base < end)
+                ++i;
+        }
+
+        # Delete all nodes in the range.
+        count := i - deleteStart;
+        while (count--)
+            __children.delete(deleteStart);
+
+        node.size -= removedSize;
+        return removedSize;
+    }
+
+    CachedNode __insertChild(uint64 pos, CachedNode node) {
+        # This only works on a node with children.
+        @assert(__populateChildren(false));
+        int i;
+
+        dirty = true;
+
+        # If the children are content nodes, directly insert.
+        if (__children[0].getNode().isContentNode()) {
+            for (child :in __children) {
+                if (!pos) {
+                    __children.insert(i, __makeUnnamedEntry(node, this));
+                    break;
+                } else {
+                    @assert(pos >= child.getSize());
+                }
+
+                pos -= child.getSize();
             }
         } else {
-            throw Exception('Full monty not supported yet.');
+            # Inner node, recurse.
+            int i = 1;
+            for (child :in __children) {
+                if (pos < child.getSize()) {
+                    extra := child.getNode().__insertChild(pos, node);
+                    if (extra) {
+                        __children.insert(i, __makeUnnamedEntry(extra, this));
+                    }
+                    break;
+                }
+
+                pos -= child.getSize();
+                ++i;
+            }
+        }
+
+        this.node.size += node.getSize();
+        return __maybeSplit();
+    }
+
+    void __insert(uint64 pos, String contents) {
+        newNode := CachedNode(__cache, null, __makeNode(contents));
+        extra := __insertChild(pos, newNode);
+        if (extra) {
+            __addTier();
+            __children.append(__makeUnnamedEntry(extra, this));
+        }
+    }
+
+#    class __NodeBlock {
+#        Array[CachedNode] nodes = {};
+#        uint64 start, size;
+#    }
+#
+#    ## Returns the lower tier (nodes near the leafs) for the range of
+#    ## positions.  Having this allows us to replace all of the contents in
+#    ## this tier with a simple linear sweep.
+#    void __getLowerTier(__NodeBlock tier, uint64 start, uint64 end) {
+#        if (__children && (child := __children[0].getNode()).node.contents) {
+#            tier.nodes.append(this);
+#            tier.childSize
+#            return 0;
+#        } else if (__children) {
+#            uint64 childStart;
+#            uint64 childEnd;
+#            bool recordedStart;
+#            for (child :in __children) {
+#                childEnd += child.getSize();
+#                if (start < childEnd && end > childStart) {
+#                    child.getNode().__getLowerTier(tier, start - childStart,
+#                                                   end - childStart
+#                                                   );
+#
+#                    if (!recordedStart) {
+#                        tier.start = childStart + tier.start;
+#                        recordedStart = true;
+#                    }
+#                }
+#                childStart += child.getSize();
+#                if (childStart > end)
+#                    break;
+#            }
+#        }
+#    }
+
+    ## Write data to a file at 'pos'.
+    ##
+    ## This needs to be applied to the top node of the file.
+    void __write(uint64 pos, Buffer data) {
+        class ListWriter @impl Writer {
+            StringArray items = {};
+
+            void write(Buffer data) {
+                items.append(String(data));
+            }
+        }
+
+        ListWriter writer = {};
+        RabinChunker chunker = {writer};
+
+        if (node.children is null && !node.contents ||
+             pos == node.size
+            ) {
+
+            # Empty node.
+
+            # We don't have to mix in with anything.
+            chunker.writeZeros(pos);
+            chunker.write(data);
+            chunker.flush();
+
+            # Just append all of the items to the tree.
+            for (item :in writer.items)
+                append(item);
+
+        } else if (!(node.contents is null)) {
+
+            # This is a node with contents.
+
+            # Copy the existing contents until we get to 'pos'.
+            if (pos) {
+                chunker.write(node.contents.substr(0, pos));
+
+                # Write zeroes if there's any extra space.
+                if (pos > node.contents.size)
+                    chunker.writeZeros(pos - node.contents.size);
+            }
+
+            # Write the data.
+            chunker.write(data);
+
+            # If there's content after the data, write it.
+            end := pos + data.size;
+            if (end < node.contents.size)
+                chunker.write(Buffer(node.contents.buffer + uintz(end),
+                                     node.contents.size - end
+                                     )
+                              );
+
+            chunker.flush();
+
+            # Replace the existing contents with the new items.
+            node.contents = null;
+            for (item :in writer.items)
+                append(item);
+
+        # All remaining cases are nodes with children.
+
+        } else if (pos >= getSize()) {
+            # We're writing after the end, just append.
+
+            chunker.writeZeros(pos - getSize());
+            chunker.write(data);
+            chunker.flush();
+
+            for (item :in writer.items)
+                append(item);
+        } else {
+            # Write beginning in the middle of a node with children.
+
+            # Write the beginning of the first existing chunk.
+            start := __writeChunkPrefix(chunker, pos);
+
+            # Write the data.
+            chunker.write(data);
+
+            # Find the node containing the end position (if any) and the node
+            # after that.
+            end := __writeChunkSuffix(chunker,
+                                      pos + data.size + chunker.getWindowSize()
+                                      );
+
+            chunker.flush();
+
+            # Replace all of the chunks in the span.
+            # XXX  this isn't going to work quite right in all cases because
+            # it doesn't reproduce the depth of the tree.
+            __deleteContentNodes(start, end);
+            for (item :in writer.items) {
+                __insert(pos, item);
+                pos += item.size;
+            }
         }
 
         __markDirty();
@@ -802,8 +1093,6 @@ class CachedNode {
                     throw AssertionError(
                         FStr() `Invalid hash for $(child.getName())`
                     );
-                else if (!child.entry.name)
-                    throw AssertionError(FStr() `Child with no name`);
             }
         }
 
@@ -974,8 +1263,8 @@ class CachedNode {
                     if (buffer.size == buffer.cap)
                         break;
 
-                    # Reset pos to zero so we start at the end of the next
-                    # child.
+                    # Reset pos to zero so we start at the beginning of the
+                    # next child.
                     pos = 0;
                 } else {
                     # Fix the position to be relative to the start of the next
@@ -989,8 +1278,10 @@ class CachedNode {
     }
 
     uint64 verify() {
+        # XXX add something to verify tree depth.
         if (node.contents) {
             @assert(node.contents.size == node.size);
+            @assert(node.contents.size <= __cache.maxContentSize);
             return node.contents.size;
         } else if (node.children) {
             @assert(__populateChildren(false));
@@ -1003,6 +1294,8 @@ class CachedNode {
                 }
 
                 @assert(child.getSize() == child.getNode().verify());
+                @assert(child.getParent() is this);
+                @assert(child.getNode().parent is this);
                 totalSize += child.getSize();
             }
 

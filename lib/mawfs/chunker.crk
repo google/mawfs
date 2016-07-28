@@ -104,6 +104,11 @@ class RabinFingerprinter {
         return -1;
     }
 
+    ## Return the size of the fingerprinting window in bytes.
+    @final uint getWindowSize() {
+        return data.size;
+    }
+
     void shiftBack(byte b) {
         if (pos == 0)
             pos = data.size;
@@ -181,6 +186,10 @@ class RabinChunker @impl Writer {
 
     @final void writeZeros(uintz count) {
         write(String(uintz(count), 0));
+    }
+
+    @final uint getWindowSize() {
+        return __fp.getWindowSize();
     }
 
     void flush() {

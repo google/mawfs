@@ -18,11 +18,12 @@ import crack.hash.sha256 SHA256;
 import crack.io cerr, FStr, StringWriter;
 import crack.protobuf ProtoWriter;
 import crack.cont.hashmap HashMap;
-import crack.lang AppendBuffer;
+import crack.lang AppendBuffer, ManagedBuffer;
 import crack.logger debug, setLogLevel, DEBUG;
 import mawfs.blockstore Entry, Node, NodeStore, MODE_DIR;
 import mawfs.memstore MemNodeStore;
 import mawfs.cache Cache, CachedNode;
+import mawfs.testutil copy, makeRandomData;
 
 @import crack.ann assert, impl;
 
@@ -39,6 +40,18 @@ Node makeDirNode() {
     node := Node();
     node.mode = MODE_DIR;
     return node;
+}
+
+
+AppendBuffer readAll(CachedNode cached) {
+    AppendBuffer readData = {4096};
+    ManagedBuffer temp = {256};
+    uint64 pos;
+    while (rc := cached.read(pos, temp)) {
+        pos += rc;
+        readData.extend(temp);
+    }
+    return readData;
 }
 
 setLogLevel(DEBUG);
@@ -146,11 +159,16 @@ verifyContents();
 cachedRoot.addChild('written', Node());
 cached := cachedRoot.getChild('written');
 cached.write(0, 'first data');
-@assert(cached.getContents() == 'first data');
+if (true) {
+    buf := ManagedBuffer(1024);
+    cached.read(0, buf);
+    @assert(buf == 'first data');
+}
 @assert(cached.getSize() == 10);
 
 # Test appending children.
 if (true) {
+    cerr `appending master\n`;
     cache := Cache(nodeStore, 'master', digest);
     cache.maxChildren = 4;
     CachedNode root = {cache, digest, Node()};
@@ -163,16 +181,79 @@ if (true) {
         size := root.verify();
     }
 
-    import crack.lang ManagedBuffer;
-    AppendBuffer readData = {4096};
-    ManagedBuffer temp = {256};
-    uint64 pos;
-    while (rc := root.read(pos, temp)) {
-        pos += rc;
-        readData.extend(temp);
-    }
+    @assert(readAll(root) == originalData);
+}
 
-    @assert(readData == originalData);
+# Case 1: verify that we can insert objects into an empty node.
+if (true) {
+    cerr `inserting objects into an empty node\n`;
+    cache := Cache(nodeStore, 'master', digest);
+    CachedNode root = {cache, digest, Node()};
+    randomData := makeRandomData();
+    root.write(0, randomData);
+
+    # Make sure we have a nice tree.
+    root.verify();
+}
+
+# TODO: verify that we can insert at an offset in an empty node and that we
+# get filled in with zeroes.
+
+# Write a large amount of random data into the middle of a node with contents.
+if (true) {
+    cerr `write random data into the middle of a content node.\n`;
+    cache := Cache(nodeStore, 'master', digest);
+    CachedNode root = {cache, digest, Node()};
+    root.node.contents = 'this is a test';
+
+    randomData := String(makeRandomData(), true);
+    root.write(8, randomData);
+
+    @assert(readAll(root) == 'this is ' + randomData);
+    root.verify();
+}
+
+# Write into the middle of a node with contents.
+if (true) {
+    cerr `write simple data into the middle of a content node.\n`;
+    cache := Cache(nodeStore, 'master', digest);
+    CachedNode root = {cache, digest, Node()};
+    root.node.contents = 'this is a test';
+
+    root.write(5, 'crzy');
+
+    @assert(readAll(root) == 'this crzy test');
+    root.verify();
+}
+
+# Write data after the end of a node with children.
+if (true) {
+    cerr `write data after the end of a node with children\n`;
+    cache := Cache(nodeStore, 'master', digest);
+    CachedNode root = {cache, digest, Node()};
+
+    # populate an empty node.
+    data := String(makeRandomData(), true);
+    root.write(0, data);
+
+    # Write beyond the end.
+    root.write(data.size + 1000, data);
+
+    @assert(readAll(root) == data + String(1000, 0) + data);
+}
+
+# Write a large amount of random data into a node with children.
+if (false) {
+    cerr `write random data into a node with children\n`;
+    cache := Cache(nodeStore, 'master', digest);
+    CachedNode root = {cache, digest, Node()};
+
+    # populate an empty node.
+    data := String(makeRandomData(), true);
+    root.write(0, data);
+
+    # Insert random data somewhere.
+    root.write(25000, data);
 }
 
 # TODO:

@@ -51,6 +51,7 @@ dir.makeDir();
 truncated := root/'truncated';
 truncated.writeAll('here is some data');
 truncated.truncate(4);
+debug `contents = $(truncated.readAll())`;
 @assert(truncated.readAll() == 'here');
 
 cerr `ok\n`;
