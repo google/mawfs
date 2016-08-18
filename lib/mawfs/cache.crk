@@ -101,6 +101,7 @@ class CachedNode;
 ## Creates a CachedNode.
 CachedNode _makeCachedNode(CachedNode parent, Cache cache, String digest);
 
+## Wraps a Node object with caching functionality.
 class CachedNode {
     Cache __cache;
 
@@ -766,13 +767,90 @@ class CachedNode {
         return base;
     }
 
-    ## Delete all chunks between start and end, but don't collapse intermediate
-    ## levels - tree height stays the same unless all nodes are in the range,
-    ## in which case we get a node full of empty children.
-    ## Returns the amount deleted.
-    uint64 __deleteContentNodes(uint64 start, uint64 end) {
+    ## Merge the child at the specified index with its nearest sibling.
+    ##
+    ## This is only public for tests.
+    @final void mergeChild(uint index) {
+        bool mergeWithNext;
+        node := __children[index].getNode();
+        @assert(node.getChildCount() == 1);
+        entry := node.__children[0];
+
+        if (index == 0 ||
+            index < __children.count() &&
+             __children[index + 1].getNode().getChildCount() <
+             __children[index - 1].getNode().getChildCount()
+            ) {
+            # Merge with the next child.
+
+            nextChild := __children[index + 1].getNode();
+            nextChild.__children.insert(0, entry);
+            entry.setParent(nextChild);
+
+            # Remove the child.
+            __children.delete(index);
+
+            # Split the new entry.
+            newChild := nextChild.__maybeSplit();
+            if (newChild)
+                __children.insert(index + 1,
+                                  __makeUnnamedEntry(newChild, this)
+                                  );
+        } else {
+            # Merge with the previous child.
+
+            prevChild := __children[index - 1].getNode();
+            prevChild.__children.append(entry);
+            entry.setParent(prevChild);
+
+            # Remove the child.
+            __children.delete(index);
+
+            # Split the new entry.
+            newChild := prevChild.__maybeSplit();
+            if (newChild)
+                __children.insert(index,
+                                  __makeUnnamedEntry(newChild, this)
+                                  );
+        }
+    }
+
+    bool __deleteNode(uint64 pos) {
+        uint index;
+        for (child :in __children) {
+            if (pos < child.getSize()) {
+                # Delete this node or one of its children.
+                if (child.getNode().isContentNode()) {
+                    # The child is a content node.  Remove it.
+                    __children.delete(index);
+                } else {
+                    # The child is an intermediate node, have it remove the
+                    # appropriate content node.
+                    if (child.getNode().__deleteNode(pos))
+                        # The child now has only one child of its own.
+                        mergeChild(index);
+                }
+
+                return __children.count() < 2;
+            }
+
+            pos -= child.getSize();
+            ++index;
+        }
+
+        # If we get here, the caller has specified a position that is out of
+        # bounds.
+        @assert(false);
+        return false;
+    }
+
+    ## Delete all chunks between start and end.
+    ## Returns true if the node now has only a single child (and thus the
+    ## should be merged with a sibling).
+    ## XXX doesn't work, removedSize can't be calculated given this signature.
+    bool __deleteContentNodes(uint64 start, uint64 end) {
         if (node.contents)
-            return node.contents.size;
+            return false;
 
         uint64 base, removedSize;
         uint deleteStart = __children.count();
@@ -790,9 +868,11 @@ class CachedNode {
                     deleteStart = i;
 
                 # Recurse on all children.
-                removedSize += child.getNode().__deleteContentNodes(start - base,
-                                                                    end - base
-                                                                    );
+                removedSize +=
+                    uint64(child.getNode().__deleteContentNodes(start - base,
+                                                                end - base
+                                                                ) ? 1 : 0
+                           );
 
             }
 

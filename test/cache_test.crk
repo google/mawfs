@@ -256,6 +256,20 @@ if (false) {
     root.write(25000, data);
 }
 
+# Unit tests for node merge.
+if (true) {
+    cache := Cache(nodeStore, 'master', digest);
+    cache.maxChildren = 3;
+    CachedNode root = {cache, digest, Node()};
+    root.append('alpha');
+    root.append('bravo');
+    root.append('charlie');
+    root.append('delta');
+
+    @assert(root.getChildCount() == 2);
+    root.verify();
+}
+
 # TODO:
 #   - create a directory and then a child node to verify that when we do
 #     addChild() on a node without a digest the change propagates back to the
