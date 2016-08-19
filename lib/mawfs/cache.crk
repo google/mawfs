@@ -107,6 +107,13 @@ class CachedNode {
 
     String digest;
     Node node;
+
+    ## Indicates that a node has been changed in memory and in the transaction
+    ## log but needs to be committed.  A dirty node is assumed to have an
+    ## invalid digest.  Likewise, a non-dirty node is assumed to have a valid
+    ## digest.  All nodes should either be loaded from the block store (in
+    ## which case, they have a valid digest) or created as part of an
+    ## operation (in which case they should have no digest and be dirty).
     bool dirty;
 
     ## The parent node (the directory that this node is in).
@@ -801,7 +808,7 @@ class CachedNode {
         entry := node.__children[0];
 
         if (index == 0 ||
-            index < __children.count() &&
+            index < __children.count() - 1 &&
              __children[index + 1].getNode().getChildCount() <
              __children[index - 1].getNode().getChildCount()
             ) {
@@ -1214,18 +1221,10 @@ class CachedNode {
         if (__children) {
             # Commit all dirty children and reconstruct the child list for the
             # underlying node.
-
-            # Create a new list of children for the node.
-            node.children = Array[Entry](__children.count());
-
             for (child :in __children) {
                 if (!child.getDigest())
                     child.setDigest(dig := child.node.commit());
-                node.children.append(child.entry);
             }
-        } else {
-            # Make sure our node also has no children.
-            node.children = null;
         }
 
         # Commit the node itself and clear the journal.
@@ -1421,6 +1420,13 @@ class CachedNode {
     }
 
     uint64 verify() {
+
+        # If the node isn't dirty, verify that we have a correct digest.
+        if (!dirty) {
+            @assert(digest);
+            @assert(digest == __cache.store.makeDigest(node));
+        }
+
         # XXX add something to verify tree depth.
         if (node.contents) {
             @assert(node.contents.size == node.size);

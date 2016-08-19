@@ -256,8 +256,7 @@ if (false) {
     root.write(25000, data);
 }
 
-# Unit tests for node merge.
-if (true) {
+CachedNode makeSmallFileTree() {
     cache := Cache(nodeStore, 'master', digest);
     cache.maxChildren = 3;
     CachedNode root = {cache, digest, Node()};
@@ -267,9 +266,18 @@ if (true) {
     root.append('delta');
     root.append('echo');
 
+    return root;
+}
+
+# Unit tests for node merge.
+if (true) {
+    cerr `delete nodes\n`;
+    root := makeSmallFileTree();
+
     # The root should have two children, one with three content nodes and one
     # with two.
     @assert(root.getChildCount() == 2);
+    root.commit();
 
     root.deleteNode(10); # Delete "charlie".
     root.deleteNode(5);  # Delete "bravo".
@@ -279,6 +287,14 @@ if (true) {
     @assert(root.getContents() == 'alphadeltaecho');
 
     root.verify();
+
+    root = makeSmallFileTree();
+
+    root.deleteNode(10); # Delete "charlie".
+    root.deleteNode(10); # Delete "delta".
+
+    @assert(root.getChildCount() == 3);
+    @assert(root.getContents() == 'alphabravoecho');
 }
 
 # TODO:
@@ -287,4 +303,3 @@ if (true) {
 #     parent.
 
 cerr `ok\n`;
-
