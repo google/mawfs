@@ -54,6 +54,11 @@ class MemNodeStore @impl NodeStore {
         return __store(node);
     }
 
+    String makeDigest(Node node) {
+        chunk := __toChunk(node);
+        return chunk.digest;
+    }
+
     Node getNode(String digest) {
         serialized := __objs.get(digest);
         if (serialized is null)

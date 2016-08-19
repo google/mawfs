@@ -261,6 +261,10 @@ class ChangeEntry {
     ## Store a chunk, return its digest.
     @abstract String storeNode(Node node);
 
+    ## Compute and return the digest for the node.  This is just like
+    ## storeNode() only it doesn't store the node, it just creates its digest.
+    @abstract String makeDigest(Node node);
+
     ## Get the node at the given digest, null if it's not currently stored.
     @abstract Node getNode(String digest);
 
@@ -366,6 +370,14 @@ class ChunkStore @impl NodeStore {
     ## Stores the node, returns its digest.
     String storeNode(Node node) {
         return store(node.toString());
+    }
+
+    String makeDigest(Node node) {
+        class NullWriter @impl Writer {
+            void write(Buffer data) {}
+            void flush() {}
+        }
+        return __fsInfo.writeChunk(NullWriter(), node.toString());
     }
 
     Commit getCommit(String digest) {
