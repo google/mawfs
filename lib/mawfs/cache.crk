@@ -123,6 +123,8 @@ class CachedNode {
         return node.mode & MODE_DIR;
     }
 
+    @final uint64 getSize();
+
     class CachedEntry {
         Entry entry;
         Cache __cache;
@@ -183,6 +185,12 @@ class CachedNode {
             __parent = parent;
             if (node)
                 node.parent = parent;
+        }
+
+        @final void setCachedNode(CachedNode node) {
+            this.node = node;
+            entry.size = node.getSize();
+            entry.hash = null;
         }
     }
 
@@ -314,6 +322,7 @@ class CachedNode {
                     out I`$(name.getRepr()):\n`;
                 ++indent;
                 out I`digest: $(digest ? altEncode(digest) : 'null')
+                      size: $(child.getSize())
                       node: `;
                 out `$(child.node)\n`;
                 --indent;
@@ -450,15 +459,24 @@ class CachedNode {
     ## Returns true if this is a content node (a leaf).
     @final bool isContentNode() { return node.contents }
 
+    ## Returns the CachedEntry for the child wrapping the node.  Returns
+    ## 'null' if undefined.
+    @final CachedEntry __getChildEntry(CachedNode node) {
+        for (child :in __children) {
+            if (child.node is node)
+                return child;
+        }
+
+        return null;
+    }
+
     ## Mark the node as diry and do the same for all parent nodes.
     void __markDirty() {
 
         # Find the child in the parent and invalidate all instances.
         if (parent) {
-            for (child :in parent.__children) {
-                if (child.entry is this)
-                    child.setDigest(null);
-            }
+            myEntry := parent.__getChildEntry(this);
+            myEntry.setDigest(null);
         }
 
         dirty = true;
@@ -661,6 +679,14 @@ class CachedNode {
         return newNode;
     }
 
+    ## Steal and reparent the child array from 'other'.
+    void __stealChildren(CachedNode other) {
+        __children = other.__children;
+        for (child :in __children)
+            child.setParent(this);
+        other.__children = null;
+    }
+
     ## Add a new tier to a top-level node by creating a new child node and
     ## moving all of the children to it.
     void __addTier() {
@@ -668,9 +694,7 @@ class CachedNode {
 
         # Create a new node to hold the existing children.
         firstChild := CachedNode(__cache, null, node);
-        firstChild.__children = __children;
-        for (child :in __children)
-            child.setParent(firstChild);
+        firstChild.__stealChildren(this);
 
         # Create a new node with a child array.
         __resetNode(Node());
@@ -783,8 +807,10 @@ class CachedNode {
             ) {
             # Merge with the next child.
 
-            nextChild := __children[index + 1].getNode();
+            nextChildEntry := __children[index + 1];
+            nextChild := nextChildEntry.getNode();
             nextChild.__children.insert(0, entry);
+            nextChildEntry.entry.size = nextChild.node.size += entry.getSize();
             entry.setParent(nextChild);
 
             # Remove the child.
@@ -799,8 +825,11 @@ class CachedNode {
         } else {
             # Merge with the previous child.
 
-            prevChild := __children[index - 1].getNode();
+            prevChildEntry := __children[index - 1];
+            prevChild := prevChildEntry.getNode();
             prevChild.__children.append(entry);
+            prevChild.node.size += entry.getSize();
+            prevChildEntry.entry.size = prevChild.node.size += entry.getSize();
             entry.setParent(prevChild);
 
             # Remove the child.
@@ -815,23 +844,35 @@ class CachedNode {
         }
     }
 
-    bool __deleteNode(uint64 pos) {
+    ## Returns the size of the child deleted, returns the negative size if the
+    ## child is an intermediate node with only one child of its own after the
+    ## delete.
+    int64 __deleteNode(uint64 pos) {
+        @assert(__populateChildren(false));
         uint index;
         for (child :in __children) {
+            int64 childSize;
             if (pos < child.getSize()) {
                 # Delete this node or one of its children.
                 if (child.getNode().isContentNode()) {
                     # The child is a content node.  Remove it.
+                    childSize = int64(child.getSize());
                     __children.delete(index);
                 } else {
                     # The child is an intermediate node, have it remove the
                     # appropriate content node.
-                    if (child.getNode().__deleteNode(pos))
+                    childSize = child.getNode().__deleteNode(pos);
+                    if (childSize < 0) {
                         # The child now has only one child of its own.
                         mergeChild(index);
+                        childSize = -childSize;
+                    }
+
+                    child.entry.size -= uint64(childSize);
                 }
 
-                return __children.count() < 2;
+                node.size -= uint64(childSize);
+                return (__children.count() < 2) ? -childSize : childSize;
             }
 
             pos -= child.getSize();
@@ -841,7 +882,29 @@ class CachedNode {
         # If we get here, the caller has specified a position that is out of
         # bounds.
         @assert(false);
-        return false;
+        return 0;
+    }
+
+    ## Delete the leaf node at the position.  Call this on the top-level node
+    ## of a file.
+    ## Returns the size of the deleted node.
+    int64 deleteNode(uint64 pos) {
+        size := __deleteNode(pos);
+
+        # If we have one child left, collapse the level.  We don't need to
+        # call __populateChildren, __deleteNode() should have done that for us.
+        if (__children.count() == 1) {
+            cachedNode := __children[0].getNode();
+            node = cachedNode.node;
+            __stealChildren(cachedNode);
+            if (parent) {
+                entry := parent.__getChildEntry(this);
+                entry.setCachedNode(this);
+            }
+        }
+
+        __markDirty();
+        return size;
     }
 
     ## Delete all chunks between start and end.
@@ -1367,12 +1430,6 @@ class CachedNode {
             @assert(__populateChildren(false));
             uint64 totalSize;
             for (child :in __children) {
-                size := child.getNode().verify();
-                if (child.getSize() != size) {
-                    import crack.lang AssertionError;
-                    throw AssertionError();
-                }
-
                 @assert(child.getSize() == child.getNode().verify());
                 @assert(child.getParent() is this);
                 @assert(child.getNode().parent is this);
@@ -1391,6 +1448,7 @@ class CachedNode {
         __populateChildren(false);
         ++indent;
         indent I`hash: $(digest ? altEncode(digest) : 'null')
+                 size: $(node.size)
                  contents: $(!(node.contents is null) ?
                                 node.contents.getRepr() :
                                 'null'
