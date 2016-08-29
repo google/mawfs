@@ -338,6 +338,10 @@ class CachedNode {
 
         @final Array[CachedEntry].ArrayIter iter() { return __cached.iter() }
 
+        ## Returns the underlying array of entries.  Caller must not modify
+        ## its contents directly.
+        @final Array[Entry] getRep() { return __rep }
+
         void formatTo(Formatter out) {
             out `CachedEntries![\n`;
             for (child :in __cached)
@@ -698,6 +702,7 @@ class CachedNode {
     ## Steal and reparent the child array from 'other'.
     void __stealChildren(CachedNode other) {
         __children = other.__children;
+        node.children = other.__children.getRep();
         for (child :in __children)
             child.setParent(this);
         other.__children = null;
@@ -994,8 +999,12 @@ class CachedNode {
         return __children.count() == 1;
     }
 
+    ## Delete a range of bytes from the file.  This should only be applied to
+    ## the toplevel node of a file.
     void deleteSpan(uint64 start, uint64 end) {
-        __deleteSpan(start, end);
+        if (__deleteSpan(start, end))
+            __stealChildren(__children[0].getNode());
+
         __markDirty();
     }
 
@@ -1520,6 +1529,7 @@ class CachedNode {
             return node.contents.size;
         } else if (node.children) {
             @assert(__populateChildren(false));
+            @assert(node.children.count() == __children.count());
             uint64 totalSize;
             for (child :in __children) {
                 @assert(child.getSize() == child.getNode().verify());

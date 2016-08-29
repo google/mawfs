@@ -334,6 +334,8 @@ if (true) {
     root.deleteSpan(10, 24);
     root.verify();
     @assert(root.getContents() == 'alphabravoho');
+    # Make sure we collapsed the top tier after merging.
+    @assert(root.getChildCount() == 3);
 }
 
 # TODO:
