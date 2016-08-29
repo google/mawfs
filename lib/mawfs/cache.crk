@@ -199,6 +199,30 @@ class CachedNode {
             entry.size = node.getSize();
             entry.hash = null;
         }
+
+        ## Set the size in the entry to the size of the referenced node.
+        @final void fixSize() {
+            entry.size = getNode().getSize();
+        }
+
+        void formatTo(Formatter out) {
+            indent := Indenter.wrap(out);
+            dig := getDigest();
+            String digest;
+            if (dig)
+                digest := altEncode(dig);
+            name := getName();
+            if (name is null)
+                out `-   `;
+            else
+                out I`$(name.getRepr()):\n`;
+            ++indent;
+            out I`digest: $(digest ? altEncode(digest) : 'null')
+                  size: $(getSize())
+                  node: `;
+            out `$(node)\n`;
+            --indent;
+        }
     }
 
     ## A list of children sorted by name.  Retrieval/insertion by name is
@@ -315,25 +339,9 @@ class CachedNode {
         @final Array[CachedEntry].ArrayIter iter() { return __cached.iter() }
 
         void formatTo(Formatter out) {
-            indent := Indenter.wrap(out);
             out `CachedEntries![\n`;
-            for (child :in __cached) {
-                dig := child.getDigest();
-                String digest;
-                if (dig)
-                    digest := altEncode(dig);
-                name := child.getName();
-                if (name is null)
-                    out `-   `;
-                else
-                    out I`$(name.getRepr()):\n`;
-                ++indent;
-                out I`digest: $(digest ? altEncode(digest) : 'null')
-                      size: $(child.getSize())
-                      node: `;
-                out `$(child.node)\n`;
-                --indent;
-            }
+            for (child :in __cached)
+                out `$child\n`;
             out `]`;
         }
     }
@@ -607,7 +615,7 @@ class CachedNode {
             return null;
 
         # Number of nodes in the new first child.
-        newSize := __cache.maxChildren;
+        newSize := __children.count() / 2;
 
         # Make a copy of the children and reset.
         children := __children;
@@ -657,6 +665,7 @@ class CachedNode {
             lastChild := __children[-1];
             extra := lastChild.getNode().__appendChild(child);
             if (extra) {
+                lastChild.fixSize();
                 __children.append(ent := __makeUnnamedEntry(extra, this));
                 @assert(ent.getParent() is this);
                 return __maybeSplit();
@@ -799,9 +808,11 @@ class CachedNode {
     }
 
     ## Merge the child at the specified index with its nearest sibling.
+    ## Returns true if we merged with the next child, false if we merged with
+    ## the previous child.
     ##
     ## This is only public for tests.
-    @final void mergeChild(uint index) {
+    @final bool mergeChild(uint index) {
         bool mergeWithNext;
         node := __children[index].getNode();
         @assert(node.getChildCount() == 1);
@@ -817,7 +828,8 @@ class CachedNode {
             nextChildEntry := __children[index + 1];
             nextChild := nextChildEntry.getNode();
             nextChild.__children.insert(0, entry);
-            nextChildEntry.entry.size = nextChild.node.size += entry.getSize();
+            nextChild.node.size += entry.getSize();
+            nextChildEntry.fixSize();
             entry.setParent(nextChild);
 
             # Remove the child.
@@ -825,10 +837,14 @@ class CachedNode {
 
             # Split the new entry.
             newChild := nextChild.__maybeSplit();
-            if (newChild)
+            if (newChild) {
+                nextChildEntry.fixSize();
                 __children.insert(index + 1,
                                   __makeUnnamedEntry(newChild, this)
                                   );
+            }
+
+            return true;
         } else {
             # Merge with the previous child.
 
@@ -836,7 +852,7 @@ class CachedNode {
             prevChild := prevChildEntry.getNode();
             prevChild.__children.append(entry);
             prevChild.node.size += entry.getSize();
-            prevChildEntry.entry.size = prevChild.node.size += entry.getSize();
+            prevChildEntry.fixSize();
             entry.setParent(prevChild);
 
             # Remove the child.
@@ -844,10 +860,13 @@ class CachedNode {
 
             # Split the new entry.
             newChild := prevChild.__maybeSplit();
-            if (newChild)
+            if (newChild) {
+                prevChildEntry.fixSize();
                 __children.insert(index,
                                   __makeUnnamedEntry(newChild, this)
                                   );
+            }
+            return false;
         }
     }
 
@@ -914,10 +933,77 @@ class CachedNode {
         return size;
     }
 
+    ## Delete a span from the tree.  Returns true of the node now has a single
+    ## child and should be merged.
+    bool __deleteSpan(uint64 start, uint64 end) {
+        if (node.contents) {
+            if (start > node.contents.size) {
+                return false;
+            } else if (start < node.contents.size && end < node.contents.size) {
+                node.contents = node.contents.substr(0, start) +
+                                node.contents.substr(end);
+            } else {
+                # Delete everything after start.
+                node.contents = node.contents.substr(0, start);
+            }
+            node.size = node.contents.size;
+            dirty = true;
+            return false;
+        }
+
+        # This is an inner node.
+        @assert(__populateChildren(false));
+        for (int i; i < __children.count() && end; ++i) {
+            child := __children[i];
+            childSize := child.getSize();
+
+            if (start == 0 && end >= childSize) {
+                # The entire child node must be deleted.
+                __children.delete(i);
+                node.size -= childSize;
+                dirty = true;
+                --i;
+            } else if (start < childSize) {
+                # Part of the child must be deleted.
+                mustMerge := child.getNode().__deleteSpan(start, end);
+                child.fixSize();
+                node.size -= childSize - child.getSize();
+                dirty = true;
+                start = 0;
+
+                if (mustMerge) {
+                    if (mergeChild(i)) {
+                        # We merged with the _next_ child, so we have to adjust
+                        # the span.
+                        start = child.getSize();
+                        end += start;
+                    }
+                    --i;
+                }
+
+                # Quit if the end of range is also within the child.
+                if (end < childSize) {
+                    break;
+                }
+            }
+            if (start)
+                start -= childSize;
+            end -= childSize;
+        }
+
+        return __children.count() == 1;
+    }
+
+    void deleteSpan(uint64 start, uint64 end) {
+        __deleteSpan(start, end);
+        __markDirty();
+    }
+
     ## Delete all chunks between start and end.
     ## Returns true if the node now has only a single child (and thus the
     ## should be merged with a sibling).
     ## XXX doesn't work, removedSize can't be calculated given this signature.
+    ## XXX THis is obsolete at this point, see __deleteSpan() instead.
     bool __deleteContentNodes(uint64 start, uint64 end) {
         if (node.contents)
             return false;

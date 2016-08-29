@@ -297,6 +297,45 @@ if (true) {
     @assert(root.getContents() == 'alphabravoecho');
 }
 
+if (true) {
+    cerr `deleteSpan:\n  partial contents\n`;
+    root := makeSmallFileTree();
+    root.deleteSpan(1, 4);
+    root.verify();
+    @assert(root.getContents() == 'aabravocharliedeltaecho')
+
+    #   Deleting a single child
+    cerr `  delete first child\n`;
+    root = makeSmallFileTree();
+    root.deleteSpan(0, 5);
+    root.verify();
+    @assert(root.getContents() == 'bravocharliedeltaecho');
+
+    cerr `  delete last child\n`;
+    root = makeSmallFileTree();
+    root.deleteSpan(22, 27);
+    root.verify();
+    @assert(root.getContents() == 'alphabravocharliedelta');
+
+    cerr `  delete multiple children\n`;
+    root = makeSmallFileTree();
+    root.deleteSpan(0, 10);
+    root.verify();
+    @assert(root.getContents() == 'charliedeltaecho');
+
+    cerr `  delete span crossing multiple children\n`;
+    root = makeSmallFileTree();
+    root.deleteSpan(1, 9);
+    root.verify();
+    @assert(root.getContents() == 'aocharliedeltaecho');
+
+    cerr `  force merge to previous\n`;
+    root = makeSmallFileTree();
+    root.deleteSpan(10, 24);
+    root.verify();
+    @assert(root.getContents() == 'alphabravoho');
+}
+
 # TODO:
 #   - create a directory and then a child node to verify that when we do
 #     addChild() on a node without a digest the change propagates back to the
