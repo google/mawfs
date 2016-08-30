@@ -348,6 +348,8 @@ class CachedNode {
                 out `$child\n`;
             out `]`;
         }
+
+        bool isTrue() { return __cached }
     }
 
     # A sparse-array version of Node.children.  These get filled in as they
@@ -473,6 +475,19 @@ class CachedNode {
             return null;
         }
 
+    }
+
+    ## REMOVE: for debug only.  Returns all ccontent leaf nodes of a given
+    ## node.
+    @final StringArray getNodes() {
+        if (!(node.contents is null))
+            return StringArray![node.contents];
+
+        @assert(__populateChildren(true));
+        StringArray result = {};
+        for (child :in __children)
+            result.extend(child.getNode().getNodes());
+        return result;
     }
 
     ## Returns true if this is a content node (a leaf).
@@ -767,10 +782,7 @@ class CachedNode {
 
         # If we've got contents, write the beginning of the contents.
         if (node.contents) {
-            out.write(Buffer(node.contents.buffer,
-                             node.contents.size - uintz(pos)
-                             )
-                      );
+            out.write(Buffer(node.contents.buffer, uintz(pos)));
             return 0;
         }
 
@@ -1066,8 +1078,16 @@ class CachedNode {
 
         dirty = true;
 
-        # If the children are content nodes, directly insert.
-        if (__children[0].getNode().isContentNode()) {
+        if (!__children || pos == this.node.size) {
+            # Deal with the cases of inserting at the end and the case where
+            # the entire contents has been deleted. This can currently happen
+            # only in the case where the entire contents of a toplevel node
+            # are being replaced.
+            # TODO: this needs to change when the __delete* functions do the
+            # right thing and return a content node.
+            __children.append(__makeUnnamedEntry(node, this));
+        } else if (__children[0].getNode().isContentNode()) {
+            # The children are content nodes, directly insert.
             for (child :in __children) {
                 if (!pos) {
                     __children.insert(i, __makeUnnamedEntry(node, this));
@@ -1101,6 +1121,7 @@ class CachedNode {
 
     void __insert(uint64 pos, String contents) {
         newNode := CachedNode(__cache, null, __makeNode(contents));
+
         extra := __insertChild(pos, newNode);
         if (extra) {
             __addTier();
@@ -1234,9 +1255,8 @@ class CachedNode {
             chunker.flush();
 
             # Replace all of the chunks in the span.
-            # XXX  this isn't going to work quite right in all cases because
-            # it doesn't reproduce the depth of the tree.
-            __deleteContentNodes(start, end);
+            __deleteSpan(start, end);
+            pos = start;
             for (item :in writer.items) {
                 __insert(pos, item);
                 pos += item.size;

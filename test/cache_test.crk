@@ -338,6 +338,15 @@ if (true) {
     @assert(root.getChildCount() == 3);
 }
 
+if (true) {
+    cerr `writes into the middle of a file.\n`;
+    root := CachedNode(cache, digest, Node());
+    randomData := String(makeRandomData(), true);
+    root.write(0, randomData);
+    root.write(500, randomData);
+    @assert(root.getContents() == randomData.substr(0, 500) + randomData);
+}
+
 # TODO:
 #   - create a directory and then a child node to verify that when we do
 #     addChild() on a node without a digest the change propagates back to the
