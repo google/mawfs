@@ -26,7 +26,7 @@ import crack.lang cmp, AppendBuffer, AssertionError, Buffer, Exception,
 import crack.logger debug, error;
 import crack.strutil StringArray;
 import mawfs.blockstore Entry, Change, JournalIter, Node, NodeStore, MODE_DIR;
-import mawfs.chunker RabinChunker;
+import mawfs.chunker RabinChunker, DEFAULT_WINDOW_SIZE;
 
 @import crack.ann assert, impl;
 
@@ -477,16 +477,16 @@ class CachedNode {
 
     }
 
-    ## REMOVE: for debug only.  Returns all ccontent leaf nodes of a given
-    ## node.
-    @final StringArray getNodes() {
+    ## Returns all ccontent leaf nodes of a given node.  This method is really
+    ## just for testing/debugging purposes.
+    @final StringArray getChunks() {
         if (!(node.contents is null))
             return StringArray![node.contents];
 
         @assert(__populateChildren(true));
         StringArray result = {};
         for (child :in __children)
-            result.extend(child.getNode().getNodes());
+            result.extend(child.getNode().getChunks());
         return result;
     }
 
@@ -802,26 +802,43 @@ class CachedNode {
 
     ## Write the end of the chunk containing pos (from pos to the end of the
     ## chunk).
-    ## Returns the position of the end of the chunk.
+    ## Returns the position of the end of the chunk.  If the return value is
+    ## greater than the size of the chunk, the caller must also write the next
+    ## child.
     uint64 __writeChunkSuffix(Writer out, uint64 pos) {
         if (node.contents) {
             out.write(Buffer(node.contents.buffer + pos,
                              node.contents.size - pos
                              )
                       );
+            # If we're going to overwrite the chunking window, we need to
+            # return a signal to write the next chunk.
+            if (node.contents.size - pos < DEFAULT_WINDOW_SIZE) {
+                return node.contents.size + 1;
+            }
             return node.contents.size;
         }
 
-        uint64 base;
+        uint64 base, continueToNext;
         for (child :in __children) {
-            if (pos < base + child.getSize())
-                return base +
-                       child.getNode().__writeChunkSuffix(out, pos - base);
-            base += child.getSize();
+            childSize := child.getSize();
+            if (pos < base + childSize) {
+                end := child.getNode().__writeChunkSuffix(out, pos - base);
+                if (end <= childSize)
+                    return base + end;
+
+                # The end exceeds the size of the child - continue to the next
+                # child.
+                pos = base + childSize;
+                continueToNext = 1;
+            }
+            base += childSize;
         }
 
-        # Once again, shouldn't end up here.
-        return base;
+        # We can get here if 'pos' is greater than the child -- or if we need
+        # to also add the next child because we may have changed the
+        # fingerprint.
+        return base + continueToNext;
     }
 
     ## Merge the child at the specified index with its nearest sibling.
@@ -1246,11 +1263,8 @@ class CachedNode {
             # Write the data.
             chunker.write(data);
 
-            # Find the node containing the end position (if any) and the node
-            # after that.
-            end := __writeChunkSuffix(chunker,
-                                      pos + data.size + chunker.getWindowSize()
-                                      );
+            # Find the node containing the end position (if any).
+            end := __writeChunkSuffix(chunker, pos + data.size);
 
             chunker.flush();
 

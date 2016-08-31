@@ -29,11 +29,14 @@ const q := 7919;
 ## The multiplicative inverse of 256 mod q.
 const MI := 7455;
 
+## Default size of the fingerprinting window.
+const DEFAULT_WINDOW_SIZE := 32;
+
 class RabinFingerprinter {
 
     # This is a ring-buffer that contains the window that we're hashing.
     # 'pos' is the index of the oldest byte in the ring-buffer.
-    ManagedBuffer data = {32};
+    ManagedBuffer data = {DEFAULT_WINDOW_SIZE};
     int pos;
 
     # This is the accumulator containing the Rabin fingerprint of the window

@@ -345,6 +345,31 @@ if (true) {
     root.write(0, randomData);
     root.write(500, randomData);
     @assert(root.getContents() == randomData.substr(0, 500) + randomData);
+
+    # Test writing to the middle of a chunk.
+    root = CachedNode(cache, digest, Node());
+    root.write(0, randomData);
+    root.write(10, randomData.substr(0, 20));
+    @assert(root.getContents().substr(0, 30) ==
+             randomData.substr(0, 10) + randomData.substr(0, 20)
+            );
+    @assert(root.getContents() ==
+             randomData.substr(0, 10) + randomData.substr(0, 20) +
+             randomData.substr(30)
+            );
+
+    # Test writing in the fingerprint zone of a chunk.
+    root = CachedNode(cache, digest, Node());
+    root.write(0, randomData);
+    subseq := randomData.substr(0, root.getChunks()[0].size - 20);
+    root.write(10, subseq);
+    @assert(root.getContents() ==
+             randomData.substr(0, 10) + subseq +
+             randomData.substr(10 + subseq.size)
+            );
+
+    # TODO: test messing with the fingerprint at the end of a child node
+    # boundary.
 }
 
 # TODO:
