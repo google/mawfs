@@ -149,6 +149,13 @@ class RabinChunker @impl Writer {
 
     void write(Buffer data) {
         orgSize := __buffer.size;
+        String snippet(Buffer content) {
+            if (content.size > 16)
+                return content.getRepr().slice(0, 16);
+            else
+                return content.getRepr();
+        }
+        debug `writing $(snippet(data)) to buf of size $orgSize`;
         __buffer.extend(data);
 
         # This will keep track of the remaining data as we extract chunks.

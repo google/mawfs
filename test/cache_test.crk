@@ -368,8 +368,48 @@ if (true) {
              randomData.substr(10 + subseq.size)
             );
 
-    # TODO: test messing with the fingerprint at the end of a child node
-    # boundary.
+    # Test writing into the beginning of the second chunk.
+    root = CachedNode(cache, digest, Node());
+    root.write(0, randomData);
+    firstChunkSize := root.getChunks()[0].size;
+    root.write(firstChunkSize, 'stuff');
+
+    String snippet(String data) {
+        return data.substr(0, 10).getRepr();
+    }
+    contents := root.getContents();
+    @assert(root.getContents() == randomData.substr(0, firstChunkSize) +
+                                  'stuff' +
+                                  randomData.substr(firstChunkSize + 5)
+            );
+
+    if (true) {
+        # Test modifying the fingerprint at the end of a node boundary.
+        cache = Cache(nodeStore, 'master', digest);
+        cache.maxChildren = 3;
+        root = CachedNode(cache, digest, Node());
+        root.write(0, randomData);
+
+        # We should have two leafs grouped under an intermediate node.
+        chunks := root.getChunks();
+        boundary := chunks[0].size + chunks[1].size;
+        cerr `modifying at the end of a root boundary\n`;
+        root.write(boundary - 32, 'xx');
+
+        contents := root.getContents();
+        cerr `first: $(snippet(randomData)) vs $(snippet(contents))\n`;
+        cerr I`boundary: $(snippet(randomData.substr(boundary - 32, 10))) ->
+               $(snippet(contents.substr(boundary - 32, 10)))\n`;
+        cerr I`secon: $(snippet(randomData.substr(chunks[0].size, 32))) \
+               $(snippet(contents.substr(chunks[0].size, 10)))\n`;
+        cerr I`third: $(snippet(randomData.substr(boundary))) ->
+                $(snippet(contents.substr(boundary)))\n`;
+        cerr `expected size = $(randomData.size) size = $(contents.size)\n`;
+        @assert(root.getContents() == randomData.substr(0, boundary - 32) +
+                                      'xx' +
+                                      randomData.substr(boundary - 30)
+                );
+    }
 }
 
 # TODO:

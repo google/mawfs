@@ -790,7 +790,8 @@ class CachedNode {
         uint64 base;
         for (child :in __children) {
             if (pos < base + child.getSize()) {
-                return base + child.getNode().__writeChunkPrefix(out, pos);
+                return base +
+                       child.getNode().__writeChunkPrefix(out, pos - base);
             }
 
             base += child.getSize();
@@ -829,6 +830,7 @@ class CachedNode {
 
                 # The end exceeds the size of the child - continue to the next
                 # child.
+                debug `must continue to next child`;
                 pos = base + childSize;
                 continueToNext = 1;
             }
@@ -970,18 +972,23 @@ class CachedNode {
     ## Delete a span from the tree.  Returns true of the node now has a single
     ## child and should be merged.
     bool __deleteSpan(uint64 start, uint64 end) {
+        debug `entering delete span`;
         if (node.contents) {
             if (start > node.contents.size) {
+                debug `leaving delete span`;
                 return false;
             } else if (start < node.contents.size && end < node.contents.size) {
+                debug `deleting middle of contents $start:$end`;
                 node.contents = node.contents.substr(0, start) +
                                 node.contents.substr(end);
             } else {
                 # Delete everything after start.
+                debug `deleting from $start`;
                 node.contents = node.contents.substr(0, start);
             }
             node.size = node.contents.size;
             dirty = true;
+            debug `leaving delete span`;
             return false;
         }
 
@@ -990,41 +997,58 @@ class CachedNode {
         for (int i; i < __children.count() && end; ++i) {
             child := __children[i];
             childSize := child.getSize();
+            debug `considering child $i of size $childSize for $start:$end`;
 
             if (start == 0 && end >= childSize) {
                 # The entire child node must be deleted.
+                debug `popchild: deleting child $i of size $childSize`;
                 __children.delete(i);
                 node.size -= childSize;
                 dirty = true;
                 --i;
+                end -= childSize;
             } else if (start < childSize) {
                 # Part of the child must be deleted.
+                debug I`popchild: deleting span of size $(end - start) child \
+                        $i of size $childSize`;
                 mustMerge := child.getNode().__deleteSpan(start, end);
                 child.fixSize();
-                node.size -= childSize - child.getSize();
+                amtDeleted := childSize - child.getSize();
+                node.size -= amtDeleted;
                 dirty = true;
+                spanSize := end - start;
                 start = 0;
 
+                adjustedSpan := false;
                 if (mustMerge) {
                     if (mergeChild(i)) {
                         # We merged with the _next_ child, so we have to adjust
                         # the span.
                         start = child.getSize();
-                        end += start;
+                        debug I`after merge: start = $start, spanSize = \
+                                $spanSize, amtDeleted = $amtDeleted`;
+                        end = start + spanSize - amtDeleted;
+                        adjustedSpan = true;
                     }
                     --i;
                 }
 
-                # Quit if the end of range is also within the child.
-                if (end < childSize) {
-                    break;
+                if (!adjustedSpan) {
+                    # No merge or merged with previous.  Adjust the start and
+                    # end for the next child.
+                    start = 0;
+                    if (end < childSize)
+                        break;
+                    else
+                        end -= childSize
                 }
-            }
-            if (start)
+            } else {
                 start -= childSize;
-            end -= childSize;
+                end -= childSize;
+            }
         }
 
+        debug `leaving delete span`;
         return __children.count() == 1;
     }
 
@@ -1081,8 +1105,12 @@ class CachedNode {
 
         # Delete all nodes in the range.
         count := i - deleteStart;
-        while (count--)
+        debug `deleting $count nodes from $deleteStart to $i`;
+        while (count--) {
+            debug I`  deleting node of size \
+                   $(__children[deleteStart].getSize())`;
             __children.delete(deleteStart);
+        }
 
         node.size -= removedSize;
         return removedSize;
@@ -1114,6 +1142,7 @@ class CachedNode {
                 }
 
                 pos -= child.getSize();
+                ++i;
             }
         } else {
             # Inner node, recurse.
@@ -1258,20 +1287,33 @@ class CachedNode {
             # Write beginning in the middle of a node with children.
 
             # Write the beginning of the first existing chunk.
+            debug `write pos is $pos`;
             start := __writeChunkPrefix(chunker, pos);
 
             # Write the data.
             chunker.write(data);
 
             # Find the node containing the end position (if any).
+            debug `writing suffix from $(pos + data.size)`;
             end := __writeChunkSuffix(chunker, pos + data.size);
 
             chunker.flush();
 
             # Replace all of the chunks in the span.
+            debug `deleting span $start:$end`;
+            delta := end - start;  orgSize := getContents().size;
             __deleteSpan(start, end);
+            @assert(getContents().size == orgSize - delta);
             pos = start;
             for (item :in writer.items) {
+                String snippet(String content) {
+                    if (content.size > 10)
+                        return content.substr(0, 10).getRepr();
+                    else
+                        return content.getRepr();
+                }
+                debug I`inserting chunk $(snippet(item)) of size \
+                        $(item.size) at pos $pos\n`;
                 __insert(pos, item);
                 pos += item.size;
             }
@@ -1583,10 +1625,12 @@ class CachedNode {
         indent `CachedNode {\n`;
         __populateChildren(false);
         ++indent;
+        int min(int a, int b) { return (a < b) ? a : b }
         indent I`hash: $(digest ? altEncode(digest) : 'null')
                  size: $(node.size)
                  contents: $(!(node.contents is null) ?
-                                node.contents.getRepr() :
+                                node.contents.substr(0, min(node.contents.size,
+                                                         10)).getRepr() :
                                 'null'
                              )
                  entries: $__children\n`;
