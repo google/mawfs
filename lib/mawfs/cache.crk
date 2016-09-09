@@ -1255,11 +1255,12 @@ class CachedNode {
 
             # Copy the existing contents until we get to 'pos'.
             if (pos) {
-                chunker.write(node.contents.substr(0, pos));
-
-                # Write zeroes if there's any extra space.
-                if (pos > node.contents.size)
+                if (pos > node.contents.size) {
+                    chunker.write(node.contents);
                     chunker.writeZeros(pos - node.contents.size);
+                } else {
+                    chunker.write(node.contents.substr(0, pos));
+                }
             }
 
             # Write the data.
@@ -1343,53 +1344,26 @@ class CachedNode {
     }
 
     void __resize(uint64 newSize) {
-        if (node.contents is null) {
-            # If the new size is zero, we don't have to do anything.
-            # Otherwise, create a new empty contents buffer.
-            if (newSize) {
-                ManagedBuffer buf = {newSize};
-                for (uint64 i = 0; i < newSize; ++i)
-                    buf.buffer[i] = 0;
-                buf.size = uintz(newSize);
-                node.contents = String(buf, true);
-            }
-        } else if (node.contents.size > newSize) {
-            node.contents = node.contents.substr(0, newSize);
-        } else {
-            # Create a new buffer and move the existing contents to it.
-            AppendBuffer buf = {newSize};
-            buf.move(0, node.contents);
-
-            # Clear the rest of the buffer.
-            for (uint64 i = buf.size; i < newSize; ++i)
-                buf.buffer[i] = 0;
-            buf.size = newSize;
-
-            # Use it for contents.
-            node.contents = String(buf, true);
-        }
-
-        __markDirty();
+        if (newSize == node.size)
+            return;
+        else if (newSize < node.size)
+            deleteSpan(newSize, node.size);
+        else
+            __write(newSize, '');
     }
 
     ## Resize contents to the specified size.  Truncate the node if less than
     ## the existing size, pad with zeroes if greater than the existing size.
     ## Returns false if unable to accomodate.
     bool resize(uint64 newSize) {
-        # TODO: rewrite to use chunking.
-        if (node.children is null) {
-            __resize(newSize);
+        __resize(newSize);
 
-            change := Change();
-            change.type = CHANGE_RESIZE;
-            change.newSize = newSize;
-            __recordChange(change);
+        change := Change();
+        change.type = CHANGE_RESIZE;
+        change.newSize = newSize;
+        __recordChange(change);
 
-            return true;
-        } else {
-            error `Can only do resize on content nodes at this time`;
-            return false;
-        }
+        return true;
     }
 
     ## Commit all outstanding changes in the tree.  Returns the new digest.

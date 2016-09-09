@@ -469,6 +469,25 @@ if (true) {
         }
     }
 
+    if (true) {
+        cerr `resize to larger\n`;
+        root = CachedNode(cache, digest, Node());
+        root.write(0, randomData);
+        cerr `size is $(randomData.size + 1000)\n`;
+        root.resize(randomData.size + 1000);
+        @assert(root.getContents() == randomData + String(1000, 0));
+    }
+
+    if (true) {
+        cerr `resize to smaller\n`;
+        root.write(0, randomData);
+        root.resize(randomData.size - 1000);
+        @assert(root.getContents() ==
+                 randomData.substr(0, randomData.size - 1000)
+                );
+    }
+}
+
 # TODO:
 #   - create a directory and then a child node to verify that when we do
 #     addChild() on a node without a digest the change propagates back to the
