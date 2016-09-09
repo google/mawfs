@@ -405,12 +405,69 @@ if (true) {
         cerr I`third: $(snippet(randomData.substr(boundary))) ->
                 $(snippet(contents.substr(boundary)))\n`;
         cerr `expected size = $(randomData.size) size = $(contents.size)\n`;
+        root.verify();
         @assert(root.getContents() == randomData.substr(0, boundary - 32) +
                                       'xx' +
                                       randomData.substr(boundary - 30)
                 );
     }
-}
+
+    if (true) {
+        cerr `boundary tests\n`;
+        # Test the exciting boundary conditions for all existing chunks.
+        # failed at 2170, 17614, 63393, 66881, 66903
+        uint64 startOff, endOff;
+        root = CachedNode(cache, digest, Node());
+        root.write(0, randomData);
+        chunks := root.getChunks();
+        const EMPTY := randomData.substr(0, 0);
+        for (int i; i < chunks.count(); ++i) {
+            startChunk := chunks[i];
+            for (ix :in Array[int]![startOff, startOff + 1,
+                                    startOff + startChunk.size - 32,
+                                    startOff + startChunk.size - 31
+                                    ]
+                ) {
+                cerr ` -----> start off = $startOff\n`;
+                endOff = 0;
+                for (int j; j < chunks.count(); ++j) {
+                    endChunk := chunks[j];
+                    for (jx :in Array[int]![endOff - 31, endOff - 32,
+                                            endOff + endChunk.size - 32,
+                                            endOff + endChunk.size - 31,
+                                            endOff + endChunk.size,
+                                            endOff + endChunk.size + 1
+                                            ]
+                        ) {
+                        if (i + ix <= j + jx) {
+                            root = CachedNode(cache, digest, Node());
+                            root.write(0, randomData);
+                            start := uint64(ix);
+                            size := uint64(jx - start);
+                            if (size > randomData.size) {
+                                cerr `XXX fixing $size to $(randomData.size)`;
+                                size = randomData.size;
+                            }
+                            cerr ` ---> writing to $start:$(start + size)\n`;
+                            slice := randomData.substr(0, size);
+                            root.write(start, slice);
+                            @assert(root.getContents() ==
+                                    randomData.substr(0, start) + slice +
+                                    (start + size < randomData.size ?
+                                        randomData.substr(start + size) :
+                                        EMPTY
+                                    )
+                                    );
+                        }
+                    }
+
+                    endOff += endChunk.size;
+                }
+            }
+
+            startOff += startChunk.size;
+        }
+    }
 
 # TODO:
 #   - create a directory and then a child node to verify that when we do

@@ -449,17 +449,7 @@ class CachedNode {
 
     ## Returns the total size of the node.
     @final uint64 getSize() {
-        # TODO: Store this information in the node as well as its children.
-        if (!(node.contents is null)) {
-            return node.contents.size;
-        } else if (node.children) {
-            uint64 sum;
-            for (child :in node.children)
-                sum += uint64(child.size);
-            return sum;
-        } else {
-            return 0;
-        }
+        return node.size;
     }
 
     @final String getContents() {
@@ -807,6 +797,10 @@ class CachedNode {
     ## greater than the size of the chunk, the caller must also write the next
     ## child.
     uint64 __writeChunkSuffix(Writer out, uint64 pos) {
+        # If the specified position is out of range, there's nothing to write.
+        if (pos >= node.size)
+            return node.size;
+
         if (node.contents) {
             out.write(Buffer(node.contents.buffer + pos,
                              node.contents.size - pos
@@ -871,6 +865,12 @@ class CachedNode {
             # Remove the child.
             __children.delete(index);
 
+            # If the entry itself only has one child, merge recursively.
+            if ((n := entry.getNode()).__populateChildren(false) &&
+                 n.__children.count() == 1
+                )
+                nextChild.mergeChild(0);
+
             # Split the new entry.
             newChild := nextChild.__maybeSplit();
             if (newChild) {
@@ -894,6 +894,12 @@ class CachedNode {
             # Remove the child.
             __children.delete(index);
 
+            # If the entry itself only has one child, merge recursively.
+            if ((n := entry.getNode()).__populateChildren(false) &&
+                 n.__children.count() == 1
+                )
+                prevChild.mergeChild(prevChild.__children.count() - 1);
+
             # Split the new entry.
             newChild := prevChild.__maybeSplit();
             if (newChild) {
@@ -902,6 +908,7 @@ class CachedNode {
                                   __makeUnnamedEntry(newChild, this)
                                   );
             }
+
             return false;
         }
     }
@@ -1020,13 +1027,17 @@ class CachedNode {
                 start = 0;
 
                 adjustedSpan := false;
-                if (mustMerge) {
+
+                # Before merging we have to verify that we have more than one
+                # child because this algorithm can leave us with just one
+                # remaining child.  We account for this in the merge - if
+                # we're merging a child that has only one child we recursively
+                # merge it.
+                if (mustMerge && __children.count() > 1) {
                     if (mergeChild(i)) {
                         # We merged with the _next_ child, so we have to adjust
                         # the span.
                         start = child.getSize();
-                        debug I`after merge: start = $start, spanSize = \
-                                $spanSize, amtDeleted = $amtDeleted`;
                         end = start + spanSize - amtDeleted;
                         adjustedSpan = true;
                     }
@@ -1048,7 +1059,6 @@ class CachedNode {
             }
         }
 
-        debug `leaving delete span`;
         return __children.count() == 1;
     }
 
@@ -1105,12 +1115,8 @@ class CachedNode {
 
         # Delete all nodes in the range.
         count := i - deleteStart;
-        debug `deleting $count nodes from $deleteStart to $i`;
-        while (count--) {
-            debug I`  deleting node of size \
-                   $(__children[deleteStart].getSize())`;
+        while (count--)
             __children.delete(deleteStart);
-        }
 
         node.size -= removedSize;
         return removedSize;
@@ -1150,6 +1156,7 @@ class CachedNode {
             for (child :in __children) {
                 if (pos < child.getSize()) {
                     extra := child.getNode().__insertChild(pos, node);
+                    child.fixSize();
                     if (extra) {
                         __children.insert(i, __makeUnnamedEntry(extra, this));
                     }
@@ -1172,6 +1179,7 @@ class CachedNode {
         if (extra) {
             __addTier();
             __children.append(__makeUnnamedEntry(extra, this));
+            node.size += extra.getSize();
         }
     }
 
@@ -1287,20 +1295,23 @@ class CachedNode {
             # Write beginning in the middle of a node with children.
 
             # Write the beginning of the first existing chunk.
-            debug `write pos is $pos`;
             start := __writeChunkPrefix(chunker, pos);
 
             # Write the data.
             chunker.write(data);
 
             # Find the node containing the end position (if any).
-            debug `writing suffix from $(pos + data.size)`;
             end := __writeChunkSuffix(chunker, pos + data.size);
+
+            # If we get an end position greater than the size, it just means
+            # that we would have to write the next chunk.  Since there is no
+            # next chunk, just adjust the size.
+            if (end > getSize())
+                end = getSize();
 
             chunker.flush();
 
             # Replace all of the chunks in the span.
-            debug `deleting span $start:$end`;
             delta := end - start;  orgSize := getContents().size;
             __deleteSpan(start, end);
             @assert(getContents().size == orgSize - delta);
@@ -1312,8 +1323,6 @@ class CachedNode {
                     else
                         return content.getRepr();
                 }
-                debug I`inserting chunk $(snippet(item)) of size \
-                        $(item.size) at pos $pos\n`;
                 __insert(pos, item);
                 pos += item.size;
             }
@@ -1613,6 +1622,7 @@ class CachedNode {
                 @assert(child.getNode().parent is this);
                 totalSize += child.getSize();
             }
+            @assert(node.size == totalSize);
 
             return totalSize;
         } else {
