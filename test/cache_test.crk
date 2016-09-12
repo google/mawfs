@@ -397,14 +397,6 @@ if (true) {
         root.write(boundary - 32, 'xx');
 
         contents := root.getContents();
-        cerr `first: $(snippet(randomData)) vs $(snippet(contents))\n`;
-        cerr I`boundary: $(snippet(randomData.substr(boundary - 32, 10))) ->
-               $(snippet(contents.substr(boundary - 32, 10)))\n`;
-        cerr I`secon: $(snippet(randomData.substr(chunks[0].size, 32))) \
-               $(snippet(contents.substr(chunks[0].size, 10)))\n`;
-        cerr I`third: $(snippet(randomData.substr(boundary))) ->
-                $(snippet(contents.substr(boundary)))\n`;
-        cerr `expected size = $(randomData.size) size = $(contents.size)\n`;
         root.verify();
         @assert(root.getContents() == randomData.substr(0, boundary - 32) +
                                       'xx' +
@@ -423,12 +415,15 @@ if (true) {
         const EMPTY := randomData.substr(0, 0);
         for (int i; i < chunks.count(); ++i) {
             startChunk := chunks[i];
+            int ixi;
             for (ix :in Array[int]![startOff, startOff + 1,
                                     startOff + startChunk.size - 32,
                                     startOff + startChunk.size - 31
                                     ]
                 ) {
-                cerr ` -----> start off = $startOff\n`;
+
+                cerr `$((i * 4 + ixi) * 100 / (chunks.count() * 4))% `;
+                ixi++;
                 endOff = 0;
                 for (int j; j < chunks.count(); ++j) {
                     endChunk := chunks[j];
@@ -444,11 +439,8 @@ if (true) {
                             root.write(0, randomData);
                             start := uint64(ix);
                             size := uint64(jx - start);
-                            if (size > randomData.size) {
-                                cerr `XXX fixing $size to $(randomData.size)`;
+                            if (size > randomData.size)
                                 size = randomData.size;
-                            }
-                            cerr ` ---> writing to $start:$(start + size)\n`;
                             slice := randomData.substr(0, size);
                             root.write(start, slice);
                             @assert(root.getContents() ==

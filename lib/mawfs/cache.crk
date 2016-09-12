@@ -824,7 +824,6 @@ class CachedNode {
 
                 # The end exceeds the size of the child - continue to the next
                 # child.
-                debug `must continue to next child`;
                 pos = base + childSize;
                 continueToNext = 1;
             }
@@ -979,23 +978,18 @@ class CachedNode {
     ## Delete a span from the tree.  Returns true of the node now has a single
     ## child and should be merged.
     bool __deleteSpan(uint64 start, uint64 end) {
-        debug `entering delete span`;
         if (node.contents) {
             if (start > node.contents.size) {
-                debug `leaving delete span`;
                 return false;
             } else if (start < node.contents.size && end < node.contents.size) {
-                debug `deleting middle of contents $start:$end`;
                 node.contents = node.contents.substr(0, start) +
                                 node.contents.substr(end);
             } else {
                 # Delete everything after start.
-                debug `deleting from $start`;
                 node.contents = node.contents.substr(0, start);
             }
             node.size = node.contents.size;
             dirty = true;
-            debug `leaving delete span`;
             return false;
         }
 
@@ -1004,11 +998,9 @@ class CachedNode {
         for (int i; i < __children.count() && end; ++i) {
             child := __children[i];
             childSize := child.getSize();
-            debug `considering child $i of size $childSize for $start:$end`;
 
             if (start == 0 && end >= childSize) {
                 # The entire child node must be deleted.
-                debug `popchild: deleting child $i of size $childSize`;
                 __children.delete(i);
                 node.size -= childSize;
                 dirty = true;
@@ -1016,8 +1008,6 @@ class CachedNode {
                 end -= childSize;
             } else if (start < childSize) {
                 # Part of the child must be deleted.
-                debug I`popchild: deleting span of size $(end - start) child \
-                        $i of size $childSize`;
                 mustMerge := child.getNode().__deleteSpan(start, end);
                 child.fixSize();
                 amtDeleted := childSize - child.getSize();
