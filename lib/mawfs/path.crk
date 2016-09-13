@@ -17,8 +17,8 @@ module;
 
 import crack.runtime ENOENT, ENOTDIR;
 import crack.fs Path, PathIter, PathStat;
-import crack.io FStr, SeekableReader, SeekableWriter, SEEK_CUR, SEEK_END,
-    SEEK_SET;
+import crack.io Formatter, FStr, SeekableReader, SeekableWriter, SEEK_CUR,
+    SEEK_END, SEEK_SET;
 import crack.lang Buffer, Exception, InvalidArgumentError, InvalidStateError,
     WriteBuffer, SystemError;
 import crack.logger debug;
@@ -264,7 +264,7 @@ class MAWFSPath : RWPath {
         o := MAWFSPath.cast(other);
         newParent := o.__parent;
         __parent.__rep.deleteChild(__name);
-        newParent.__rep.addChild(other.getName(), __rep.node);
+        newParent.__rep.addChild(other.getName(), __rep);
         o.__rep = __rep;
         __rep = null;
     }
@@ -301,6 +301,10 @@ class MAWFSPath : RWPath {
     void read(uint pos, WriteBuffer data) {
         __checkExists();
         __rep.read(pos, data);
+    }
+
+    void formatTo(Formatter out) {
+        out `Path for $__rep`;
     }
 }
 

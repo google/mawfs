@@ -538,8 +538,7 @@ class CachedNode {
 
     ## Internal add child method, which does everything but create a change
     ## record.
-    CachedNode __addChild(String name, Node node) {
-        child := CachedNode(__cache, null, node);
+    CachedNode __addChild(String name, CachedNode child) {
         child.parent = this;
 
         CachedEntry entry = {Entry(), child, this};
@@ -556,17 +555,22 @@ class CachedNode {
         return child;
     }
 
-    ## Add a new child node with the specified name.
-    CachedNode addChild(String name, Node node) {
-        child := __addChild(name, node);
+    ## Add a new child which is a CachedNode.
+    ## You should use this for adding children with cached descendants.
+    void addChild(String name, CachedNode child) {
+        __addChild(name, child);
 
         # Record the change in the journal.
         change := Change();
         change.type = CHANGE_ADD_CHILD;
         change.name = name;
-        change.node = node;
+        change.node = child.node;
         __recordChange(change);
+    }
 
+    ## Add a new child node with the specified name.
+    CachedNode addChild(String name, Node node) {
+        addChild(name, child := CachedNode(__cache, null, node));
         return child;
     }
 
@@ -1435,7 +1439,7 @@ class CachedNode {
 
     void __applyChange(Change change) {
         if (change.type == CHANGE_ADD_CHILD) {
-            __addChild(change.name, change.node);
+            __addChild(change.name, CachedNode(__cache, null, change.node));
         } else if (change.type == CHANGE_DELETE_CHILD) {
             if (!__populateChildren(false) || !__children.delete(change.name))
                 throw InvalidStateError(
@@ -1530,6 +1534,7 @@ class CachedNode {
         } else if (node.children) {
 
             WriteBuffer frame = {null, 0, 0};
+            @assert(__populateChildren(false));
             for (child :in __children) {
                 if (pos < child.getSize()) {
 
