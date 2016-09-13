@@ -41,6 +41,8 @@ class TestFailure : Exception {
 
 @abstract class TestCase {
 
+    bool failed;
+
     ## Deletes the backing directory and returns it.
     Path deleteBacking() {
         backing := makePath('backing');
@@ -80,7 +82,7 @@ class TestFailure : Exception {
             rc = Process(StringArray!['fusermount', '-u', 'fs']).run();
         }
 
-        if (rc != CRK_PROC_EXITED) {
+        if (rc != CRK_PROC_EXITED || failed) {
             cerr `fusermount failed`;
             cerr `$(makePath('mawfs.log').readAll())\n`;
         }
@@ -102,10 +104,12 @@ class TestFailure : Exception {
             cerr `ok\n`;
         } catch (TestFailure ex) {
             cerr `FAILED\n\t$(ex.text)\n`;
+            failed = true;
         } catch (Exception ex) {
             sleep(1);
             cerr `FAILED\n`;
             cerr `$ex\n`;
+            failed = true;
         }
         tearDown();
     }
