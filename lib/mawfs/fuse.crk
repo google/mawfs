@@ -181,8 +181,8 @@ int _getattr(byteptr path, Stat stbuf)
 }
 
 int _readdir(byteptr path, voidptr buf,
-             function[int, voidptr, byteptr, Stat, uintz] filler,
-             uintz offset,
+             function[int, voidptr, byteptr, Stat, uint64] filler,
+             uint64 offset,
              FuseFileInfo fi
              ) {
     info `in readdir($path, buf, filler, $offset, $fi)`;
@@ -233,7 +233,7 @@ int _open(byteptr path, FuseFileInfo fi) {
     }
 }
 
-int _read(byteptr path, byteptr buf, uintz size, uintz offset,
+int _read(byteptr path, byteptr buf, uintz size, uint64 offset,
           FuseFileInfo fi
           ) {
     info `in read($path, buf, $size, $offset, $fi)`;
@@ -252,7 +252,7 @@ int _read(byteptr path, byteptr buf, uintz size, uintz offset,
     }
 }
 
-int _write(byteptr path, byteptr buf, uintz size, uintz offset,
+int _write(byteptr path, byteptr buf, uintz size, uint64 offset,
            FuseFileInfo fi
            ) {
     info `in write($path, buf, $size, $offset, $fi)`;
@@ -311,12 +311,12 @@ int _truncateCommon(byteptr path, uintz size) {
     }
 }
 
-int _truncate(byteptr path, uintz size) {
+int _truncate(byteptr path, uint64 size) {
     info `in truncate($path, $size)`;
     return _truncateCommon(path, size);
 }
 
-int _ftruncate(byteptr path, uintz size, FuseFileInfo fi) {
+int _ftruncate(byteptr path, uint64 size, FuseFileInfo fi) {
     info `in ftruncate($path, $size)`;
     return _truncateCommon(path, size);
 }
