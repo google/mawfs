@@ -1059,8 +1059,19 @@ class CachedNode {
     ## Delete a range of bytes from the file.  This should only be applied to
     ## the toplevel node of a file.
     void deleteSpan(uint64 start, uint64 end) {
-        if (__deleteSpan(start, end))
-            __stealChildren(__children[0].getNode());
+        if (__deleteSpan(start, end)) {
+            # We need to collapse a level.
+            firstChild := __children[0].getNode();
+            if (firstChild.node.contents) {
+                # The child is a content node, steal its contents.
+                node.contents = firstChild.node.contents;
+                node.size = node.contents.size;
+                __children = null;
+                node.children = null;
+            } else {
+                __stealChildren(firstChild);
+            }
+        }
 
         __markDirty();
     }
