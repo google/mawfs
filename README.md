@@ -7,7 +7,7 @@ currently very much in development, but still somewhat usable in that it
 preseents a FUSE filesystem around an encrypted backing store.
 
 MAWFS is written in [Crack.](http://crack-lang.org)  If you want to play with
-it, you'll need to install crack 0.12.
+it, you'll need to install crack 0.13.1.
 
 Usage Example
 -------------
