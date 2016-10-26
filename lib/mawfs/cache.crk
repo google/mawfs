@@ -28,7 +28,14 @@ import crack.strutil StringArray;
 import mawfs.blockstore Entry, Change, JournalIter, Node, NodeStore, MODE_DIR;
 import mawfs.chunker RabinChunker, DEFAULT_WINDOW_SIZE;
 
-@import crack.ann assert, impl;
+@import crack.ann assert, impl, struct;
+
+String snippet(String content) {
+    if (content.size > 10)
+        return content.substr(0, 10).getRepr();
+    else
+        return content.getRepr();
+}
 
 # Allow initial blocks of up to one meg.
 const DEFAULT_MAX_CONTENT_SIZE := 1024 * 1024;
@@ -119,7 +126,8 @@ class CachedNode {
     ## The parent node (the directory that this node is in).
     CachedNode parent;
 
-    uint64 verify();
+    class VerifyReport;
+    VerifyReport verify();
 
     ## Gets the node's mode.
     @final int getMode() {
@@ -1128,48 +1136,64 @@ class CachedNode {
     }
 
     CachedNode __insertChild(uint64 pos, CachedNode node) {
-        # This only works on a node with children.
+        # This only works on inner nodes.
         @assert(__populateChildren(false));
+        @assert(pos <= this.node.size);
         int i;
 
         dirty = true;
 
-        if (!__children || pos == this.node.size) {
-            # Deal with the cases of inserting at the end and the case where
-            # the entire contents has been deleted. This can currently happen
+        if (!__children) {
+            # Deal with the case of an empty node. This can currently happen
             # only in the case where the entire contents of a toplevel node
-            # are being replaced.
-            # TODO: this needs to change when the __delete* functions do the
-            # right thing and return a content node.
+            # are being replaced.  XXX I don't think this can happen in this
+            # case, even.
             __children.append(__makeUnnamedEntry(node, this));
         } else if (__children[0].getNode().isContentNode()) {
             # The children are content nodes, directly insert.
-            for (child :in __children) {
-                if (!pos) {
-                    __children.insert(i, __makeUnnamedEntry(node, this));
-                    break;
-                } else {
-                    @assert(pos >= child.getSize());
-                }
 
-                pos -= child.getSize();
-                ++i;
+            # Shortcut if we're inserting at the end.
+            if (pos == this.node.size) {
+                __children.append(__makeUnnamedEntry(node, this));
+            } else {
+                # Find the child to insert after.
+                for (child :in __children) {
+                    if (!pos) {
+                        __children.insert(i, __makeUnnamedEntry(node, this));
+                        break;
+                    } else {
+                        @assert(pos >= child.getSize());
+                    }
+
+                    pos -= child.getSize();
+                    ++i;
+                }
             }
         } else {
             # Inner node, recurse.
-            int i = 1;
-            for (child :in __children) {
-                if (pos < child.getSize()) {
-                    extra := child.getNode().__insertChild(pos, node);
-                    child.fixSize();
-                    if (extra) {
-                        __children.insert(i, __makeUnnamedEntry(extra, this));
-                    }
-                    break;
-                }
 
-                pos -= child.getSize();
-                ++i;
+            # See if we're inserting at the end.
+            if (pos == this.node.size) {
+                child := __children[-1];
+                extra := child.getNode().__insertChild(child.getSize(), node);
+                child.fixSize();
+                if (extra)
+                    __children.append(__makeUnnamedEntry(extra, this));
+            } else {
+                int i = 1;
+                for (child :in __children) {
+                    if (pos < child.getSize()) {
+                        extra := child.getNode().__insertChild(pos, node);
+                        child.fixSize();
+                        if (extra) {
+                            __children.insert(i, __makeUnnamedEntry(extra, this));
+                        }
+                        break;
+                    }
+
+                    pos -= child.getSize();
+                    ++i;
+                }
             }
         }
 
@@ -1246,7 +1270,9 @@ class CachedNode {
             # Empty node.
 
             # We don't have to mix in with anything.
-            chunker.writeZeros(pos);
+            # XXX actually, we should be mixing in with the last page for the
+            # pos == node.size case.
+            chunker.writeZeros(pos - node.size);
             chunker.write(data);
             chunker.flush();
 
@@ -1323,12 +1349,6 @@ class CachedNode {
             @assert(getContents().size == orgSize - delta);
             pos = start;
             for (item :in writer.items) {
-                String snippet(String content) {
-                    if (content.size > 10)
-                        return content.substr(0, 10).getRepr();
-                    else
-                        return content.getRepr();
-                }
                 __insert(pos, item);
                 pos += item.size;
             }
@@ -1579,7 +1599,12 @@ class CachedNode {
         return buffer.size;
     }
 
-    uint64 verify() {
+    @struct VerifyReport {
+        uint64 size;
+        uint depth;
+    }
+
+    VerifyReport verify() {
 
         # If the node isn't dirty, verify that we have a correct digest.
         if (!dirty) {
@@ -1587,26 +1612,32 @@ class CachedNode {
             @assert(digest == __cache.store.makeDigest(node));
         }
 
-        # XXX add something to verify tree depth.
         if (node.contents) {
             @assert(node.contents.size == node.size);
             @assert(node.contents.size <= __cache.maxContentSize);
-            return node.contents.size;
+            return VerifyReport(node.contents.size, 1);
         } else if (node.children) {
             @assert(__populateChildren(false));
             @assert(node.children.count() == __children.count());
             uint64 totalSize;
+            uint depth = 0;
             for (child :in __children) {
-                @assert(child.getSize() == child.getNode().verify());
+                childReport := child.getNode().verify();
+                @assert(child.getSize() == childReport.size);
                 @assert(child.getParent() is this);
                 @assert(child.getNode().parent is this);
-                totalSize += child.getSize();
+                totalSize += childReport.size;
+                if (depth) {
+                    @assert(depth == childReport.depth);
+                } else {
+                    depth = childReport.depth;
+                }
             }
             @assert(node.size == totalSize);
 
-            return totalSize;
+            return VerifyReport(totalSize, depth + 1);
         } else {
-            return 0;
+            return VerifyReport(0, 1);
         }
     }
 

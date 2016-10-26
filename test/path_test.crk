@@ -19,6 +19,7 @@ import crack.logger debug, setLogLevel, DEBUG;
 import mawfs.path MAWFSPath;
 import mawfs.memstore MemNodeStore;
 import mawfs.cache Cache, CachedNode;
+import mawfs.testutil makeRandomData;
 
 @import crack.ann assert;
 
@@ -51,7 +52,27 @@ dir.makeDir();
 truncated := root/'truncated';
 truncated.writeAll('here is some data');
 truncated.truncate(4);
-debug `contents = $(truncated.readAll())`;
 @assert(truncated.readAll() == 'here');
+
+
+if (true) {
+    data := String(makeRandomData(), true);
+    i := 0;
+    dst := (root/'bigfile').writer();
+    src := (root/'bigfile').reader();
+    while (i < data.size) {
+        size := data.size - i;
+        size = (size >= 4096) ? 4096 : size;
+        dst.write(orgData := data.substr(i, size));
+
+        @assert(src.read(size) == orgData)
+
+        i += 4096;
+    }
+    dst = null;
+    src = null;
+
+    @assert(data.size == (root/'bigfile').getSize());
+}
 
 cerr `ok\n`;
