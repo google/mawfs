@@ -673,8 +673,12 @@ class CachedNode {
             # Content node.  Just return the new child as the extra node,
             # parent will append.
             return child;
-        } else if (__children[0].getNode().node.children is null) {
+        } else if (!__children ||
+                   __children[0].getNode().node.children is null) {
             # The children of this node are content nodes, append here.
+            # (we do the check for !__children because it's possible to end up
+            # in an intermediate state with no children.  grrrr... broken
+            # invariants)
             __children.append(ent := __makeUnnamedEntry(child, this));
             node.size += ent.getSize();
             @assert(ent.getParent() is this);
@@ -1212,41 +1216,19 @@ class CachedNode {
         }
     }
 
-#    class __NodeBlock {
-#        Array[CachedNode] nodes = {};
-#        uint64 start, size;
-#    }
-#
-#    ## Returns the lower tier (nodes near the leafs) for the range of
-#    ## positions.  Having this allows us to replace all of the contents in
-#    ## this tier with a simple linear sweep.
-#    void __getLowerTier(__NodeBlock tier, uint64 start, uint64 end) {
-#        if (__children && (child := __children[0].getNode()).node.contents) {
-#            tier.nodes.append(this);
-#            tier.childSize
-#            return 0;
-#        } else if (__children) {
-#            uint64 childStart;
-#            uint64 childEnd;
-#            bool recordedStart;
-#            for (child :in __children) {
-#                childEnd += child.getSize();
-#                if (start < childEnd && end > childStart) {
-#                    child.getNode().__getLowerTier(tier, start - childStart,
-#                                                   end - childStart
-#                                                   );
-#
-#                    if (!recordedStart) {
-#                        tier.start = childStart + tier.start;
-#                        recordedStart = true;
-#                    }
-#                }
-#                childStart += child.getSize();
-#                if (childStart > end)
-#                    break;
-#            }
-#        }
-#    }
+    ## Write the last chunk to out, return the start position of the chunk.
+    uint64 __writeLastChunk(Writer out) {
+        if (isContentNode()) {
+            out.write(node.contents);
+            return 0;
+        } else {
+            @assert(__children);
+            uint64 start;
+            lastChild := __children[-1];
+            offset := lastChild.getNode().__writeLastChunk(out);
+            return offset + getSize() - lastChild.getSize();
+        }
+    }
 
     ## Write data to a file at 'pos'.
     ##
@@ -1263,16 +1245,12 @@ class CachedNode {
         ListWriter writer = {};
         RabinChunker chunker = {writer};
 
-        if (node.children is null && !node.contents ||
-             pos == node.size
-            ) {
+        if (node.children is null && !node.contents) {
 
             # Empty node.
 
             # We don't have to mix in with anything.
-            # XXX actually, we should be mixing in with the last page for the
-            # pos == node.size case.
-            chunker.writeZeros(pos - node.size);
+            chunker.writeZeros(pos - getSize());
             chunker.write(data);
             chunker.flush();
 
@@ -1317,9 +1295,18 @@ class CachedNode {
         } else if (pos >= getSize()) {
             # We're writing after the end, just append.
 
+            # Start with the last chunk (we will likely need to extend it).
+            start := __writeLastChunk(chunker);
+
+            # Write the new data.
             chunker.writeZeros(pos - getSize());
             chunker.write(data);
             chunker.flush();
+
+            # Remove the last chunk. Note:  This can break the "no empty inner
+            # nodes" invariant in cases where a node has a single child (which
+            # also breaks an invariant...)
+            __deleteSpan(start, getSize());
 
             for (item :in writer.items)
                 append(item);

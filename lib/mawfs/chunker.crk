@@ -43,33 +43,17 @@ class RabinFingerprinter {
     # mod q.
     uint accum;
 
-    ## Seeds the data window and accumulator from 'src'.
-    void seed(Buffer src) {
-        # Clear everything out first.
-        accum = 0;
-        data.size = data.cap;
-
-        int i;
-        for (i = 0; i < src.size && i < data.size; ++i) {
-            data.buffer[i] = src[i];
-            accum = ((accum << 8) + src[i]) % q;
-        }
-        pos = i >= data.size ? 0 : i;
-
-        # Clear out the remainder of the data area.
-        for (; i < data.size; ++i)
+    ## Clear the data buffer and reset the position to zero.
+    void reset() {
+        for (int i; i < data.size; ++i)
             data.buffer[i] = 0;
-    }
-
-    oper init(Buffer src) {
-        seed(src);
+        pos = 0;
     }
 
     oper init() {
         # Clear the history ring.
         data.size = data.cap;
-        for (int i; i < data.size; ++i)
-            data.buffer[i] = 0;
+        reset();
     }
 
     ## Calculate the oldest term of the polynomial from the byte.
@@ -144,7 +128,7 @@ class RabinChunker @impl Writer {
     void __writeChunk(uintz chunkSize) {
         __rep.write(Buffer(__buffer.buffer, chunkSize));
         __buffer.compact(chunkSize);
-        __fp.seed(__buffer);
+        __fp.reset();
     }
 
     void write(Buffer data) {

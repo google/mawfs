@@ -31,23 +31,13 @@ buf := makeRandomData();
 # Make sure we can move the window backwards and forwards.  (We don't
 # really use backwards, this is just a sanity check of the math.
 if (true) {
-    RabinFingerprinter fp = {buf};
+    RabinFingerprinter fp = {};
+    fp.add(Buffer(buf.buffer, fp.data.size));
     orgAccum := fp.accum;
     fp.add(buf[fp.data.size + 1]);
     @assert(fp.accum != orgAccum);
     fp.shiftBack(buf[0]);
     @assert(fp.accum == orgAccum);
-}
-
-# Verify that seeding produces the same result as multiple adds.
-if (true) {
-    RabinFingerprinter fp1 = {buf};
-    RabinFingerprinter fp2 = {''};
-
-    for (int i = 0; i < fp2.data.cap; ++i)
-        fp2.add(buf.buffer[i]);
-
-    @assert(fp1.accum == fp2.accum);
 }
 
 Array[uintz] sizes = {};

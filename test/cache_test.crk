@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import crack.cmdline CmdOptions, Option, CMD_BOOL;
 import crack.enc.base64 altEncode;  # For debugging hash values.
 import crack.cont.array Array;
 import crack.hash.sha256 SHA256;
@@ -26,6 +27,14 @@ import mawfs.cache Cache, CachedNode;
 import mawfs.testutil copy, makeRandomData;
 
 @import crack.ann assert, impl;
+
+opts := CmdOptions![
+    Option('fast', 'f', 'Run only fast tests', 'false', CMD_BOOL)
+];
+opts.parse();
+
+fastTests := opts.getBool('fast');
+
 
 Node makeFileNode(String contents, int32 mode) {
     node := Node();
@@ -404,7 +413,7 @@ if (true) {
                 );
     }
 
-    if (true) {
+    if (!fastTests) {
         cerr `boundary tests\n`;
         # Test the exciting boundary conditions for all existing chunks.
         # failed at 2170, 17614, 63393, 66881, 66903
@@ -478,6 +487,30 @@ if (true) {
                  randomData.substr(0, randomData.size - 1000)
                 );
     }
+}
+
+cerr `appends merge last chunk\n`;
+if (true) {
+    # Write the entire buffer in one fell swoop.
+    randomData := String(makeRandomData(), true);
+    root := CachedNode(cache, digest, Node());
+    root.write(0, randomData);
+    chunks := root.getChunks();
+    contents := root.getContents();
+
+    # Now write it one page at a time.
+    root = CachedNode(cache, digest, Node());
+    uint64 i = 0;
+    while (i < randomData.size) {
+        size := randomData.size - i;
+        size = (size > 4096) ? 4096 : size;
+        root.write(i, randomData.substr(i, size));
+        i += 4096;
+    }
+
+    # Chunking should be the same.
+    @assert(contents == root.getContents());
+    @assert(chunks == root.getChunks());
 }
 
 # TODO:
