@@ -1431,9 +1431,13 @@ class CachedNode {
             # Commit all dirty children and reconstruct the child list for the
             # underlying node.
             for (child :in __children) {
-                # XXX I think if 'child.node' is null we almost certainly do't
-                # have to load it so we can commit it...  and we shouldn't be
-                # invoking it without checking it.
+                # If there's no child node, it's safe to ignore this child
+                # because it can't be dirty.
+                if (!child.node) {
+                    @assert(child.getDigest());
+                    continue;
+                }
+
                 dig := child.node.commit();
                 curDigest := child.getDigest();
                 if (!curDigest || curDigest != dig)

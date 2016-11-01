@@ -553,9 +553,34 @@ if (true) {
     commitDigest = nodeStore.getHead('master');
     commit = nodeStore.getCommit(commitDigest);
     cache.baselineCommit = commitDigest;
-    root = CachedNode(cache, commit.root, nodeStore.getNode(commit.root));#
+    root = CachedNode(cache, commit.root, nodeStore.getNode(commit.root));
     root.replayJournal();
     @assert(root.getContents() == randomData);
+}
+
+cerr `commit of unmaterialized node\n`;
+if (true) {
+    cache = Cache(nodeStore, 'master', digest);
+    root := CachedNode(cache, digest, Node());
+
+    # Store an initial commit.
+    commit := Commit();
+    commit.root = digest;
+    commitDigest := nodeStore.storeCommit(commit);
+    nodeStore.setHead('master', commitDigest);
+
+    # Add some content.
+    root.addChild('a', makeFileNode('contents of a', 0));
+    root.addChild('b', makeFileNode('contents of b', 0));
+    root.commitTree();
+
+    # reload.
+    commitDigest = nodeStore.getHead('master');
+    commit = nodeStore.getCommit(commitDigest);
+    root = CachedNode(cache, commit.root, nodeStore.getNode(commit.root));
+
+    root.addChild('c', makeFileNode('contents of c', 0));
+    root.commitTree();
 }
 
 # TODO:
