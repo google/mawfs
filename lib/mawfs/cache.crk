@@ -1131,57 +1131,6 @@ class CachedNode {
         __markDirty();
     }
 
-    ## Delete all chunks between start and end.
-    ## Returns true if the node now has only a single child (and thus the
-    ## should be merged with a sibling).
-    ## XXX doesn't work, removedSize can't be calculated given this signature.
-    ## XXX THis is obsolete at this point, see __deleteSpan() instead.
-    bool __deleteContentNodes(uint64 start, uint64 end) {
-        if (node.contents)
-            return false;
-
-        uint64 base, removedSize;
-        uint deleteStart = __children.count();
-        uint i;
-        for (child :in __children) {
-            if (base >= end)
-                # Passed the end of the range.
-                break;
-
-            if (base >= start) {
-                # We're in range.
-
-                # Mark the start index if we don't have one.
-                if (i < deleteStart)
-                    deleteStart = i;
-
-                # Recurse on all children.
-                removedSize +=
-                    uint64(child.getNode().__deleteContentNodes(start - base,
-                                                                end - base
-                                                                ) ? 1 : 0
-                           );
-
-            }
-
-            base += child.getSize();
-
-            # We're want 'i' to be the index of the node after the last child
-            # to be deleted, so we only update it if we're still in range and
-            # the entire child node can be deleted.
-            if (base < end)
-                ++i;
-        }
-
-        # Delete all nodes in the range.
-        count := i - deleteStart;
-        while (count--)
-            __children.delete(deleteStart);
-
-        node.size -= removedSize;
-        return removedSize;
-    }
-
     CachedNode __insertChild(uint64 pos, CachedNode node) {
         # This only works on inner nodes.
         @assert(__populateChildren(false));
