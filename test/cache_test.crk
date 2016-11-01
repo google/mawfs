@@ -21,7 +21,7 @@ import crack.protobuf ProtoWriter;
 import crack.cont.hashmap HashMap;
 import crack.lang AppendBuffer, ManagedBuffer;
 import crack.logger debug, setLogLevel, DEBUG;
-import mawfs.blockstore Entry, Node, NodeStore, MODE_DIR;
+import mawfs.blockstore Commit, Entry, Node, NodeStore, MODE_DIR;
 import mawfs.memstore MemNodeStore;
 import mawfs.cache Cache, CachedNode;
 import mawfs.testutil copy, makeRandomData;
@@ -349,6 +349,14 @@ if (true) {
 
 if (true) {
     cerr `writes into the middle of a file.\n`;
+
+    # Store an initial commit.  This test does a lot of writes, and the
+    # journal quickly grows to 16M, so commits happen.
+    commit := Commit();
+    commit.root = digest;
+    commitDigest := nodeStore.storeCommit(commit);
+    nodeStore.setHead('master', commitDigest);
+
     root := CachedNode(cache, digest, Node());
     randomData := String(makeRandomData(), true);
     root.write(0, randomData);
@@ -489,6 +497,17 @@ if (true) {
     }
 }
 
+## Writes 'data' into 'node' one small chunk at a time.
+void writeChunked(CachedNode node, String data, uint64 chunkSize) {
+    uint64 i = 0;
+    while (i < data.size) {
+        size := data.size - i;
+        size = (size > chunkSize) ? chunkSize : size;
+        node.write(i, data.substr(i, size));
+        i += chunkSize;
+    }
+}
+
 cerr `appends merge last chunk\n`;
 if (true) {
     # Write the entire buffer in one fell swoop.
@@ -500,17 +519,43 @@ if (true) {
 
     # Now write it one page at a time.
     root = CachedNode(cache, digest, Node());
-    uint64 i = 0;
-    while (i < randomData.size) {
-        size := randomData.size - i;
-        size = (size > 4096) ? 4096 : size;
-        root.write(i, randomData.substr(i, size));
-        i += 4096;
-    }
+    writeChunked(root, randomData, 4096);
 
     # Chunking should be the same.
     @assert(contents == root.getContents());
     @assert(chunks == root.getChunks());
+}
+
+import crack.io Formatter;
+void writeChunks(Formatter out, Array[String] chunks) {
+    for (chunk :in chunks)
+        out `$(chunk.size), `;
+    cerr `\n`;
+}
+
+cerr `verify auto-commit\n`;
+if (true) {
+    root := CachedNode(cache, digest, Node());
+
+    # Store an initial commit.
+    commit := Commit();
+    commit.root = digest;
+    commitDigest := nodeStore.storeCommit(commit);
+    nodeStore.setHead('master', commitDigest);
+
+    cache.maxJournalSize = 4096;
+    randomData := String(makeRandomData());
+    writeChunked(root, randomData, 1024);
+    @assert(cache.store.getJournalSize('master') < 4096);
+    @assert(root.getContents() == randomData);
+
+    # Verify that we can load it back up.
+    commitDigest = nodeStore.getHead('master');
+    commit = nodeStore.getCommit(commitDigest);
+    cache.baselineCommit = commitDigest;
+    root = CachedNode(cache, commit.root, nodeStore.getNode(commit.root));#
+    root.replayJournal();
+    @assert(root.getContents() == randomData);
 }
 
 # TODO:

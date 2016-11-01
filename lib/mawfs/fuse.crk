@@ -145,15 +145,7 @@ class Context {
     }
 
     void commit() {
-        newRoot := __fs.cachedRoot.commit();
-        Commit commit = {};
-        commit.root = newRoot;
-        commit.parent_append(__fs.getHead());
-
-        __fs.setHead(commitDigest := __fs.store.storeCommit(commit));
-        __fs.cache.recordCommit(commitDigest);
-        info I`commit: digest = $(altEncode(commitDigest)), \
-               new root = $(altEncode(commit.root))`;
+        __fs.cachedRoot.commitTree();
     }
 }
 

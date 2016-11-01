@@ -130,6 +130,16 @@ class MemNodeStore @impl NodeStore {
         return __JIter(arr ? arr.iter() : null);
     }
 
+    uint getJournalSize(String branch) {
+        journal := __journal.get(branch);
+        if (!journal)
+            return 0;
+        uint total;
+        for (elem :in journal)
+            total += elem.size;
+        return total;
+    }
+
     String writeToJournal(String branch, Change change) {
         arr := __journal.get(branch);
         if (!arr)

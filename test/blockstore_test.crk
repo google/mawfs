@@ -19,8 +19,9 @@ try {
     testRoot.makeDirs();
     store := ChunkStore(testRoot, FSInfo('01234567890123456789012345678901'));
 
-    # Verify that a branch starts out as null.
+    # Verify that a branch starts out as null and with an empty journal.
     @assert(store.getHead('master') is null);
+    @assert(!store.getJournalSize('master'));
 
     # Verify that we can store and retrieve a value.
     store.setHead('master', 'head digest');
@@ -35,6 +36,8 @@ try {
         }
     }
 
+    @assert(store.getJournalSize('foo') > 4);
+
     int i = 0;
     for (entry :in store.makeJournalIter('foo')) {
         if (entry.change.type != i)
@@ -47,6 +50,7 @@ try {
         cerr `Expected 4 changes, got $i\n`;
 
     store.deleteJournal('foo');
+    @assert(!store.getJournalSize('foo'));
     for (change :in store.makeJournalIter('foo'))
         cerr `Got change in deleted journal!\n`;
 

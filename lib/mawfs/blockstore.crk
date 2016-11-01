@@ -295,11 +295,15 @@ class ChangeEntry {
     ## the change.
     @abstract String writeToJournal(String branch, Change change);
 
-    ## Delete the journal for a node.
+    ## Delete the journal for a branch.
     @abstract void deleteJournal(String branch);
 
     ## Return an iterator over the journal
     @abstract JournalIter makeJournalIter(String branch);
+
+    ## Returns the size of the journal, or rather, the size of all of the
+    ## changes in it.
+    @abstract uint getJournalSize(String branch);
 }
 
 ## Lets you store and load chunks from a persistent back-end.
@@ -482,6 +486,14 @@ class ChunkStore @impl NodeStore {
         if (!src.exists())
             return __NullJIter();
         return __JIter(src.reader(), __fsInfo);
+    }
+
+    uint getJournalSize(String branch) {
+        src := __dir/'journals'/branch;
+        if (!src.exists())
+            return 0;
+        else
+            return uint(src.getSize());
     }
 
     Array[String] getJournalEntries(String digest) {

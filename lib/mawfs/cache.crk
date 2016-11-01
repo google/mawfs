@@ -23,9 +23,10 @@ import crack.cont.array Array;
 import crack.lang cmp, AppendBuffer, AssertionError, Buffer, Exception,
     InvalidArgumentError, InvalidStateError, KeyError, ManagedBuffer,
     WriteBuffer, makeHashVal;
-import crack.logger debug, error;
+import crack.logger debug, error, info;
 import crack.strutil StringArray;
-import mawfs.blockstore Entry, Change, JournalIter, Node, NodeStore, MODE_DIR;
+import mawfs.blockstore Entry, Change, Commit, JournalIter, Node, NodeStore,
+    MODE_DIR;
 import mawfs.chunker RabinChunker, DEFAULT_WINDOW_SIZE;
 
 @import crack.ann assert, impl, struct;
@@ -40,6 +41,7 @@ String snippet(String content) {
 # Allow initial blocks of up to one meg.
 const DEFAULT_MAX_CONTENT_SIZE := 1024 * 1024;
 const DEFAULT_MAX_CHILDREN := 256;
+const DEFAULT_MAX_JOURNAL_SIZE := 16 * 1024 * 1024;
 
 const int32
     ## Add child (contains a Node and a name)
@@ -58,12 +60,19 @@ const int32
 class Cache {
     NodeStore store;
 
+    ## The digest of the last commit.  Changes in the journal are relative to
+    ## this.
     String baselineCommit;
+
+    ## The digest of the last change.
     String lastChange;
+
+    ## The name of the branch.  "master" is the default branch.
     String branch;
 
     uint maxContentSize = DEFAULT_MAX_CONTENT_SIZE;
     uint maxChildren = DEFAULT_MAX_CHILDREN;
+    uint maxJournalSize = DEFAULT_MAX_JOURNAL_SIZE;
 
     oper init(NodeStore store, String branch, String baselineCommit) :
         store = store,
@@ -78,6 +87,11 @@ class Cache {
             change.commit = baselineCommit;
         }
         lastChange = store.writeToJournal(branch, change);
+    }
+
+    ## Returns true if the caller should commit.
+    @final bool shouldCommit() {
+        return store.getJournalSize(branch) >= maxJournalSize;
     }
 
     @final String storeNode(Node node) {
@@ -536,12 +550,34 @@ class CachedNode {
         path.append(int32(i));
     }
 
+    CachedNode getRoot();
+    String commit();
+
+    ## Commit the entire tree and record a commit object.
+    void commitTree() {
+        info `committing on branch $(__cache.branch).`;
+        newRootDigest := getRoot().commit();
+        Commit commit = {};
+        commit.root = newRootDigest;
+        commit.parent_append(__cache.store.getHead(__cache.branch));
+
+        __cache.store.setHead(__cache.branch,
+                              commitDigest := __cache.store.storeCommit(commit))
+                              ;
+        __cache.recordCommit(commitDigest);
+        info I`commit: digest = $(altEncode(commitDigest)), \
+               new root = $(altEncode(commit.root))`;
+        size := getSize();
+    }
+
     ## Record a change in the journal for this node or for the appropriate
     ## parent node if this node doesn't have a digest yet.
     void __recordChange(Change change) {
         change.path = Array[int32]();
         __makePath(change.path);
         __cache.addChange(change);
+        if (__cache.shouldCommit())
+            commitTree();
     }
 
     ## Internal add child method, which does everything but create a change
@@ -852,6 +888,13 @@ class CachedNode {
         return base + continueToNext;
     }
 
+    ## Returns the children array, throwing an AssertionError if this is not
+    ## an inner node.
+    @final __ChildArray __getChildren() {
+        @assert(__populateChildren(false));
+        return __children;
+    }
+
     ## Merge the child at the specified index with its nearest sibling.
     ## Returns true if we merged with the next child, false if we merged with
     ## the previous child.
@@ -872,7 +915,7 @@ class CachedNode {
 
             nextChildEntry := __children[index + 1];
             nextChild := nextChildEntry.getNode();
-            nextChild.__children.insert(0, entry);
+            nextChild.__getChildren().insert(0, entry);
             nextChild.node.size += entry.getSize();
             nextChildEntry.fixSize();
             entry.setParent(nextChild);
@@ -882,7 +925,7 @@ class CachedNode {
 
             # If the entry itself only has one child, merge recursively.
             if ((n := entry.getNode()).__populateChildren(false) &&
-                 n.__children.count() == 1
+                 n.__getChildren().count() == 1
                 )
                 nextChild.mergeChild(0);
 
@@ -901,7 +944,7 @@ class CachedNode {
 
             prevChildEntry := __children[index - 1];
             prevChild := prevChildEntry.getNode();
-            prevChild.__children.append(entry);
+            prevChild.__getChildren().append(entry);
             prevChild.node.size += entry.getSize();
             prevChildEntry.fixSize();
             entry.setParent(prevChild);
@@ -911,9 +954,9 @@ class CachedNode {
 
             # If the entry itself only has one child, merge recursively.
             if ((n := entry.getNode()).__populateChildren(false) &&
-                 n.__children.count() == 1
+                 n.__getChildren().count() == 1
                 )
-                prevChild.mergeChild(prevChild.__children.count() - 1);
+                prevChild.mergeChild(prevChild.__getChildren().count() - 1);
 
             # Split the new entry.
             newChild := prevChild.__maybeSplit();
@@ -1222,7 +1265,7 @@ class CachedNode {
             out.write(node.contents);
             return 0;
         } else {
-            @assert(__children);
+            @assert(__populateChildren(false));
             uint64 start;
             lastChild := __children[-1];
             offset := lastChild.getNode().__writeLastChunk(out);
@@ -1384,12 +1427,17 @@ class CachedNode {
         if (!dirty)
             return digest;
 
-        if (__children) {
+        if (__populateChildren(false)) {
             # Commit all dirty children and reconstruct the child list for the
             # underlying node.
             for (child :in __children) {
-                if (!child.getDigest())
-                    child.setDigest(dig := child.node.commit());
+                # XXX I think if 'child.node' is null we almost certainly do't
+                # have to load it so we can commit it...  and we shouldn't be
+                # invoking it without checking it.
+                dig := child.node.commit();
+                curDigest := child.getDigest();
+                if (!curDigest || curDigest != dig)
+                    child.setDigest(dig);
             }
         }
 
