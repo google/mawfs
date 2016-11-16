@@ -25,6 +25,7 @@ import mawfs.blockstore Commit, Entry, Node, NodeStore, MODE_DIR;
 import mawfs.memstore MemNodeStore;
 import mawfs.cache Cache, CachedNode;
 import mawfs.testutil copy, makeRandomData;
+import mawfs.memtrace Tracer;
 
 @import crack.ann assert, impl;
 
@@ -265,10 +266,11 @@ if (false) {
     root.write(25000, data);
 }
 
-CachedNode makeSmallFileTree() {
-    cache := Cache(nodeStore, 'master', digest);
-    cache.maxChildren = 3;
-    CachedNode root = {cache, digest, Node()};
+CachedNode makeSmallFileTree(Cache cache) {
+    Cache c;
+    c = cache ? cache : Cache(nodeStore, 'master', digest);
+    c.maxChildren = 3;
+    CachedNode root = {c, digest, Node()};
     root.append('alpha');
     root.append('bravo');
     root.append('charlie');
@@ -278,10 +280,15 @@ CachedNode makeSmallFileTree() {
     return root;
 }
 
+CachedNode makeSmallFileTree() { return makeSmallFileTree(null) }
+
 # Unit tests for node merge.
 if (true) {
     cerr `delete nodes\n`;
-    root := makeSmallFileTree();
+    cache = Cache(nodeStore, 'master', digest);
+    tracer := Tracer();
+    tracer.instrument(cache);
+    root := makeSmallFileTree(cache);
 
     # The root should have two children, one with three content nodes and one
     # with two.
@@ -297,13 +304,24 @@ if (true) {
 
     root.verify();
 
-    root = makeSmallFileTree();
+    cache = Cache(nodeStore, 'master', digest);
+    tracer = Tracer();
+    tracer.instrument(cache);
+    root = makeSmallFileTree(cache);
 
     root.deleteNode(10); # Delete "charlie".
     root.deleteNode(10); # Delete "delta".
+    root.verify();
 
     @assert(root.getChildCount() == 3);
     @assert(root.getContents() == 'alphabravoecho');
+
+    root.commit();
+    initRSize := root.getRSize();
+    cache.garbageCollect(initRSize);
+    root.traverseResident(tracer.makeVisitor());
+    @assert(!tracer.hasLeaks());
+    @assert(root.getRSize() < initRSize);
 }
 
 if (true) {

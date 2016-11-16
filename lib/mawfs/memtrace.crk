@@ -1,0 +1,79 @@
+## Tools for tracing objects to verify that we're not leaking memory.
+
+import crack.cont.hashmap HashMap;
+import crack.functor Functor1, Function1;
+import crack.logger debug, error;
+import mawfs.cache Cache, CachedNode;
+
+@import crack.ann impl;
+
+## A Tracer is bound to a cache's object create/destroy callbacks with the
+## 'instrument()' method and unbinds itself on destruction.
+class Tracer {
+
+    ## Map to keep track of which objects are currently in mmemory.
+    HashMap[uintz, bool] __map = {};
+
+    ## The cache we are bound to.
+    Cache __cache;
+
+    alias CacheObj = Cache.Obj;
+
+    class __CreateCallback @impl Functor1[void, CacheObj] {
+        HashMap[uintz, bool] __map;
+        oper init(HashMap[uintz, bool] map) : __map = map {}
+
+        void oper call(Cache.Obj obj) {
+            __map[uintz(obj)] = true
+        }
+    }
+
+    class __DestroyCallback @impl Functor1[void, CacheObj] {
+        HashMap[uintz, bool] __map;
+        oper init(HashMap[uintz, bool] map) : __map = map {}
+
+        void oper call(CacheObj obj) {
+            __map.delete(uintz(obj))
+        }
+    }
+
+    class Visitor @impl Functor1[void, CachedNode] {
+        HashMap[uintz, bool] __map;
+        oper init(HashMap[uintz, bool] map) : __map = map {}
+
+        void oper call(CachedNode obj) {
+            __map.delete(uintz(obj));
+        }
+    }
+
+    void instrument(Cache cache) {
+        cache.onObjCreate = __CreateCallback(__map);
+        cache.onObjDestroy = __DestroyCallback(__map);
+        __cache = cache;
+    }
+
+    Visitor makeVisitor() { return Visitor(__map) }
+
+    ## Report on the objects remaining in the map.  This should be called
+    ## after completing a traverseResident() on the tree with a visitor
+    ## obtained from makeVisitor().
+    ## Returns true if the map is empty, false if there are leaks.
+    bool hasLeaks() {
+        if (__map) {
+            for (item :in __map)
+                error `Leaked item $(item.key)`;
+
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    oper del() {
+        if (__cache) {
+            __cache.onObjCreate = null;
+            __cache.onObjDestroy = null;
+        }
+    }
+}
+

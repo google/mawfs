@@ -20,14 +20,17 @@ import crack.cont.hashmap HashMap;
 import crack.io.fmtutil Indenter;
 import crack.io Formatter, FStr, Writer;
 import crack.cont.array Array;
+import crack.functor Functor1;
 import crack.lang cmp, AppendBuffer, AssertionError, Buffer, Exception,
     InvalidArgumentError, InvalidStateError, KeyError, ManagedBuffer,
     WriteBuffer, makeHashVal;
 import crack.logger debug, error, info;
 import crack.strutil StringArray;
+import crack.time Time;
 import mawfs.blockstore Entry, Change, Commit, JournalIter, Node, NodeStore,
     MODE_DIR;
 import mawfs.chunker RabinChunker, DEFAULT_WINDOW_SIZE;
+import mawfs.dllist DLList;
 
 @import crack.ann assert, impl, struct;
 
@@ -38,10 +41,14 @@ String snippet(String content) {
         return content.getRepr();
 }
 
+const MEG := 1024 * 1024;
+
 # Allow initial blocks of up to one meg.
-const DEFAULT_MAX_CONTENT_SIZE := 1024 * 1024;
+const DEFAULT_MAX_CONTENT_SIZE := MEG;
 const DEFAULT_MAX_CHILDREN := 256;
-const DEFAULT_MAX_JOURNAL_SIZE := 16 * 1024 * 1024;
+const DEFAULT_MAX_JOURNAL_SIZE := 16 * MEG;
+const DEFAULT_GC_THRESHOLD := 128 * MEG;
+const DEFAULT_GC_BOTTOM := 16 * MEG;
 
 const int32
     ## Add child (contains a Node and a name)
@@ -73,6 +80,36 @@ class Cache {
     uint maxContentSize = DEFAULT_MAX_CONTENT_SIZE;
     uint maxChildren = DEFAULT_MAX_CHILDREN;
     uint maxJournalSize = DEFAULT_MAX_JOURNAL_SIZE;
+
+    ## Cache size where we start doing GC.
+    uint gcThreshold = DEFAULT_GC_THRESHOLD;
+
+    ## Cache size where we stop doing GC.
+    uint gcBottom = DEFAULT_GC_BOTTOM;
+
+    ## A cached object.
+    @abstract class Obj {
+        Obj next, prev;
+
+        ## Returns true if the object can be safely released from the cache.
+        @abstract bool disposable();
+
+        ## Release the object so it can be freed from memory.
+        @abstract void release();
+
+        ## Returns the resident size of the object.
+        @abstract uintz getRSize();
+    }
+
+    ## Callbacks to be invoked on object creation and destruction.  These are
+    ## intended for instrumentation purposes so we can verify that there have
+    ## been no memory leaks.
+    Functor1[void, Obj] onObjCreate, onObjDestroy;
+
+    ## The least recently used list.  The first object on the list is the
+    ## least recently used, the last is the most recently used.  Objects are
+    ## removed from the head when we do garbage collection.
+    DLList[Obj] __oldest = {};
 
     oper init(NodeStore store, String branch, String baselineCommit) :
         store = store,
@@ -115,6 +152,42 @@ class Cache {
         lastChange = null;
         baselineCommit = commit;
     }
+
+    ## Adds a new object as the most recently used.
+    @final void addObj(Obj obj) {
+        @assert(!obj.next && !obj.prev);
+        __oldest.append(obj);
+    }
+
+    ## Release the object from the LRU queue.
+    @final void releaseObj(Obj obj) {
+        __oldest.remove(obj);
+    }
+
+    ## Bring an object to the end of the least recently used queue.
+    @final void touch(Obj obj) {
+        if (!(__oldest.tail is obj)) {
+            __oldest.remove(obj);
+            __oldest.append(obj);
+        }
+    }
+
+    ## Run garbage collection.  'amount' is the number of bytes that we want
+    ## to release.
+    void garbageCollect(uintz amount) {
+        Obj cur = __oldest.head;
+        uintz amountPruned;
+        while (cur && amountPruned < amount) {
+            if (cur.disposable()) {
+                amountPruned += cur.getRSize();
+                tmp := cur;
+                cur = cur.next;
+                tmp.release();
+            } else {
+                cur = cur.next;
+            }
+        }
+    }
 }
 
 class CachedNode;
@@ -123,7 +196,7 @@ class CachedNode;
 CachedNode _makeCachedNode(CachedNode parent, Cache cache, String digest);
 
 ## Wraps a Node object with caching functionality.
-class CachedNode {
+class CachedNode : Cache.Obj {
     Cache __cache;
 
     String digest;
@@ -137,7 +210,11 @@ class CachedNode {
     ## operation (in which case they should have no digest and be dirty).
     bool dirty;
 
-    ## The parent node (the directory that this node is in).
+    ## The parent node (the directory if this is a directory or top-level
+    ## file node, an intermediate node for anything else).  Note that this
+    ## introduces a reference cycle, so you need to call release() on a node
+    ## to break this cycle (and also to remove the node from the LRU queue in
+    ## the cache).
     CachedNode parent;
 
     class VerifyReport;
@@ -154,6 +231,12 @@ class CachedNode {
 
     @final uint64 getSize();
 
+    ## Manages caching for an Entry record and the associated child node.
+    ##
+    ## Invariants:
+    ## - 1:1 relationship between CachedEntry and its parent.  The parent must
+    ##   have the cached entry in its children list and the entry must only be
+    ##   in one parent's children list.  This must be enforced by CachedNode.
     class CachedEntry {
         Entry entry;
         Cache __cache;
@@ -225,6 +308,14 @@ class CachedNode {
         ## Set the size in the entry to the size of the referenced node.
         @final void fixSize() {
             entry.size = getNode().getSize();
+        }
+
+        ## Release the node (if any) allowing it to be GCed.
+        @final void releaseNode() {
+            if (node) {
+                node.release();
+                node = null;
+            }
         }
 
         void formatTo(Formatter out) {
@@ -378,12 +469,26 @@ class CachedNode {
     # are accessed or when __populateChildren() is called.
     __ChildArray __children;
 
+    ## Moves the node to the back of the least-recently-used queue.  Should
+    ## be called all public and all recursive functions that references the
+    ## node.
+    @final void __touched() { __cache.touch(this) }
+
     ## digest should be null for a new node.
     oper init(Cache cache, String digest, Node node) :
         __cache = cache,
         digest = digest,
         node = node,
         dirty = !digest {
+
+        __cache.addObj(this);
+        if (__cache.onObjCreate)
+            __cache.onObjCreate(this);
+    }
+
+    oper del() {
+        if (__cache.onObjDestroy)
+            __cache.onObjDestroy(this);
     }
 
     ## Allocate __children array to mirror the values in node.children.
@@ -396,6 +501,119 @@ class CachedNode {
         # Create an array of children to mirror that of node.children,
         # initialize all elements to null.
         __children = __ChildArray(node.children);
+
+        __touched();
+    }
+
+    ## Returns true if the object is disposable, meaning that it doesn't need
+    ## to be memory resident.  A CachedNode is disposable if it is not dirty
+    ## and has no children.
+    bool disposable() {
+        if (dirty) {
+            return false;
+        }
+
+        # Non-dirty node without children is disposable.
+        if (!__children)
+            return true;
+
+        for (child :in __children) {
+            if (child.node) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    ## Release the cached node from the cache, allowing it to be deleted.
+    void release() {
+
+        # Due to a bug in crack up to 0.13.1, we can end up releasing this
+        # object in the releaseObj() method below (nothing guarantees that a
+        # parameter remains in existence for the life of the function).
+        # The assignment to temporary keeps 'this' from being gc'ed.
+        temp := this;
+
+        # Remove the node from its parent.
+        if (parent && parent.__children) {
+            for (child :in parent.__children) {
+                if (child.node is this) {
+                    child.node = null;
+                    break;
+                }
+            }
+        }
+
+        __cache.releaseObj(this);
+        if (__children) {
+            # Releasing the children breaks all cyclic links to the parent.
+            for (child :in __children)
+                child.releaseNode();
+            __children = null;
+        }
+    }
+
+    ## Returns the "resident size" of the node.  This is an approximation of
+    ## the memory size of the node and all of its descendents that are loaded
+    ## into memory.
+    uintz getRSize() {
+        # TODO: Implement sizeof in crack, convert to real sizeof.  This sucks.
+        class End : VTableBase {}
+        class Sizer : CachedNode, End {
+            oper init() : CachedNode(null, null, null) {}
+        }
+        class StringSizer : String, End {}
+        class NodeSizer : Node, End {}
+        class ChildArraySizer : __ChildArray, End {
+            oper init() : __ChildArray(null) {}
+        }
+        class EntryArraySizer : Array[Entry], End {}
+        class Ptr { voidptr p; }
+        class PtrSizer : Ptr, End {}
+        class EntrySizer : Entry, End {}
+        class CachedEntrySizer : CachedEntry, End {
+            oper init() : CachedEntry(null, null, null) {}
+        }
+        uintz sizeof(End end) { return uintz(end) }
+        stringSize := sizeof(StringSizer.unsafeCast(null));
+        ptrSize := sizeof(PtrSizer.unsafeCast(null));
+        sz := sizeof(Sizer.unsafeCast(null));
+        if (digest)
+            sz += stringSize + digest.size;
+
+        # Add the node size.
+        sz += sizeof(NodeSizer.unsafeCast(null));
+        if (!(node.contents is null))
+            sz += stringSize + node.contents.size;
+
+        # Add the child array.
+        if (!(node.children is null)) {
+            sz += sizeof(EntryArraySizer.unsafeCast(null));
+            sz += sizeof(PtrSizer.unsafeCast(null)) * node.children.count();
+            sz += sizeof(EntrySizer.unsafeCast(null)) * node.children.count();
+            for (child :in node.children) {
+                if (child.hash)
+                    sz += stringSize + child.hash.size;
+                if (child.name)
+                    sz += stringSize + child.name.size;
+            }
+        }
+
+        if (!(__children is null)) {
+            sz += sizeof(ChildArraySizer.unsafeCast(null));
+            sz += ptrSize * __children.count();
+            for (child :in __children) {
+                if (child) {
+                    sz += sizeof(CachedEntrySizer.unsafeCast(null)) *
+                          __children.count();
+                    if (child.node)
+                        sz += child.node.getRSize();
+                }
+            }
+        }
+
+        return sz;
     }
 
     ## Allocate the __children scaffold and populate with the child entries
@@ -446,12 +664,14 @@ class CachedNode {
     ## Get a child by its index.  Throw IndexError if the index is out of
     ## range.  Return null if we are unable to retrieve the node.
     CachedNode getChild(uint index) {
+        __touched();
         cachedEntry := __getChildEntry(index);
         return cachedEntry.getNode();
     }
 
     ## Returns the name of a child.
     String getChildName(uint index) {
+        __touched();
         cachedEntry := __getChildEntry(index);
         return cachedEntry.getName();
     }
@@ -459,6 +679,7 @@ class CachedNode {
     ## Get the child with the given name.  Returns null if there is no such
     ## child.
     @final CachedNode getChild(String name) {
+        __touched();
         if (!__populateChildren(false))
             return null;
         child := __children.get(name);
@@ -471,10 +692,12 @@ class CachedNode {
 
     ## Returns the total size of the node.
     @final uint64 getSize() {
+        __touched();
         return node.size;
     }
 
     @final String getContents() {
+        __touched();
         if (!(node.contents is null)) {
             return node.contents;
         } else if (node.children != null) {
@@ -492,6 +715,7 @@ class CachedNode {
     ## Returns all ccontent leaf nodes of a given node.  This method is really
     ## just for testing/debugging purposes.
     @final StringArray getChunks() {
+        __touched();
         if (!(node.contents is null))
             return StringArray![node.contents];
 
@@ -503,7 +727,7 @@ class CachedNode {
     }
 
     ## Returns true if this is a content node (a leaf).
-    @final bool isContentNode() { return node.contents }
+    @final bool __isContentNode() { return node.contents }
 
     ## Returns the CachedEntry for the child wrapping the node.  Returns
     ## 'null' if undefined.
@@ -516,8 +740,9 @@ class CachedNode {
         return null;
     }
 
-    ## Mark the node as diry and do the same for all parent nodes.
+    ## Mark the node as dirty and do the same for all parent nodes.
     void __markDirty() {
+        __touched();
 
         # Find the child in the parent and invalidate all instances.
         if (parent) {
@@ -530,6 +755,10 @@ class CachedNode {
     }
 
     void __makePath(Array[int32] path) {
+        # Even though this function is recursive, we don't need to touch it -
+        # it's upward recursive so the node should already have been touched
+        # and we don't want to force it to most recently used like
+        # __markDirty().
         if (!parent)
             return;
 
@@ -552,9 +781,11 @@ class CachedNode {
 
     CachedNode getRoot();
     String commit();
+    void garbageCollect();
 
     ## Commit the entire tree and record a commit object.
     void commitTree() {
+        # We don't need to __touched(), we're about to call commit().
         info `committing on branch $(__cache.branch).`;
         newRootDigest := getRoot().commit();
         Commit commit = {};
@@ -568,6 +799,10 @@ class CachedNode {
         info I`commit: digest = $(altEncode(commitDigest)), \
                new root = $(altEncode(commit.root))`;
         size := getSize();
+
+        # After commit is the best time to run garbage collection because
+        # there are no dirty nodes.
+        garbageCollect();
     }
 
     ## Record a change in the journal for this node or for the appropriate
@@ -602,6 +837,7 @@ class CachedNode {
     ## Add a new child which is a CachedNode.
     ## You should use this for adding children with cached descendants.
     void addChild(String name, CachedNode child) {
+        __touched();
         __addChild(name, child);
 
         # Record the change in the journal.
@@ -614,6 +850,7 @@ class CachedNode {
 
     ## Add a new child node with the specified name.
     CachedNode addChild(String name, Node node) {
+        # we don't call __touched() because this addChild() does.
         addChild(name, child := CachedNode(__cache, null, node));
         return child;
     }
@@ -621,6 +858,7 @@ class CachedNode {
     ## Delete the named child and return true, or return false if the child
     ## doesn't exist.
     bool deleteChild(String name) {
+        # We don't __touched() because the object is going to be marked dirty.
         if (!__populateChildren(true))
             return false;
         if (!__children.delete(name))
@@ -638,11 +876,14 @@ class CachedNode {
 
     ## Returns the number of children in the node.
     uint getChildCount() {
+        __touched();
         return node.children ? node.children.count() : 0;
     }
 
     ## Returns the root of the cached filesystem.
     CachedNode getRoot() {
+        # We don't call __touched() because in this case, we're not interested
+        # in the object.
         if (!parent)
             return this;
         else
@@ -651,6 +892,7 @@ class CachedNode {
 
     ## Returns the cache object for the node.
     Cache getCache() {
+        # We don't __touched() because we're not interested in the object.
         return __cache;
     }
 
@@ -705,6 +947,8 @@ class CachedNode {
     ## intermediate node.  Otherwise return null.
     ## 'child' must be a content node.
     CachedNode __appendChild(CachedNode child) {
+        __touched();
+        # XXX why does this not mark the node as dirty?
         if (!__populateChildren(false)) {
             # Content node.  Just return the new child as the extra node,
             # parent will append.
@@ -758,8 +1002,12 @@ class CachedNode {
 
     ## Steal and reparent the child array from 'other'.
     void __stealChildren(CachedNode other) {
+        # XXX why does this not mark the node as dirty?
+        # Don't modify other.node - in some cases we steal the entire node as
+        # well as its children.
         __children = other.__children;
         node.children = other.__children.getRep();
+        node.size = other.node.size;
         for (child :in __children)
             child.setParent(this);
         other.__children = null;
@@ -771,7 +1019,7 @@ class CachedNode {
         @assert(__populateChildren(false));
 
         # Create a new node to hold the existing children.
-        firstChild := CachedNode(__cache, null, node);
+        firstChild := CachedNode(__cache, null, Node());
         firstChild.__stealChildren(this);
 
         # Create a new node with a child array.
@@ -784,8 +1032,8 @@ class CachedNode {
     }
 
     ## Append a new content string to the end of the tree.
-    ## XXX this code probably doesn't work with persistence.
     void append(String contents) {
+        # We don't __touched() because __appendChild() does.
         newNode := __makeNode(contents);
         cached := CachedNode(__cache, null, newNode);
         extra := __appendChild(cached);
@@ -813,6 +1061,7 @@ class CachedNode {
             }
             __children.append(ent := __makeUnnamedEntry(extra, this));
             node.size += ent.getSize();
+            __markDirty();
             # XXX we need to "maybeSplit" after this and then do the same
             # switch we did above.
         }
@@ -821,6 +1070,7 @@ class CachedNode {
     ## Write the beginning of the chunk containing 'pos' up to 'pos'.
     ## Returns the
     uint64 __writeChunkPrefix(Writer out, uint64 pos) {
+        __touched();
 
         # If we've got contents, write the beginning of the contents.
         if (node.contents) {
@@ -849,6 +1099,7 @@ class CachedNode {
     ## greater than the size of the chunk, the caller must also write the next
     ## child.
     uint64 __writeChunkSuffix(Writer out, uint64 pos) {
+        __touched();
         # If the specified position is out of range, there's nothing to write.
         if (pos >= node.size)
             return node.size;
@@ -895,7 +1146,10 @@ class CachedNode {
         return __children;
     }
 
-    ## Merge the child at the specified index with its nearest sibling.
+    ## Merge the child at the specified index with its nearest sibling.  The
+    ## child must have exactly one child of its own which will be inserted or
+    ## appended into the next or previous sibling.
+    ##
     ## Returns true if we merged with the next child, false if we merged with
     ## the previous child.
     ##
@@ -918,7 +1172,11 @@ class CachedNode {
             nextChild.__getChildren().insert(0, entry);
             nextChild.node.size += entry.getSize();
             nextChildEntry.fixSize();
+
+            # Reparent the entry and remove it from its parent (we we can just
+            # set __children to null since its an only child).
             entry.setParent(nextChild);
+            node.__children = null;
 
             # Remove the child.
             __children.delete(index);
@@ -928,6 +1186,9 @@ class CachedNode {
                  n.__getChildren().count() == 1
                 )
                 nextChild.mergeChild(0);
+
+            # Release the node now that we're done with it.
+            node.release();
 
             # Split the new entry.
             newChild := nextChild.__maybeSplit();
@@ -947,7 +1208,11 @@ class CachedNode {
             prevChild.__getChildren().append(entry);
             prevChild.node.size += entry.getSize();
             prevChildEntry.fixSize();
+
+            # Reparent the entry and remove it from its parent (we we can just
+            # set __children to null since its an only child).
             entry.setParent(prevChild);
+            node.__children = null;
 
             # Remove the child.
             __children.delete(index);
@@ -957,6 +1222,9 @@ class CachedNode {
                  n.__getChildren().count() == 1
                 )
                 prevChild.mergeChild(prevChild.__getChildren().count() - 1);
+
+            # Release the node now that we're done with it.
+            node.release();
 
             # Split the new entry.
             newChild := prevChild.__maybeSplit();
@@ -981,10 +1249,11 @@ class CachedNode {
             int64 childSize;
             if (pos < child.getSize()) {
                 # Delete this node or one of its children.
-                if (child.getNode().isContentNode()) {
+                if (child.getNode().__isContentNode()) {
                     # The child is a content node.  Remove it.
                     childSize = int64(child.getSize());
                     __children.delete(index);
+                    child.node.release();
                 } else {
                     # The child is an intermediate node, have it remove the
                     # appropriate content node.
@@ -1024,6 +1293,7 @@ class CachedNode {
             cachedNode := __children[0].getNode();
             node = cachedNode.node;
             __stealChildren(cachedNode);
+            cachedNode.release();
             if (parent) {
                 entry := parent.__getChildEntry(this);
                 entry.setCachedNode(this);
@@ -1065,6 +1335,7 @@ class CachedNode {
                 dirty = true;
                 --i;
                 end -= childSize;
+                child.releaseNode();
             } else if (start < childSize) {
                 # Part of the child must be deleted.
                 mustMerge := child.getNode().__deleteSpan(start, end);
@@ -1126,12 +1397,15 @@ class CachedNode {
             } else {
                 __stealChildren(firstChild);
             }
+
+            firstChild.release();
         }
 
         __markDirty();
     }
 
     CachedNode __insertChild(uint64 pos, CachedNode node) {
+        __touched();
         # This only works on inner nodes.
         @assert(__populateChildren(false));
         @assert(pos <= this.node.size);
@@ -1145,7 +1419,7 @@ class CachedNode {
             # are being replaced.  XXX I don't think this can happen in this
             # case, even.
             __children.append(__makeUnnamedEntry(node, this));
-        } else if (__children[0].getNode().isContentNode()) {
+        } else if (__children[0].getNode().__isContentNode()) {
             # The children are content nodes, directly insert.
 
             # Shortcut if we're inserting at the end.
@@ -1210,7 +1484,7 @@ class CachedNode {
 
     ## Write the last chunk to out, return the start position of the chunk.
     uint64 __writeLastChunk(Writer out) {
-        if (isContentNode()) {
+        if (__isContentNode()) {
             out.write(node.contents);
             return 0;
         } else {
@@ -1530,6 +1804,7 @@ class CachedNode {
     }
 
     uint read(uint64 pos, WriteBuffer buffer) {
+        __touched();
         if (pos > node.size)
             return 0;
 
@@ -1585,6 +1860,15 @@ class CachedNode {
         }
 
         return buffer.size;
+    }
+
+    void garbageCollect() {
+        totalSize := getRoot().getRSize();
+        if (totalSize > __cache.gcThreshold) {
+            info I`running garbage collection (total size $totalSize \
+                   threshold = $(__cache.gcThreshold)`;
+            __cache.garbageCollect(__cache.gcThreshold - __cache.gcBottom);
+        }
     }
 
     @struct VerifyReport {
@@ -1645,6 +1929,17 @@ class CachedNode {
                  entries: $__children\n`;
         --indent;
         indent `}`;
+    }
+
+    ## Pre-order traverse all resident nodes in the tree.
+    void traverseResident(Functor1[void, CachedNode] callback) {
+        callback(this);
+        if (__children) {
+            for (child :in __children) {
+                if (child.node)
+                    child.node.traverseResident(callback);
+            }
+        }
     }
 }
 
