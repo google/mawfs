@@ -1,0 +1,209 @@
+## This module implements AES-SIV mode, which is basically AES-CTR with
+## a Synthetic Initialization Vector. See RFC-5297 for details.
+##
+## SIV is particularly relevant for MAWFS because encrypted blocks are
+## content-addressable, and therefore the ciphertext needs to be stable.
+##
+## Synopsis
+## --------
+##
+##     key := '32 byte key1234567890123456789012';
+##     # "ad" is additional data that affects the initialization vector.
+##     # It can safely be null.
+##     ad := Array[String]!['blech', 'blah'];
+##     ciper := SIVCipher(key, ad);
+##     ciphertext := cipher.encrypt('No one may see this!');
+##     plaintext := cipher.decrypt(ciphertext);
+
+import crack.cont.array Array;
+import crack.ext._ssl EVP_aes_128_cbc, EVP_aes_128_ctr, CMACContext,
+    EVPCipherContext;
+import crack.io cerr, Writer;
+import crack.lang free, ManagedBuffer;
+
+@import crack.ann assert;
+
+## Computes the Cipher-based Message Authentication Code (see RFC-4493).
+String computeCMAC(String key, String plaintext) {
+    @assert(key.size == 16);
+    ctx := CMACContext();
+    ctx.init(key.buffer, key.size, EVP_aes_128_cbc(), null);
+    ctx.update(plaintext.buffer, plaintext.size);
+    ManagedBuffer result = {16};
+    tempSize := array[int](1);
+    ctx.final(result.buffer, tempSize);
+
+    @assert(tempSize[0] == 16);
+    free(tempSize);
+    result.size = 16;
+    return String(result, true);
+}
+
+## XORs string b with the end of string a.  'a' must be at least as long as
+## 'b'.
+String xorEnd(String a, String b) {
+    @assert(a.count() >= b.count());
+    ManagedBuffer result = {a.size};
+    start := a.size - b.size;
+
+    # Copy over the beginning of a.
+    result.move(0, a.buffer, start);
+
+    # Xor in b.
+    for (int i = 0; i < b.size; ++i)
+        result.buffer[start + i] = a[start + i] ^ b[i];
+
+    return String(result, true);
+}
+
+## Pads 'val' to be 16 bytes.  'val' must be no more than 16 bytes long.
+String pad(String val) {
+    if (val.size == 16)
+        return val;
+
+    @assert(val.size < 16);
+    return val + '\x80' + String(15 - val.size, 0);
+}
+
+## Xors 'a' with 'b'.  They must be the same length.
+String xor(String a, String b) {
+    @assert(a.size == b.size);
+
+    ManagedBuffer result = {a.size};
+    for (int i; i < a.size; ++i)
+        result.buffer[i] = a[i] ^ b[i];
+    result.size = a.size;
+    return String(result, true);
+}
+
+## Returns the bitwise "and" of 'a' and 'b'.  They must be the same length.
+String bitand(String a, String b) {
+    @assert(a.size == b.size);
+    ManagedBuffer result = {a.size};
+    for (int i; i < a.size; ++i)
+        result.buffer[i] = a[i] & b[i];
+    return String(result, true);
+}
+
+## Performs the SIV "doubling" operation on 'val'.   Roughly speaking, this is
+## a single bit left shift, if the high-bit was 1 xors the last byte with
+## 0x87.
+String double(String val) {
+    @assert(val.size == 16);
+    ManagedBuffer result = {16};
+    bool carryBit;
+    for (int i = 15; i >= 0; --i) {
+        result.buffer[i] = byte((val[i] << 1) | (carryBit ? 1 : 0));
+        carryBit = val[i] & 0x80;
+    }
+    if (carryBit)
+        result.buffer[15] = result.buffer[15] ^ 0x87;
+    result.size = 16;
+    return String(result, true);
+}
+
+const ONE := String(15, 0) + '\x01';
+const ZERO := String(16, 0);
+
+## Compute the "string to vector" value based on AES.
+## Key must be 16 bytes (128 bits).
+String computeS2V(String key, Array[String] inputs) {
+    if (!inputs)
+        return computeCMAC(key, ONE);
+    D := computeCMAC(key, ZERO);
+    String t;
+
+    for (int i = 0; i < inputs.count() - 1; ++i)
+        D = xor(double(D), computeCMAC(key, inputs[i]));
+
+    final := inputs[-1];
+    if (final.count() > 16)
+        t = xorEnd(final, D);
+    else
+        t = xor(double(D), pad(final));
+
+    return computeCMAC(key, t);
+}
+
+const COUNTER_CONST :=
+    '\xff\xff\xff\xff\xff\xff\xff\xff' # 64 bits of 1
+    '\x7f\xff\xff\xff'                 # 1 zero bit, 31 bits of 1
+    '\x7f\xff\xff\xff';                # 1 zero bit, 31 bits of 1
+
+## Encapsulates an encryption key and additional data vector, providing
+## methods for encrypting and decrypting with them.
+class SIVCipher {
+
+    Array[String] __ad;
+    String __k1, __k2;
+
+    ## key: The encryption key, must be 32 bytes long.
+    ## ad: Associated data.  This is stored in the instance, and must not be
+    ##     muated by the caller afterwards.  May be null if there is no
+    ##     associated data.
+    oper init(String key, Array[String] ad) : __ad = ad {
+        @assert(key.size == 32);
+        __k1 = key.slice(0, 16);
+        __k2 = key.slice(16);
+    }
+
+    Array[String] __getS2VData(String plaintext) {
+        s2vData := __ad ? __ad.clone() : Array[String](1);
+        s2vData.append(plaintext);
+        return s2vData;
+    }
+
+    ## Returns the encrypted form of 'plaintext'.
+    ## 'ad' may be null.
+    String encrypt(String plaintext) {
+        s2vData := __getS2VData(plaintext);
+        vec := computeS2V(__k1, s2vData);
+
+        # Do AES on the plaintext.
+        counter := bitand(vec, COUNTER_CONST);
+        cipher := EVPCipherContext();
+        cipher.encryptInit(EVP_aes_128_ctr(), null, __k2.buffer, counter.buffer);
+        ManagedBuffer result = {plaintext.size};
+        resultSize := array[int](1);
+        cipher.encryptUpdate(result.buffer, resultSize,
+                            plaintext.buffer, plaintext.size
+                            );
+        cipher.encryptFinal(result.buffer + resultSize[0], resultSize);
+        free(resultSize);
+        result.size = plaintext.size;
+
+        return vec + String(result, true);
+    }
+
+    ## Returns the decrypted plaintext of 'ciphertext'.  Returns null if the
+    ## key or additional data is not the same as that used to encrypt
+    ## 'ciphertext'.
+    String decrypt(String ciphertext) {
+        @assert(ciphertext.size > 16);
+        iv := ciphertext.slice(0, 16);
+        content := ciphertext.slice(16);
+        counter := bitand(iv, COUNTER_CONST);
+
+        ManagedBuffer result = {ciphertext.size};
+
+        cipher := EVPCipherContext();
+        resultSize := array[int](1);
+        cipher.decryptInit(EVP_aes_128_ctr(), null, __k2.buffer,
+                           counter.buffer);
+        cipher.decryptUpdate(result.buffer, resultSize,
+                             content.buffer, content.size
+                             );
+        cipher.decryptFinal(result.buffer + resultSize[0], resultSize);
+        free(resultSize);
+        result.size = content.size;
+
+        # Verify.
+        resultStr := String(result, true);
+        s2vData := __getS2VData(resultStr);
+        expectedIV := computeS2V(__k1, s2vData);
+        if (expectedIV != iv)
+            return null;
+        else
+            return resultStr;
+    }
+}
