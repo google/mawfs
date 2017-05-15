@@ -1,0 +1,45 @@
+
+import crack.cont.array Array;
+import crack.io cerr;
+import mawfs.aes_siv computeCMAC, computeS2V, SIVCipher;
+
+@import crack.ann assert;
+
+if (true) {
+    cmacEmpty :=
+        '\x88\x14\xe8\xe6' '\xbe\x4f\x29\x8f' '\x91\xbd\xe0\x23'
+        '\x0f\x58\x64\xa5';
+    cmacZero :=
+        '\xf8\xbd\xaf\xdc' '\x95\x0a\xd6\xc5' '\xae\x22\x1d\xd0'
+        '\x1e\xd4\xa2\x52';
+
+    @assert(computeCMAC('12345678abcdefgh', '') == cmacEmpty);
+    @assert(computeCMAC('12345678abcdefgh', String(16, 0)) == cmacZero);
+}
+
+# RFC Example A.1.
+if (true) {
+    k :=
+        '\xff\xfe\xfd\xfc' '\xfb\xfa\xf9\xf8' '\xf7\xf6\xf5\xf4'
+        '\xf3\xf2\xf1\xf0' '\xf0\xf1\xf2\xf3' '\xf4\xf5\xf6\xf7'
+        '\xf8\xf9\xfa\xfb' '\xfc\xfd\xfe\xff';
+
+    ad :=
+        '\x10\x11\x12\x13' '\x14\x15\x16\x17' '\x18\x19\x1a\x1b' '\x1c\x1d\x1e\x1f'
+        '\x20\x21\x22\x23' '\x24\x25\x26\x27';
+
+    plain := '\x11\x22\x33\x44' '\x55\x66\x77\x88' '\x99\xaa\xbb\xcc' '\xdd\xee';
+    finalCMAC := '\x85\x63\x2d\x07' '\xc6\xe8\xf3\x7f' '\x95\x0a\xcd\x32'
+                '\x0a\x2e\xcc\x93';
+    finalCipherText := '\x40\xc0\x2b\x96' '\x90\xc4\xdc\x04' '\xda\xef\x7f\x6a'
+                       '\xfe\x5c';
+
+    data := Array[String]![ad, plain];
+    @assert(computeS2V(k.substr(0, 16), data) == finalCMAC);
+    crypt := SIVCipher(k, Array[String]![ad]);
+    ciphertext := crypt.encrypt(plain);
+    @assert(ciphertext == finalCMAC + finalCipherText);
+    @assert(crypt.decrypt(ciphertext) == plain);
+}
+
+cerr `ok\n`;
