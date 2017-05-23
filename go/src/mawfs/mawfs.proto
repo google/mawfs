@@ -1,0 +1,92 @@
+
+// A filesystem entry.  Nodes can either be directories or blobs.
+// Directories have a mode of MODE_DIR and their entries all have name
+// attributes.  Blobs do not have MODE_DIR and their entries all have
+// sizes, the size being the total size of the contents of the subtree
+// under that entry.
+message Entry {
+    // The sha256 hash of the encrypted object.
+    optional bytes hash = 1;
+
+    // The name of the object (for a directory entry).
+    optional string name = 2;
+
+    // The 32 bit checksum of the original file (calculated by adding
+    // bytes).
+    optional int32 org_checksum = 3;
+
+    // The size of the total contents of the subtree (for a blob entry).
+    optional uint64 size = 4;
+}
+
+// A filesystem node.  MAWFS is agnostic to the difference between files
+// and directories.  A MAWFS node can contain both named entries and
+// contents.
+message Node {
+    required int32 checksum = 1;
+    optional string contents = 2;
+
+    // 'size' is the size of the data in all children.
+    optional uint64 size = 4;
+    repeated Entry children = 3;
+
+    // See the MODE_* constants above.  'mode' should be present for all
+    // top-level file nodes and directory nodes.
+    optional int32 mode = 5;
+}
+
+// A commit.  These objects track the history of an entire filesystem.
+message Commit {
+    // The digest of the "parent" commits.  There should generally be one
+    // of these.
+    // The first tree of the filesystem will have no parents.
+    // A "merge" commit (which merges two filesystems) will have more than
+    // one parent.
+    repeated bytes parent = 1;
+
+    // The digest of the root of the filesystem at the point of the commit.
+    optional bytes root = 2;
+}
+
+// Change is like a lightweight Commit for purposes of storing changes in
+// the filesystem journal.
+message Change {
+    // Types are the CHANGE_* constants.
+    required int32 type = 1;
+
+    // List of child indexes representing a path to the node to be
+    // modified.
+    repeated int32 path = 10;
+
+    // Child name.
+    optional string name = 2;
+
+    // Node to be added.
+    optional Node node = 3;
+
+    // Change to be applied to a nested child (should be another Changes
+    // message).
+    optional bytes nested = 4;
+
+    // Position to insert data into for a write.
+    optional uint64 pos = 5;
+
+    // Data to be inserted in a write.
+    optional bytes data = 6;
+
+    // New size of the node for a resize.
+    optional uint64 newSize = 7;
+
+    // The digest of the last Change.  Every change should have this
+    // except for the first change after a commit, which should have a
+    // 'commit' field.
+    optional bytes lastChange = 8;
+
+    // The commit that this change should be applied to.  Only the first
+    // change after a commit should have this field, all others should
+    // have 'lastChange' instead.
+    optional bytes commit = 9;
+
+    // last tag: 10
+}
+
