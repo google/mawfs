@@ -18,14 +18,14 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"io"
-  	"reflect"
-	"testing"
 	pb "mawfs"
+	"reflect"
+	"testing"
 )
 
 func TestNewChunk(t *testing.T) {
-    contents := []byte("contents")
-    digest := []byte("digest")
+	contents := []byte("contents")
+	digest := []byte("digest")
 	chunk := NewChunk(contents, digest)
 	if bytes.Compare(chunk.contents, contents) != 0 {
 		t.Error("bad contents: ", chunk.contents)
@@ -39,148 +39,148 @@ func TestNewChunk(t *testing.T) {
 }
 
 const testContentsStr = "this is the contents of the file rendered here " +
-                     "for your unit testing pleasure!"
+	"for your unit testing pleasure!"
 
 func TestReadChunk(t *testing.T) {
-    fsinfo := NewFSInfo("bad-password")
-    testContents := []byte(testContentsStr)
-    encrypted, err := fsinfo.Encrypt(testContents)
-    if err != nil {
-        t.Error("unable to encrypt")
-        t.Fail()
-    }
-    chunk, err := fsinfo.ReadChunk(bytes.NewBuffer(encrypted))
-    if err != nil {
-        t.Errorf("Failed to read chunk: %s", err)
-        t.Fail()
-    }
-    if bytes.Compare(chunk.contents, testContents) != 0 {
-        t.Error("Did not get plaintext contents back from chunk")
-    		t.Fail()
-    }
+	fsinfo := NewFSInfo("bad-password")
+	testContents := []byte(testContentsStr)
+	encrypted, err := fsinfo.Encrypt(testContents)
+	if err != nil {
+		t.Error("unable to encrypt")
+		t.Fail()
+	}
+	chunk, err := fsinfo.ReadChunk(bytes.NewBuffer(encrypted))
+	if err != nil {
+		t.Errorf("Failed to read chunk: %s", err)
+		t.Fail()
+	}
+	if bytes.Compare(chunk.contents, testContents) != 0 {
+		t.Error("Did not get plaintext contents back from chunk")
+		t.Fail()
+	}
 
 	digest := sha256.Sum256(encrypted)
-    if bytes.Compare(digest[:], chunk.digest) != 0 {
-        t.Error("Read chunk had incorrect checksum.")
-        t.Fail()
-    }
+	if bytes.Compare(digest[:], chunk.digest) != 0 {
+		t.Error("Read chunk had incorrect checksum.")
+		t.Fail()
+	}
 }
 
 func TestWriteChunk(t *testing.T) {
-    fsinfo := NewFSInfo("bad-password")
-    buf := bytes.NewBuffer([]byte{})
-    testContents := []byte(testContentsStr)
-    digest, err := fsinfo.WriteChunk(buf, testContents)
-    expectedDigest := sha256.Sum256(buf.Bytes())
-    if bytes.Compare(digest, expectedDigest[:]) != 0 {
-        t.Error("digest wasn't what we expected.")
-        t.Fail()
-    }
+	fsinfo := NewFSInfo("bad-password")
+	buf := bytes.NewBuffer([]byte{})
+	testContents := []byte(testContentsStr)
+	digest, err := fsinfo.WriteChunk(buf, testContents)
+	expectedDigest := sha256.Sum256(buf.Bytes())
+	if bytes.Compare(digest, expectedDigest[:]) != 0 {
+		t.Error("digest wasn't what we expected.")
+		t.Fail()
+	}
 
-    chunk, err := fsinfo.ReadChunk(buf)
-    if err != nil {
-        t.Errorf("Error reading chunk: %s", err)
-        t.Fail()
-    }
-    if bytes.Compare(chunk.digest, digest) != 0 {
-        t.Error("Chunk digest doesn't match encrypted digest")
-        t.Fail()
-    }
-    if bytes.Compare(chunk.contents, testContents) != 0 {
-        t.Error("Chunk plaintext doesn't match original plaintext")
-        t.Fail()
-    }
+	chunk, err := fsinfo.ReadChunk(buf)
+	if err != nil {
+		t.Errorf("Error reading chunk: %s", err)
+		t.Fail()
+	}
+	if bytes.Compare(chunk.digest, digest) != 0 {
+		t.Error("Chunk digest doesn't match encrypted digest")
+		t.Fail()
+	}
+	if bytes.Compare(chunk.contents, testContents) != 0 {
+		t.Error("Chunk plaintext doesn't match original plaintext")
+		t.Fail()
+	}
 }
 
 type FakeFileSys struct {
-    contents map[string]*bytes.Buffer
+	contents map[string]*bytes.Buffer
 }
 
-func NewFakeFileSys() (*FakeFileSys) {
-    return &FakeFileSys{make(map[string]*bytes.Buffer)}
+func NewFakeFileSys() *FakeFileSys {
+	return &FakeFileSys{make(map[string]*bytes.Buffer)}
 }
 
 func (fs *FakeFileSys) Create(name string) (io.Writer, error) {
-    result := &bytes.Buffer{}
-    fs.contents[name] = result
-    return result, nil
+	result := &bytes.Buffer{}
+	fs.contents[name] = result
+	return result, nil
 }
 
 func (fs *FakeFileSys) Open(name string) (io.Reader, error) {
-    return fs.contents[name], nil
+	return fs.contents[name], nil
 }
 
 func TestStoreNode(t *testing.T) {
-    var checksum int32 = 12345
-    contents := "Here is some contents"
-    node := &pb.Node{Checksum: &checksum, Contents: &contents}
+	var checksum int32 = 12345
+	contents := "Here is some contents"
+	node := &pb.Node{Checksum: &checksum, Contents: &contents}
 
-    cs := NewChunkStore(NewFSInfo("bad-password"), NewFakeFileSys())
-    digest, err := cs.StoreNode(node)
-    if err != nil {
-        t.Error("StoreNode failed: ", err)
-        t.Fail()
-        return
-    }
+	cs := NewChunkStore(NewFSInfo("bad-password"), NewFakeFileSys())
+	digest, err := cs.StoreNode(node)
+	if err != nil {
+		t.Error("StoreNode failed: ", err)
+		t.Fail()
+		return
+	}
 
-    newNode, err := cs.LoadNode(digest)
-    if !reflect.DeepEqual(node, newNode) {
-        t.Error("Node contents was not preseerved")
-        t.Fail()
-    }
+	newNode, err := cs.LoadNode(digest)
+	if !reflect.DeepEqual(node, newNode) {
+		t.Error("Node contents was not preseerved")
+		t.Fail()
+	}
 }
 
 func TestMakeDigest(t *testing.T) {
-    buf := &bytes.Buffer{}
-    fsinfo := NewFSInfo("bad-password")
-    cs := NewChunkStore(fsinfo, NewFakeFileSys())
-    data := []byte("This is some test data")
-    digest, err := fsinfo.WriteChunk(buf, data)
+	buf := &bytes.Buffer{}
+	fsinfo := NewFSInfo("bad-password")
+	cs := NewChunkStore(fsinfo, NewFakeFileSys())
+	data := []byte("This is some test data")
+	digest, err := fsinfo.WriteChunk(buf, data)
 	if err != nil {
-        t.Error(": ", err)
-        t.Fail()
-        return
-    }
+		t.Error(": ", err)
+		t.Fail()
+		return
+	}
 
-    newDigest, err := cs.MakeDigest(data)
-    if err != nil {
-        t.Error(": ", err)
-        t.Fail()
-        return
-    }
+	newDigest, err := cs.MakeDigest(data)
+	if err != nil {
+		t.Error(": ", err)
+		t.Fail()
+		return
+	}
 
-    if bytes.Compare(newDigest, digest) != 0 {
-        t.Error("MakeDigest doesn't produce the dame digest as WriteChunk");
-        t.Fail()
-    }
+	if bytes.Compare(newDigest, digest) != 0 {
+		t.Error("MakeDigest doesn't produce the dame digest as WriteChunk")
+		t.Fail()
+	}
 }
 
 func TestCommits(t *testing.T) {
-    root := []byte("123456")
-    cs := NewChunkStore(NewFSInfo("bad-password"), NewFakeFileSys())
-    commit := &pb.Commit{Parent: [][]byte{root}, Root: root}
-    digest, err := cs.StoreCommit(commit)
-    if err != nil {
-        t.Error("StoreCommit: ", err)
-        t.Fail()
-        return
-    }
+	root := []byte("123456")
+	cs := NewChunkStore(NewFSInfo("bad-password"), NewFakeFileSys())
+	commit := &pb.Commit{Parent: [][]byte{root}, Root: root}
+	digest, err := cs.StoreCommit(commit)
+	if err != nil {
+		t.Error("StoreCommit: ", err)
+		t.Fail()
+		return
+	}
 
-    newCommit, err := cs.LoadCommit(digest)
-    if err != nil {
-        t.Error("LoadCommit: ", err)
-        t.Fail()
-        return
-    }
+	newCommit, err := cs.LoadCommit(digest)
+	if err != nil {
+		t.Error("LoadCommit: ", err)
+		t.Fail()
+		return
+	}
 
-	if ! reflect.DeepEqual(commit, newCommit) {
-       t.Error("Resurrected commit doesn't match")
-       t.Fail()
-       return
-    }
+	if !reflect.DeepEqual(commit, newCommit) {
+		t.Error("Resurrected commit doesn't match")
+		t.Fail()
+		return
+	}
 }
 
 func TestChunkStoreConformance(t *testing.T) {
-    var ns NodeStore = NewChunkStore(NewFSInfo("bad-password"), NewFakeFileSys())
-    ns.StoreCommit(&pb.Commit{Root: []byte("12345")})
+	var ns NodeStore = NewChunkStore(NewFSInfo("bad-password"), NewFakeFileSys())
+	ns.StoreCommit(&pb.Commit{Root: []byte("12345")})
 }
