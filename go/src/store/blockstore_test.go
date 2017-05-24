@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"io"
+  	"reflect"
 	"testing"
 	pb "mawfs"
 )
@@ -123,9 +124,63 @@ func TestStoreNode(t *testing.T) {
     }
 
     newNode, err := cs.LoadNode(digest)
-    if newNode.GetChecksum() != node.GetChecksum() ||
-    	  newNode.GetContents() != node.GetContents() {
+    if !reflect.DeepEqual(node, newNode) {
         t.Error("Node contents was not preseerved")
         t.Fail()
     }
+}
+
+func TestMakeDigest(t *testing.T) {
+    buf := &bytes.Buffer{}
+    fsinfo := NewFSInfo("bad-password")
+    cs := NewChunkStore(fsinfo, NewFakeFileSys())
+    data := []byte("This is some test data")
+    digest, err := fsinfo.WriteChunk(buf, data)
+	if err != nil {
+        t.Error(": ", err)
+        t.Fail()
+        return
+    }
+
+    newDigest, err := cs.MakeDigest(data)
+    if err != nil {
+        t.Error(": ", err)
+        t.Fail()
+        return
+    }
+
+    if bytes.Compare(newDigest, digest) != 0 {
+        t.Error("MakeDigest doesn't produce the dame digest as WriteChunk");
+        t.Fail()
+    }
+}
+
+func TestCommits(t *testing.T) {
+    root := []byte("123456")
+    cs := NewChunkStore(NewFSInfo("bad-password"), NewFakeFileSys())
+    commit := &pb.Commit{Parent: [][]byte{root}, Root: root}
+    digest, err := cs.StoreCommit(commit)
+    if err != nil {
+        t.Error("StoreCommit: ", err)
+        t.Fail()
+        return
+    }
+
+    newCommit, err := cs.LoadCommit(digest)
+    if err != nil {
+        t.Error("LoadCommit: ", err)
+        t.Fail()
+        return
+    }
+
+	if ! reflect.DeepEqual(commit, newCommit) {
+       t.Error("Resurrected commit doesn't match")
+       t.Fail()
+       return
+    }
+}
+
+func TestChunkStoreConformance(t *testing.T) {
+    var ns NodeStore = NewChunkStore(NewFSInfo("bad-password"), NewFakeFileSys())
+    ns.StoreCommit(&pb.Commit{Root: []byte("12345")})
 }

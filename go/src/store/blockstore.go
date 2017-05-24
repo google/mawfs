@@ -122,21 +122,21 @@ type JournalIter interface {
 
 type NodeStore interface {
     // Store a Node, return its digest.
-    StoreNode(node pb.Node) (string, error)
+    StoreNode(node *pb.Node) ([]byte, error)
 
     // Compute and return the digest for the node.  This is just like
     // storeNode() only it doesn't store the node, it just creates its digest.
-    makeDigest(node pb.Node) string
+    MakeDigest(data []byte) ([]byte, error)
 
-    // Get the node at the given digest, null if it's not currently stored.
-    getNode(digest []byte) (pb.Node, error)
+    // Get the node at the given digest, nil if it's not currently stored.
+    LoadNode(digest []byte) (*pb.Node, error)
 
     // Stores a Commit, returns its digest.
-    storeCommit(commit pb.Commit) string;
+    StoreCommit(commit *pb.Commit) ([]byte, error)
 
     // Retrieves a commit object from its digest, an error if it's not
     // currently stored.
-    getCommit(digest []byte) (pb.Commit, error)
+    LoadCommit(digest []byte) (*pb.Commit, error)
 
 //    # Get the root node (null if there is no root).
 //    @abstract Node getRoot();
@@ -185,10 +185,16 @@ func NewChunkStore(fsInfo *FSInfo, backing FileSys) (*ChunkStore) {
     return &ChunkStore{fsInfo, backing}
 }
 
-// Stores chunk data, returns the digest.
-func (cs *ChunkStore) store(data []byte) ([]byte, error) {
+// Stores chunk data among the objects (filenames are the alt-encoded
+// digests), returns the digest.
+func (cs *ChunkStore) store(obj proto.Message) ([]byte, error) {
+    rep, err := proto.Marshal(obj)
+    if err != nil {
+        return nil, err
+    }
+
     buf := bytes.Buffer{}
-    digest, err := cs.fsInfo.WriteChunk(&buf, data)
+    digest, err := cs.fsInfo.WriteChunk(&buf, rep)
     if err != nil {
         return nil, err
     }
@@ -202,21 +208,21 @@ func (cs *ChunkStore) store(data []byte) ([]byte, error) {
     return digest, nil
 }
 
-func (cs *ChunkStore) StoreNode(node *pb.Node) ([]byte, error) {
-    rep, err := proto.Marshal(node)
-    if err != nil {
-        return nil, err
-    }
-	return cs.store(rep)
-}
-
-func (cs *ChunkStore) LoadNode(digest []byte) (*pb.Node, error) {
+func (cs *ChunkStore) load(digest []byte) (*Chunk, error) {
     src, err := cs.backing.Open(altEncode(digest))
     if err != nil {
         return nil, err
     }
 
-    chunk, err := cs.fsInfo.ReadChunk(src)
+    return cs.fsInfo.ReadChunk(src)
+}
+
+func (cs *ChunkStore) StoreNode(node *pb.Node) ([]byte, error) {
+	return cs.store(node)
+}
+
+func (cs *ChunkStore) LoadNode(digest []byte) (*pb.Node, error) {
+    chunk, err := cs.load(digest)
     if err != nil {
         return nil, err
     }
@@ -228,4 +234,29 @@ func (cs *ChunkStore) LoadNode(digest []byte) (*pb.Node, error) {
     }
 
     return node, nil
+}
+
+func (cs *ChunkStore) MakeDigest(data []byte) ([]byte, error) {
+    buf := bytes.Buffer{}
+    digest, err := cs.fsInfo.WriteChunk(&buf, data)
+    return digest, err
+}
+
+func (cs *ChunkStore) StoreCommit(commit *pb.Commit) ([]byte, error) {
+    return cs.store(commit)
+}
+
+func (cs *ChunkStore) LoadCommit(digest []byte) (*pb.Commit, error) {
+    chunk, err := cs.load(digest)
+    if err != nil {
+        return nil, err
+    }
+
+	commit := &pb.Commit{}
+	err = proto.Unmarshal(chunk.contents, commit)
+	if err != nil {
+        return nil, err
+    }
+
+    return commit, nil
 }
