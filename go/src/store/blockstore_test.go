@@ -17,7 +17,6 @@ package blockstore
 import (
 	"bytes"
 	"crypto/sha256"
-	"io"
 	pb "mawfs"
 	"reflect"
 	"testing"
@@ -90,24 +89,6 @@ func TestWriteChunk(t *testing.T) {
 		t.Error("Chunk plaintext doesn't match original plaintext")
 		t.Fail()
 	}
-}
-
-type FakeFileSys struct {
-	contents map[string]*bytes.Buffer
-}
-
-func NewFakeFileSys() *FakeFileSys {
-	return &FakeFileSys{make(map[string]*bytes.Buffer)}
-}
-
-func (fs *FakeFileSys) Create(name string) (io.Writer, error) {
-	result := &bytes.Buffer{}
-	fs.contents[name] = result
-	return result, nil
-}
-
-func (fs *FakeFileSys) Open(name string) (io.Reader, error) {
-	return fs.contents[name], nil
 }
 
 func TestStoreNode(t *testing.T) {
@@ -183,4 +164,122 @@ func TestCommits(t *testing.T) {
 func TestChunkStoreConformance(t *testing.T) {
 	var ns NodeStore = NewChunkStore(NewFSInfo("bad-password"), NewFakeFileSys())
 	ns.StoreCommit(&pb.Commit{Root: []byte("12345")})
+}
+
+func TestStoreRetrieveRootDigest(t *testing.T) {
+	var ns NodeStore = NewChunkStore(NewFSInfo("bad-password"), NewFakeFileSys())
+	node := &pb.Node{}
+	digest, err := ns.StoreNode(node)
+	err = ns.StoreRootDigest(digest)
+	if err != nil {
+		t.Error("StoreRootDigest failed: ", err)
+		t.Fail()
+	}
+
+	newDigest, err := ns.LoadRootDigest()
+	if err != nil {
+		t.Error("LoadRootDigest: ", err)
+		t.Fail()
+		return
+	}
+
+	if !bytes.Equal(digest, newDigest) {
+		t.Error("Digests don't match")
+		t.Fail()
+	}
+}
+
+func TestSetGetHead(t *testing.T) {
+	var ns NodeStore = NewChunkStore(NewFSInfo("bad-password"), NewFakeFileSys())
+	digest := sha256.Sum256([]byte(testContentsStr))
+	err := ns.SetHead("branch", digest[:])
+	if err != nil {
+		t.Error("SetHead: ", err)
+		t.Fail()
+		return
+	}
+
+	head, err := ns.GetHead("branch")
+	if err != nil {
+		t.Error("GetHead: ", err)
+		t.Fail()
+		return
+	}
+
+	if !bytes.Equal(head, digest[:]) {
+		t.Error("Digests don't match")
+		t.Fail()
+	}
+}
+
+func TestJournal(t *testing.T) {
+	fs := NewFakeFileSys()
+	var ns NodeStore = NewChunkStore(NewFSInfo("bad-password"), fs)
+
+	var one int32 = 1
+	var two int32 = 2
+	digests := [][]byte{}
+	digest, err := ns.WriteToJournal("branch1", &pb.Change{Type: &one})
+	if err != nil {
+		t.Error("WriteToJournal[1]: ", err)
+		t.Fail()
+		return
+	}
+	digests = append(digests, digest)
+
+	digest, err = ns.WriteToJournal("branch1", &pb.Change{Type: &two})
+	if err != nil {
+		t.Error("WriteToJournal[2]: ", err)
+		t.Fail()
+		return
+	}
+	digests = append(digests, digest)
+
+	iter, err := ns.MakeJournalIter("branch1")
+	if err != nil {
+		t.Error(": ", err)
+		t.Fail()
+		return
+	}
+
+	for i, val := range []int32{1, 2} {
+		entry, err := iter.Elem()
+		if err != nil {
+			t.Error(": ", err)
+			t.Fail()
+			return
+		}
+
+		if !bytes.Equal(entry.digest, digests[i]) {
+			t.Error("digest %d doesn't match expected value")
+			t.Fail()
+		}
+
+		if entry.change.GetType() != val {
+			t.Errorf("Change %d has a type of %d", i, entry.change.GetType())
+			t.Fail()
+		}
+		iter.Next()
+	}
+	entry, err := iter.Elem()
+	if err != nil {
+		t.Error(": ", err)
+		t.Fail()
+		return
+	}
+
+	if entry != nil {
+		t.Error("iter.Elem() != nil after last change.")
+		t.Fail()
+	}
+
+	if !fs.Exists("journals/branch1") {
+		t.Error("journals/branch1 does not exist")
+		t.Fail()
+	}
+	ns.DeleteJournal("branch1")
+	if fs.Exists("journals/branch1") {
+		t.Error("journals/branch1 exists after removal")
+		t.Fail()
+	}
 }
