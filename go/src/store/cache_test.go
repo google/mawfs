@@ -15,41 +15,41 @@
 package blockstore
 
 import (
-    "testing"
-    "fmt"
+	"fmt"
+	"testing"
 )
 
 var _ = fmt.Print
 
 func newTestCache() (*Cache, NodeStore) {
-    store := NewChunkStore(NewFSInfo("bad-password"), NewFakeFileSys())
-    cache := NewCache(store, "master", []byte{})
-    return cache, store
+	store := NewChunkStore(NewFSInfo("bad-password"), NewFakeFileSys())
+	cache := NewCache(store, "master", []byte{})
+	return cache, store
 }
 
 type TestCacheObj struct {
-    ObjImpl
-    val int
+	ObjImpl
+	val int
 }
 
 func TestNewCache(t *testing.T) {
-    cache, store := newTestCache()
-    Assertf(t, cache.store == store, "cache.store == store")
+	cache, store := newTestCache()
+	Assertf(t, cache.store == store, "cache.store == store")
 }
 
 func TestLru(t *testing.T) {
-    cache, _ := newTestCache()
-    cache.addObj(&TestCacheObj{val: 1})
-    cache.addObj(&TestCacheObj{val: 2})
-    cache.addObj(&TestCacheObj{val: 3})
+	cache, _ := newTestCache()
+	cache.addObj(&TestCacheObj{val: 1})
+	cache.addObj(&TestCacheObj{val: 2})
+	cache.addObj(&TestCacheObj{val: 3})
 
-    Assertf(t, cache.oldest.(*TestCacheObj).val == 1, "cache.oldest.val == 1");
-    Assertf(t, cache.newest.(*TestCacheObj).val == 3, "cache.oldest.val == 3");
-    Assertf(t, cache.oldest.GetNext().(*TestCacheObj).val == 2,
-            "cache.oldest.next.val == 2");
-    for cur := cache.newest; cur != nil; cur = cur.GetPrev() {
-        fmt.Printf("elem is %d", cur.(*TestCacheObj).val)
-    }
-    Assertf(t, cache.newest.GetPrev().(*TestCacheObj).val == 2,
-            "cache.newest.prev.val == 2");
+	Assertf(t, cache.oldest.(*TestCacheObj).val == 1, "cache.oldest.val == 1")
+	Assertf(t, cache.newest.(*TestCacheObj).val == 3, "cache.oldest.val == 3")
+	Assertf(t, cache.oldest.GetNext().(*TestCacheObj).val == 2,
+		"cache.oldest.next.val == 2")
+	for cur := cache.newest; cur != nil; cur = cur.GetPrev() {
+		fmt.Printf("elem is %d", cur.(*TestCacheObj).val)
+	}
+	Assertf(t, cache.newest.GetPrev().(*TestCacheObj).val == 2,
+		"cache.newest.prev.val == 2")
 }
