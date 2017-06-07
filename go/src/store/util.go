@@ -82,6 +82,7 @@ func altEncode(data []byte) string {
 	return string(result.Bytes())
 }
 
+// Decodes a string encoded by altEncode().
 func altDecode(encoded string) ([]byte, error) {
 	var (
 		result = bytes.Buffer{}
@@ -100,7 +101,7 @@ func altDecode(encoded string) ([]byte, error) {
 			ch -= 'A'
 		case ch == '.':
 			ch = 62
-		case ch == '+':
+		case ch == '_':
 			ch = 63
 		default:
 			return nil, errors.New("Invalid character in decode")
