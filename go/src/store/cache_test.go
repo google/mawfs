@@ -16,6 +16,7 @@ package blockstore
 
 import (
 	"fmt"
+	pb "mawfs"
 	"testing"
 )
 
@@ -23,7 +24,7 @@ var _ = fmt.Print
 
 func newTestCache() (*Cache, NodeStore) {
 	store := NewChunkStore(NewFSInfo("bad-password"), NewFakeFileSys())
-	cache := NewCache(store, "master", []byte{})
+	cache := NewCache(store)
 	return cache, store
 }
 
@@ -52,4 +53,18 @@ func TestLru(t *testing.T) {
 	}
 	Assertf(t, cache.newest.GetPrev().(*TestCacheObj).val == 2,
 		"cache.newest.prev.val == 2")
+}
+
+func TestChanges(t *testing.T) {
+	cache, store := newTestCache()
+	head := NewHead(cache, "master", nil)
+	var one int32 = 1
+	err := head.addChange(&pb.Change{Type: &one})
+	Assertf(t, err == nil, "addChange returns error: %s", err)
+	iter, err := store.MakeJournalIter("master")
+	Assertf(t, err == nil, "MakeJournalIter returns error: %s", err)
+	elem, err := iter.Elem()
+	Assertf(t, err == nil, "iter ELem() returns error: %s", err)
+	Assertf(t, elem.change.GetType() == 1,
+		"failed to load change stored through Head")
 }

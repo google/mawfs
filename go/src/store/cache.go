@@ -16,6 +16,7 @@ package blockstore
 
 import (
 	"fmt"
+	pb "mawfs"
 )
 
 var _ = fmt.Print
@@ -57,33 +58,9 @@ func (o *ObjImpl) SetPrev(prev Obj) {
 	o.prev = prev
 }
 
-// This structure should probably get broken out into a few different things.
-// The cache proper should actually just be a cache and should manage
-// memory-resident instantiations of nodes from the node store.  There are
-// also a bunch of branch-specific concepts that should maybe go into a
-// "Branch" class - the baseline commit, last change digest and branch name.
-//
-// There are some constants that have an effect on the serialized
-// representation.  These are mostly interesting for testing.
-//
-// There are constants for tuning runtime behavior, like gcThreshold, which
-// clearly belongs in the cache proper.
+// The filesystem's in-memory cache.
 type Cache struct {
 	store NodeStore
-
-	// The digest of the last commit.  Changes in the journal are relative to
-	// this.
-	baselineCommit []byte
-
-	// The digest of the last change.
-	lastChange []byte
-
-	// The name of the branch.  "master" is the default branch.
-	branch string
-
-	maxContentSize uint
-	maxChildren    uint
-	maxJournalSize uint
 
 	// Cache size where we start doing GC.
 	gcThreshold uint
@@ -96,12 +73,6 @@ type Cache struct {
 	// oldest is the first.
 	newest, oldest Obj
 
-	//    oper init(NodeStore store, String branch, String baselineCommit) :
-	//        store = store,
-	//        branch = branch,
-	//        baselineCommit = baselineCommit {
-	//    }
-	//
 	//    @final void addChange(Change change) {
 	//        if (lastChange) {
 	//            change.lastChange = lastChange;
@@ -175,21 +146,11 @@ type Cache struct {
 	//    }
 }
 
-func NewCache(store NodeStore, branch string, baselineCommit []byte) *Cache {
-	cache := &Cache{
-		store:          store,
-		branch:         branch,
-		baselineCommit: baselineCommit,
+func NewCache(store NodeStore) *Cache {
+	return &Cache{store: store,
+		gcThreshold: DefaultGcThreshold,
+		gcBottom:    DefaultGcBottom,
 	}
-	cache.store = store
-	cache.maxContentSize = DefaultMaxContentSize
-	cache.maxChildren = DefaultMaxChildren
-	cache.maxJournalSize = DefaultMaxJournalSize
-
-	cache.gcThreshold = DefaultGcThreshold
-	cache.gcBottom = DefaultGcBottom
-
-	return cache
 }
 
 func (c *Cache) addObj(obj Obj) {
@@ -204,4 +165,56 @@ func (c *Cache) addObj(obj Obj) {
 		obj.SetPrev(c.newest)
 	}
 	c.newest = obj
+}
+
+// Encapsulates the current head of a branch in the filesystem.
+//
+// There are some constants in here that have an effect on the serialized
+// representation.  These are mostly interesting for testing.
+type Head struct {
+
+	// The node cache.
+	cache *Cache
+
+	// The underlying node store.
+	store NodeStore
+
+	// The digest of the last commit.  Changes in the journal are relative to
+	// this.
+	baselineCommit []byte
+
+	// The digest of the last change.
+	lastChange []byte
+
+	// The name of the branch.  "master" is the default branch.
+	branch string
+
+	maxContentSize uint
+	maxChildren    uint
+	maxJournalSize uint
+}
+
+// Creates a new Head object.
+// baselineCommit may be nil if the branch is currently empty.
+func NewHead(cache *Cache, branch string, baselineCommit []byte) *Head {
+	return &Head{cache, cache.store, baselineCommit,
+		nil,
+		branch,
+		DefaultMaxContentSize,
+		DefaultMaxChildren,
+		DefaultMaxJournalSize,
+	}
+}
+
+func (head *Head) addChange(change *pb.Change) error {
+	if head.lastChange != nil {
+		change.LastChange = head.lastChange
+	} else {
+		change.Commit = head.baselineCommit
+	}
+	lastChange, err := head.store.WriteToJournal(head.branch, change)
+	if err != nil {
+		head.lastChange = lastChange
+	}
+	return err
 }
