@@ -73,3 +73,9 @@ func Assertf(t *testing.T, cond bool, message string, v ...interface{}) {
 		t.Errorf(message, v...)
 	}
 }
+
+func Assert(t *testing.T, cond bool) {
+    if !cond {
+        t.Fail();
+    }
+}

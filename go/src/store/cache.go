@@ -17,6 +17,7 @@ package blockstore
 import (
 	"fmt"
 	pb "mawfs"
+	//"strings"  TODO: get latest go, use strings.Compare()
 )
 
 var _ = fmt.Print
@@ -161,7 +162,6 @@ func (c *Cache) addObj(obj Obj) {
 		c.oldest = obj
 	} else {
 		c.newest.SetNext(obj)
-		fmt.Printf("setting prev of %s to %s\n", obj, c.newest)
 		obj.SetPrev(c.newest)
 	}
 	c.newest = obj
@@ -217,4 +217,124 @@ func (head *Head) addChange(change *pb.Change) error {
 		head.lastChange = lastChange
 	}
 	return err
+}
+
+// Wrapper around Node to manage its presence in the cache.
+//
+// CachedNode is a node in a sparse tree.  Its children may or may not be
+// memory resident.  In general, CachedNodes are demand-loaded and remain in
+// memory until a garbage collection.  Even after a garbage collection,
+// "dirty" nodes will remain memory resident.
+//
+// Implements Obj.
+type CachedNode struct {
+
+    cache *Cache
+    digest []byte
+    node *pb.Node
+
+    // Indicates that a node has been changed in memory and in the transaction
+    // log but needs to be committed.  A dirty node is assumed to have an
+    // invalid digest.  Likewise, a non-dirty node is assumed to have a valid
+    // digest.  All nodes should either be loaded from the block store (in
+    // which case, they have a valid digest) or created as part of an
+    // operation (in which case they should have no digest and be dirty).
+    dirty bool
+
+    // The parent node (the directory if this is a directory or top-level
+    // file node, an intermediate node for anything else).  Note that this
+    // introduces a reference cycle, so you need to call release() on a node
+    // to break this cycle (and also to remove the node from the LRU queue in
+    // the cache).
+    parent *CachedNode
+
+    children []*cachedEntry
+}
+
+func (node *CachedNode) GetMode() int {
+    return node.GetMode()
+}
+
+func NewCachedNode(cache *Cache, digest []byte, node *pb.Node) *CachedNode {
+    return &CachedNode{cache: cache, digest: digest, node: node};
+}
+
+// Wrapper around Entry which serves the same purpose as CachedNode.
+type cachedEntry struct {
+    entry *pb.Entry
+    cache *Cache
+    node, parent *CachedNode
+}
+
+func newCachedEntry(entry *pb.Entry, node *CachedNode,
+                    parent *CachedNode) *cachedEntry {
+    return &cachedEntry{entry: entry, cache: node.cache, parent: parent}
+}
+
+// Returns the entry's name or nil if it doesn't have a name.
+func (e *cachedEntry) GetName() *string {
+    return e.entry.Name
+}
+
+// Returns the digest of the node that the entry references, nil if the node
+// is not yet committed.
+func (e *cachedEntry) GetDigest() []byte {
+    return e.entry.GetHash()
+}
+
+// A managed array of entries.
+type childArray struct {
+    rep []*pb.Entry
+    cached []*cachedEntry
+}
+
+func newChildArray(rep []*pb.Entry) *childArray {
+    return &childArray{rep: rep, cached: make([]*cachedEntry, len(rep))}
+}
+
+func Compare(a, b string) int {
+    if (a == b) {
+        return 0
+    } else if (a > b) {
+        return 1
+    }
+    return -1
+}
+
+func (ca *childArray) findIndexHelper(name string, start, end uint) (uint, bool) {
+    if len(ca.cached) == 0 {
+        return 0, false
+    }
+
+    midpoint := (end - start) / 2 + start
+    if midpoint == start {
+        comparison := Compare(name, *ca.cached[midpoint].GetName())
+        switch {
+            case comparison == 0:
+                return start, true
+            case comparison < 0:
+                return start, false
+            default:
+                return end, false
+        }
+    }
+
+    switch {
+        case name == *ca.cached[midpoint].GetName():
+            return midpoint, true
+        case name < *ca.cached[midpoint].GetName():
+            return ca.findIndexHelper(name, start, midpoint)
+        default:
+            return ca.findIndexHelper(name, midpoint, end)
+    }
+}
+
+func (ca *childArray) findIndex(name string) (uint, bool) {
+    return ca.findIndexHelper(name, 0, uint(len(ca.rep)))
+}
+
+// Appends a new entry onto the childArray.
+func (ca *childArray) append(entry *cachedEntry) {
+    ca.cached = append(ca.cached, entry)
+    ca.rep = append(ca.rep, entry.entry)
 }

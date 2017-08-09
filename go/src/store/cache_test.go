@@ -48,9 +48,6 @@ func TestLru(t *testing.T) {
 	Assertf(t, cache.newest.(*TestCacheObj).val == 3, "cache.oldest.val == 3")
 	Assertf(t, cache.oldest.GetNext().(*TestCacheObj).val == 2,
 		"cache.oldest.next.val == 2")
-	for cur := cache.newest; cur != nil; cur = cur.GetPrev() {
-		fmt.Printf("elem is %d", cur.(*TestCacheObj).val)
-	}
 	Assertf(t, cache.newest.GetPrev().(*TestCacheObj).val == 2,
 		"cache.newest.prev.val == 2")
 }
@@ -67,4 +64,67 @@ func TestChanges(t *testing.T) {
 	Assertf(t, err == nil, "iter ELem() returns error: %s", err)
 	Assertf(t, elem.change.GetType() == 1,
 		"failed to load change stored through Head")
+}
+
+func newEntry(cache *Cache, name string) *cachedEntry {
+    node := &pb.Node{}
+    entry := &pb.Entry{Name: &name}
+    return newCachedEntry(entry,
+                          NewCachedNode(cache, []byte("fake digest"), node), nil)
+}
+
+func Checkf(cond bool, format string, a ...interface{}) bool {
+    if !cond {
+        fmt.Printf(format, a...)
+    }
+    return cond
+}
+
+func checkIndex(ca *childArray, key string, expectedIndex uint,
+                expectedFound bool) bool {
+    index, found := ca.findIndex(key)
+    var foundText string = ""
+    if !found {
+        foundText = "not"
+    }
+    var pass bool = true
+    if found != expectedFound {
+        fmt.Printf("%s was unexpectedly %s found", key, foundText)
+        pass = false
+    }
+    if index != expectedIndex {
+        fmt.Printf("find %s != %d (got index of %d)", key, expectedIndex, index)
+        pass = false
+    }
+    return pass
+}
+
+func TestFind(t *testing.T) {
+    cache, _ := newTestCache()
+    childArray := newChildArray(make([]*pb.Entry, 0))
+    childArray.append(newEntry(cache, "bar"))
+    childArray.append(newEntry(cache, "baz"))
+    childArray.append(newEntry(cache, "blinky"))
+    childArray.append(newEntry(cache, "curly"))
+    childArray.append(newEntry(cache, "foo"))
+    childArray.append(newEntry(cache, "inky"))
+    childArray.append(newEntry(cache, "larry"))
+    childArray.append(newEntry(cache, "moe"))
+    childArray.append(newEntry(cache, "stinky"))
+
+    Assert(t, checkIndex(childArray, "baz", 1, true))
+    Assert(t, checkIndex(childArray, "blinky", 2, true))
+    Assert(t, checkIndex(childArray, "curly", 3, true))
+    Assert(t, checkIndex(childArray, "foo", 4, true))
+    Assert(t, checkIndex(childArray, "inky", 5, true))
+    Assert(t, checkIndex(childArray, "larry", 6, true))
+    Assert(t, checkIndex(childArray, "moe", 7, true))
+    Assert(t, checkIndex(childArray, "stinky", 8, true))
+
+    Assert(t, checkIndex(childArray, "stank", 8, false))
+    Assert(t, checkIndex(childArray, "aardvark", 0, false))
+
+    // Try this with an empty array.
+    Assert(t, checkIndex(newChildArray(make([]*pb.Entry, 0)), "howdy", 0,
+                         false))
 }
