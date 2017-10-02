@@ -14,6 +14,7 @@
 
 ## Low-level config-store API.
 
+import crack.cont.hashmap OrderedHashMap;
 import crack.ffmt.ini iniParser, IniMap;
 import crack.fs Path;
 import crack.io StandardFormatter;
@@ -60,5 +61,13 @@ class ConfigStore {
         __config[section][key] = value;
 
         save();
+    }
+
+    ## Return an entire section of the config.
+    OrderedHashMap[String, String] getSection(String section) {
+        result := __config.get(section);
+        if (result is null)
+            __config[section] = result = OrderedHashMap[String, String]();
+        return result;
     }
 }
