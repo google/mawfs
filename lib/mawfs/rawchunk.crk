@@ -1,0 +1,66 @@
+## Interfaces and tools for dealing with "raw chunks."  Raw chunks are
+## just chunks that haven't been unencrypted, and are therefore suitable for
+## transmission over untrusted channels and storage in untrusted repositories
+## (though additional measures of protection should certainly be imposed to
+## protect against inference attacks).
+
+import crack.functor Functor2;
+import crack.lang Exception;
+
+@import crack.ann impl, interface;
+
+## Callback for returning a result or an error from an asynchronous function.
+## If the second exception parameter is non-null, the result is an error and
+## the callback should propagate it as appropriate.  Otherwise, the first
+## argument is the result of the operation.
+@interface GeneralCallback[T] : Functor2[void, T, Exception] {}
+
+## A general callack that allows the caller to block and wait for a result.
+class BlockingCallback[T] @impl GeneralCallback[T] {
+
+    Event __event;
+    Exception __ex;
+    T __result;
+
+    void oper call(T result, Exception ex) {
+        MutexLock lock = {__event.getMutex()};
+        __result = result;
+        __ex = ex;
+        __event.signal();
+    }
+
+    ## Returns the exception or null if there was none.
+    Exception getException() {
+        MutexLock lock = {__event.getMutex()};
+        __event.wait();
+        return __ex;
+    }
+
+    ## Returns the result, unless there was an exception in which case throws
+    ## it.  (If you don't want this behavior, use getException() to check for
+    ## an exception before calling this)
+    T getResult() {
+        MutexLock lock = {__event.getMutex()};
+        __event.wait();
+        if (__ex)
+            throw __ex;
+        return __result;
+    }
+}
+
+## An object that can read raw chunks.
+@interface RawChunkReader {
+    ## Read a raw chunk asynchronously.  Calls 'callback' with the result.
+    ##
+    ## If the implementation simply does not have access to the specified
+    ## chunk, the callback will be called with no exception and a null value.
+    ##
+    ## Note that the API can not be expected to verify that the digest matches
+    ## the data: this is ultimately the responsibility of the final consumer,
+    ## though an intermediate node may choose to verify in the interests of
+    ## avoiding costly propagation of bad data.
+    @abstract void readRawChunk(String digest, GeneralCallback[String] callback);
+
+    ## Returns the digest of the head of the given branch.
+    @abstract void getHead(String branch, GeneralCallback[String] callback);
+}
