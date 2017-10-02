@@ -1,0 +1,375 @@
+## MAWFS RPC client.
+
+import crack.ascii parseInt;
+import crack.cont.hashmap HashMap;
+import crack.functor Functor3;
+import crack.io cerr, AppendBufferWriter, FStr, StringWriter, Reader;
+import crack.lang cmp, makeHashVal, AppendBuffer, Exception, WriteBuffer;
+import crack.net resolve, InetAddress;
+import crack.net.comm2 Comm, CommHandler, CommHandlerFactory, Log,
+    NewConnection, SyncCommProxy, UserHandler, WaiterFor;
+import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
+import crack.regex Regex;
+import crack.serial SerialReader, SerialWriter;
+import mawfs.rawchunk GeneralCallback, RawChunkReader;
+
+@import crack.ann cvars, impl;
+@import crack.protobuf.ann  protobuf;
+
+const DEFAULT_PORT := 9119
+const IPV4_ADDR := Regex(r'(\d+)\.(\d+)\.(\d+)\.(\d+)');
+
+## Raised when there is an application error.
+class AppError : Exception {
+    oper init(String message) : Exception(message) {}
+}
+
+@protobuf {
+    ## The general RPC message envelope.  Everything gets sent across the wire
+    ## in a serialized string containing one of these.
+    message RPCMessage {
+
+        ## The message id.  When sent with a request, the response should have
+        ## the same id.  Messages without a non-zero message id are presumed
+        ## to be asynchronous and don't get a response.
+        optional int32 id = 1;
+
+        ## The message to be called.
+        optional string method = 2;
+
+        ## The request body.  Should only be present for a request. This will
+        ## be another protobuf appropriate for the "request" part of the
+        ## method.
+        optional string request = 3;
+
+        ## The response body. Should only be present for a response.  The
+        ## response protobuf.
+        optional string response = 4;
+
+        ## If there was an error processing a message, this gets returned in
+        ## the response.
+        optional string error = 5;
+    }
+
+    message GetObjectRequest {
+        ## Message digest.
+        optional string digest = 1;
+    }
+
+    message GetObjectResponse {
+        optional string data = 1;
+    }
+
+    message GetHeadRequest {
+        optional string branch = 1;
+    }
+
+    message GetHeadResponse {
+        optional string digest = 1;
+    }
+}
+
+alias RPCWaiter = WaiterFor[RPCMessage, int];
+
+class _FakeReader @impl Reader {
+    uint read(WriteBuffer buf) {
+        return buf.size = 0;
+    }
+}
+
+## Reads protobuf strings from an append buffer.
+class _BufferSerialReader {
+    AppendBuffer __buffer = {4096};
+    SerialReader __reader = {_FakeReader()};
+
+    oper init(AppendBuffer buffer) : __buffer = buffer {
+        __reader.buf = __buffer;
+    }
+
+    ## Read a string, returns null if no complete string is in the buffer.
+    @final String readString() {
+        return __reader.readString(false);
+    }
+}
+
+## Synchronous client.
+class _Handler @impl UserHandler {
+    _BufferSerialReader __reader;
+    HashMap[int, RPCWaiter] __waiters = {};
+
+    void process(CommHandler comm) {
+        if (!__reader)
+            __reader = _BufferSerialReader(comm.inBuf);
+
+        data := __reader.readString();
+        if (data) {
+            RPCMessage response = {};
+            readMessageFromString(response, data);
+
+            waiter := __waiters.get(response.id);
+            if (waiter)
+                waiter.setResult(response);
+            else
+                comm.log.error `No response found for message id $(response.id)\n`;
+        }
+    }
+
+    void terminate(CommHandler comm) {}
+
+    void addResponder(Object waiter) {
+        w := RPCWaiter.cast(waiter);
+        __waiters[w.info] = w;
+    }
+}
+
+## Thrown whenever we receive an error from the remote object.
+class RemoteError : Exception {
+    oper init(String message) : Exception(message) {}
+}
+
+## Parse an address of the form host:port.  "host" may be either a hostname or
+## an ip address.
+InetAddress parseAddr(String addr) {
+    int port;
+    String host;
+    if ((colon := addr.lfind(b':')) != -1) {
+        host = addr.substr(0, colon);
+        port = parseInt(addr.substr(colon + 1));
+    } else {
+        host = addr;
+        port = DEFAULT_PORT;
+    }
+
+    # Now check for an ipv4 address.
+    InetAddress a;
+    if (m := IPV4_ADDR.match(host)) {
+        a = InetAddress(byte(parseInt(m.group(1))),
+                        byte(parseInt(m.group(2))),
+                        byte(parseInt(m.group(3))),
+                        byte(parseInt(m.group(4))),
+                        port
+                        );
+    } else {
+        addrs := resolve(host);
+        a = InetAddress(InetAddress.cast(addrs[0]).getAddr(), port);
+    }
+    return a;
+}
+
+class PeerProxy {
+    Comm __comm;
+    SyncCommProxy __proxy;
+    Log __log;
+    int32 __lastId;
+
+    oper init(Comm comm, Log log, String addr) : __comm = comm, __log = log {
+        a := parseAddr(addr);
+        __log.info `connecting to $a`;
+        __proxy = __comm.getSyncProxy(a, _Handler());
+    }
+
+    # We can probably just merge this into __invoke().
+    RPCMessage __sendSync(RPCMessage message) {
+        # Serialize and send the message.
+        StringWriter out = {};
+        SerialWriter sw = {out};
+        sw.write(message.toString());
+        waiter := RPCWaiter(message.id);
+        __proxy.sendSync(out.string(), waiter);
+        return waiter.getResult();
+    }
+
+    ## Invoke a remote method.
+    String __invoke(String method, String contents) {
+        RPCMessage msg = {};
+        msg.id = ++__lastId;
+        msg.method = method;
+        msg.request = contents;
+        resp := __sendSync(msg);
+
+        if (resp.error)
+            throw RemoteError(resp.error);
+
+        return resp.response;
+    }
+
+    ## Returns the object with the specified digest, null if the peer doesn't
+    ## have it.
+    String getObject(String digest) {
+        GetObjectRequest req = {};
+        req.digest = digest;
+        GetObjectResponse resp = {};
+        respData := __invoke('getObject', req.toString());
+        readMessageFromString(resp, respData);
+        return resp.data;
+    }
+
+    String getHead(String branch) {
+        GetHeadRequest req = {};
+        req.branch = branch;
+        GetHeadResponse resp = {};
+        respData := __invoke('getHead', req.toString());
+        readMessageFromString(resp, respData);
+        return resp.digest;
+    }
+}
+
+## Server-side RPC message context.
+class Context {
+    Log log;
+    RawChunkReader reader;
+
+    oper init(RawChunkReader reader) : reader = reader {}
+
+    ## Utility function for writing a response message.
+    void writeResponse(AppendBuffer out, Message response, int32 requestId) {
+        RPCMessage reply = {};
+        reply.id = requestId;
+        reply.response = response.toString();
+        AppendBufferWriter backing = {out};
+        SerialWriter sw = {backing};
+        sw.write(reply.toString());
+        log.debug I`over the wire: $(reply.toString().getRepr())`;
+    }
+
+    void writeError(AppendBuffer out, String errorMessage, int32 requestId) {
+        RPCMessage reply = {};
+        reply.id = requestId;
+        reply.error = errorMessage;
+        AppendBufferWriter backing = {out};
+        SerialWriter sw = {backing};
+        sw.write(reply.toString());
+        log.debug I`error over the wire: $(reply.toString().getRepr())`;
+    }
+}
+
+# Mapping from method name to method processing function.  In addition to a
+# context, a method handler accepts a string containing the serialized request
+# and an AppendBuffer into which to write the serialized response.
+alias MethodHandler = Functor3[void, Context, RPCMessage, AppendBuffer];
+alias MethodMap = HashMap[String, MethodHandler];
+
+## Handles communication from an RPC client.
+class ClientHandler @impl UserHandler {
+
+    ## Serial reader for input.
+    _BufferSerialReader reader;
+
+    ## The session context.
+    Context __context;
+
+    MethodMap __methods;
+
+    oper init(MethodMap methods, Context context) :
+        __methods = methods,
+        __context = context {
+    }
+
+    void process(Log log, RPCMessage msg, AppendBuffer outBuf) {
+        log.debug `processing method $(msg.method)`;
+        String error;
+
+        handler := __methods.get(msg.method);
+        if (handler) {
+            try {
+                log.debug `calling handler`;
+                handler(__context, msg, outBuf);
+                return;
+            } catch (Exception ex) {
+                error = FStr() `$ex`;
+            }
+        } else {
+            log.error `got unknown method $(msg.method)`;
+            error = FStr() `Method $(msg.method.getRepr()) not found`;
+        }
+
+        # if we haven't returned yet, we have to deal with an error.
+
+        # If there's no message id, the message is asynchronous and we don't
+        # return a response.
+        if (!msg.id)
+            return;
+
+
+        # Wrap the reply in a string and ship it back to the client.
+        log.debug I`sending reply, error $error`;
+        __context.writeError(outBuf, error, msg.id);
+    }
+
+    void process(CommHandler comm) {
+        # Initialize the reader if we haven't done so.
+        if (!reader)
+            reader = _BufferSerialReader(comm.inBuf);
+        if (!__context.log)
+            __context.log = comm.log;
+
+        while (comm.inBuf) {
+            # Get the next message, make sure we were able to read it.
+            serializedMsg := reader.readString();
+            if (!serializedMsg)
+                # Assume this is an incomplete message.
+                return;
+
+            # We've got a complete message, so process it.
+            RPCMessage msg = {};
+            readMessageFromString(msg, serializedMsg);
+            process(comm.log, msg, comm.outBuf);
+        }
+    }
+
+    void terminate(CommHandler comm) {
+        # TODO when the RPC client terminates, we want to close all active
+        # tunnels for the client.
+    }
+
+    void addResponder(Object object) {}
+}
+
+void getObject(Context context, RPCMessage msg, AppendBuffer outBuf) {
+    GetObjectRequest req = {};
+    readMessageFromString(req, msg.request);
+
+    class ResponseCallback @impl GeneralCallback[String] {
+        @cvars {Context context; AppendBuffer outBuf; int32 requestId;}
+        void oper call(String contents, Exception ex) {
+            GetObjectResponse resp = {};
+            resp.data = contents;
+            context.writeResponse(outBuf, resp, requestId);
+        }
+    }
+
+    context.reader.readRawChunk(req.digest,
+                                ResponseCallback(context, outBuf, msg.id));
+}
+
+void getHead(Context context, RPCMessage msg, AppendBuffer outBuf) {
+    GetHeadRequest req = {};
+    readMessageFromString(req, msg.request);
+
+    class ResponseCallback @impl GeneralCallback[String] {
+        @cvars {Context context; AppendBuffer outBuf; int32 requestId;}
+        void oper call(String digest, Exception ex) {
+            GetHeadResponse resp = {};
+            resp.digest = digest;
+            context.writeResponse(outBuf, resp, requestId);
+        }
+    }
+
+    context.reader.getHead(req.branch, ResponseCallback(context, outBuf, msg.id));
+}
+
+class PeerServiceCommFactory @impl CommHandlerFactory {
+    MethodMap __methods = {};
+    Context __context;
+
+    oper init(Context context) : __context = context {
+        __methods['getObject'] = MethodHandler.Wrap(getObject);
+        __methods['getHead'] = MethodHandler.Wrap(getHead);
+    }
+
+    CommHandler makeCommHandler(NewConnection conn) {
+        conn.log.info `accepted connection from $(conn.accepted.addr)\n`;
+        log := Log(conn.log, FStr() `server-client-$(conn.accepted.addr)`);
+        return CommHandler(log, ClientHandler(__methods, __context));
+    }
+}

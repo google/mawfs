@@ -1,0 +1,88 @@
+
+import crack.functor Functor1;
+import crack.io cerr, FStr;
+import crack.lang Exception;
+import crack.net InetAddress, Poller, PollEvent, PollEventCallback, Socket,
+    SocketApd, AF_INET, SOCK_STREAM;
+import crack.net.comm2 Comm, CommListener, Log, WaiterFor;
+import mawfs.rawchunk GeneralCallback, RawChunkReader;
+import mawfs.rpc Context, PeerProxy, PeerServiceCommFactory;
+
+@import crack.ann assert, impl;
+
+## A socket initialization callback that captures the port number.
+class PortCollectorCallback @impl Functor1[void, Socket] {
+
+    ## Wait on this to get the port number.
+    WaiterFor[int, int] waiter = {0};
+
+    void oper call(Socket sock) {
+        s := SocketApd(Socket.cast(sock));
+        InetAddress addr = {0, 0};
+        s.getSocketAddress(addr);
+        port := addr.getPort();
+        waiter.setResult(port);
+    }
+}
+
+class FakeChunkReader @impl RawChunkReader {
+    void readRawChunk(String digest, GeneralCallback[String] callback) {
+        callback('from the chunk reader', null);
+    }
+
+    void getHead(String branch, GeneralCallback[String] callback) {
+        callback('digest', null);
+    }
+}
+
+class RPCTestBed {
+
+    Comm comm;
+    Log log;
+
+    ## Server port number.
+    int port;
+
+    void startServer() {
+        portCallback := PortCollectorCallback();
+        context := Context(FakeChunkReader());
+        listener := CommListener(log, PeerServiceCommFactory(context));
+        listener.addSocketInitCallback(portCallback);
+        comm.startServer(InetAddress(127, 0, 0, 1, 0), listener, true);
+        port = portCallback.waiter.getResult();
+    }
+
+    void setUp() {
+        log = Log(null, cerr, cerr, cerr, cerr, 'server');
+        comm = Comm(log);
+        comm.start();
+        startServer();
+    }
+
+    void testGetObject() {
+        peer := PeerProxy(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`);
+        @assert(peer.getObject('foo') == 'from the chunk reader');
+    }
+
+    void testGetHead() {
+        peer := PeerProxy(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`);
+        @assert(peer.getHead('master') == 'digest');
+    }
+
+    void tearDown() {
+        comm.stop();
+    }
+}
+
+testbed := RPCTestBed();
+testbed.setUp();
+try {
+    testbed.testGetObject();
+    testbed.testGetHead();
+} catch (Exception ex) {
+    testbed.tearDown();
+    throw ex;
+}
+
+cerr `ok\n`;
+
