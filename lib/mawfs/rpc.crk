@@ -5,9 +5,10 @@ import crack.cont.hashmap HashMap;
 import crack.functor Functor3;
 import crack.io cerr, AppendBufferWriter, FStr, StringWriter, Reader;
 import crack.lang cmp, makeHashVal, AppendBuffer, Exception, WriteBuffer;
-import crack.net resolve, InetAddress;
-import crack.net.comm2 Comm, CommHandler, CommHandlerFactory, Log,
-    NewConnection, SyncCommProxy, UserHandler, WaiterFor;
+import crack.logger.ctx Log;
+import crack.net resolve, Address, InetAddress;
+import crack.net.comm2 Comm, CommHandler, CommHandlerFactory, NewConnection,
+    SyncCommProxy, UserHandler, WaiterFor;
 import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
 import crack.regex Regex;
 import crack.serial SerialReader, SerialWriter;
@@ -92,7 +93,7 @@ class _BufferSerialReader {
     }
 }
 
-## Synchronous client.
+## Synchronous client handler.
 class _Handler @impl UserHandler {
     _BufferSerialReader __reader;
     HashMap[int, RPCWaiter] __waiters = {};
@@ -168,14 +169,23 @@ class PeerProxy {
         __proxy = __comm.getSyncProxy(a, _Handler());
     }
 
-    # We can probably just merge this into __invoke().
-    RPCMessage __sendSync(RPCMessage message) {
-        # Serialize and send the message.
+    oper init(Comm comm, Log log, Address addr) : __comm = comm, __log = log {
+        __log.info `connecting to $addr`;
+        __proxy = __comm.getSyncProxy(addr, _Handler());
+    }
+
+    String __serialize(RPCMessage message) {
         StringWriter out = {};
         SerialWriter sw = {out};
         sw.write(message.toString());
+        return out.string();
+    }
+
+    RPCMessage __sendSync(RPCMessage message) {
+        # Serialize and send the message.
+        serialized := __serialize(message);
         waiter := RPCWaiter(message.id);
-        __proxy.sendSync(out.string(), waiter);
+        __proxy.sendSync(serialized, waiter);
         return waiter.getResult();
     }
 

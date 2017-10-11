@@ -2,9 +2,10 @@
 import crack.functor Functor1;
 import crack.io cerr, FStr;
 import crack.lang Exception;
+import crack.logger.ctx Log;
 import crack.net InetAddress, Poller, PollEvent, PollEventCallback, Socket,
     SocketApd, AF_INET, SOCK_STREAM;
-import crack.net.comm2 Comm, CommListener, Log, WaiterFor;
+import crack.net.comm2 Comm, CommListener, WaiterFor;
 import mawfs.rawchunk GeneralCallback, RawChunkReader;
 import mawfs.rpc Context, PeerProxy, PeerServiceCommFactory;
 
