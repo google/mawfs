@@ -1,0 +1,134 @@
+## The peer network code.
+
+import crack.ascii toLower;
+import crack.cont.array Array;
+import crack.io FStr, StandardFormatter;
+import crack.lang Buffer;
+import crack.logger cerrLogger, DEBUG, ERROR, INFO, FATAL, WARN;
+import crack.logger.ctx Log;
+import crack.net Address, InetAddress;
+import crack.net.comm2 Comm;
+import mawfs.configstore ConfigStore;
+import mawfs.rawchunk RawChunkReader;
+import mawfs.rpc parseAddr, Context, PeerProxy, PeerServiceCommFactory;
+
+class Peer {
+    Address addr;
+    Comm __comm;
+    Log __log;
+    PeerProxy __proxy;
+
+    oper init(Comm comm, Log log, Address addr) :
+        addr = addr,
+        __comm = comm,
+        __log = log {
+    }
+
+    ## Returns the peer proxy, creating it if necessary.
+    PeerProxy getProxy() {
+        if (!__proxy)
+            __proxy = PeerProxy(__comm, __log, addr);
+        return __proxy;
+    }
+}
+
+## Encapsulates the entire peer subsystem.  Starts a server and manages
+## connections to all peers.
+class PeerNetwork {
+    Comm __comm;
+    Log __log;
+    RawChunkReader __chunkReader;
+    Array[Peer] __peers = {};
+
+    oper init(RawChunkReader chunkReader) :
+        __chunkReader = chunkReader {
+
+        __log = Log(cerrLogger, 'peernet');
+        __comm = Comm(__log);
+        __comm.start();
+    }
+
+    void addServer(Address addr) {
+        context := Context(__chunkReader);
+        factory := PeerServiceCommFactory(context);
+        __log.info `starting server on $addr`;
+        __comm.startServer(addr, factory, true);
+    }
+
+    void addPeer(Address addr) {
+        __peers.append(Peer(__comm, Log(__log, FStr() `peer-$addr`), addr));
+    }
+
+    oper del() {
+        __comm.stop();
+    }
+
+    String getHead(String branch) {
+        for (peer :in __peers) {
+            proxy := peer.getProxy();
+            if (proxy) {
+                __log.debug `got peer proxy for $(peer.addr)`;
+                head := proxy.getHead(branch);
+                if (head)
+                    return head;
+            } else {
+                __log.debug `unable to get proxy for $(peer.addr)\n`;
+            }
+        }
+
+        return null;
+    }
+
+    String getObject(String digest) {
+        for (peer :in __peers) {
+            proxy := peer.getProxy();
+            if (proxy) {
+                contents := proxy.getObject(digest);
+                if (contents)
+                    return contents;
+            }
+        }
+
+        return null;
+    }
+
+    ## Convfigure the peer network from the config store.
+    void configure(ConfigStore config) {
+
+        ifaceStr := config.get('server', 'iface', '');
+        portStr := config.get('server', 'port', '');
+        enabled := config.get('server', 'enabled', '');
+
+        # If "enabled" is not explicitly defined, infer whether to run a
+        # server based on whether "port" or "iface" is defined.
+        if (!enabled && (ifaceStr || portStr) || toLower(enabled) == 'true') {
+            addr := ifaceStr ? ifaceStr : '0.0.0.0';
+            if (portStr)
+                addr = FStr() `$addr:$portStr`;
+            inetAddr := parseAddr(addr);
+            if (!inetAddr)
+                __log.error `Unable to start server on address $addr\n`;
+            else
+                addServer(inetAddr);
+        }
+
+        ## Initialize peeers.
+        for (section :in config) {
+            if (section.key.startsWith('peer ')) {
+                peerName := section.key.substr(5);
+                peerInfo := section.val;
+                addrStr := peerInfo.get('host');
+                if (!addrStr) {
+                    __log.error `No "host" parameter for peer $peerName.`;
+                    continue;
+                }
+
+                portStr := peerInfo.get('port');
+                if (portStr)
+                    addrStr = FStr() `$addrStr:$portStr`;
+                inetAddr := parseAddr(addrStr);
+                addPeer(inetAddr);
+            }
+        }
+    }
+}
