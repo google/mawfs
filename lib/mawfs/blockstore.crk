@@ -24,12 +24,15 @@ import crack.lang cmp, makeHashVal, AppendBuffer, Buffer, Exception,
     InvalidArgumentError, ManagedBuffer;
 import crack.logger debug;
 import crack.serial SerialReader, SerialWriter;
+import crack.threads Mutex, MutexLock;
 
 import crack.fs Path;
 import crack.io FStr, Reader, StringWriter, Writer;
 
 import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
 import crack.crypt.ssl.cipher EVP_aes_256_cbc, DecryptWriter, EncryptWriter;
+
+import mawfs.rawchunk GeneralCallback, RawChunkReader;
 
 @import crack.ann interface, impl;
 @import crack.protobuf.ann protobuf;
@@ -306,6 +309,44 @@ class ChangeEntry {
     @abstract uint getJournalSize(String branch);
 }
 
+## Interface for partial chunk stores that can load chunks from remote sources.
+@interface RemoteReader {
+    ## Returns the contents of the object with the named digest, returns null
+    ## if unable to obtain it for any reason.
+    @abstract String getContents(String digest);
+}
+
+class FSRawChunkReader @impl RawChunkReader {
+    Path __dir;
+    Mutex __mutex;
+
+    oper init(Path dir, Mutex mutex) : __dir = dir, __mutex = mutex {}
+
+    void readRawChunk(String digest, GeneralCallback[String] callback) {
+        MutexLock lock = __mutex ? MutexLock(__mutex) : null;
+        path := __dir/'objects'/altEncode(digest);
+        if (path.exists()) {
+            result := path.readAll();
+            lock = null;
+            callback(result, null);
+        } else {
+            callback(null, null);
+        }
+    }
+
+    void getHead(String branch, GeneralCallback[String] callback) {
+        MutexLock lock = __mutex ? MutexLock(__mutex) : null;
+        path := __dir/'refs'/branch;
+        if (path.exists() && !path.isDir()) {
+            result := path.readAll();
+            lock = null;
+            callback(result, null);
+        } else {
+            callback(null, null);
+        }
+    }
+}
+
 ## Lets you store and load chunks from a persistent back-end.
 ## This is currently implemented as a thin wrapper around a directory, but it
 ## should eventually be an interface wrapping any place fine chunks are
@@ -314,8 +355,11 @@ class ChunkStore @impl NodeStore {
 
     Path __dir;
     FSInfo __fsInfo;
+    RemoteReader __remote;
 
     oper init(Path dir, FSInfo fsInfo) : __dir = dir, __fsInfo = fsInfo {}
+
+    @final void setRemoteReader(RemoteReader remote) { __remote = remote }
 
     ## Loads and returns the chunk with the specified digest, returns null if
     ## the chunk doesn't exist in the store.
@@ -324,17 +368,27 @@ class ChunkStore @impl NodeStore {
     ## match.
     Chunk load(String digest) {
         path := __dir/'objects'/altEncode(digest);
+        Reader src;
+        String remoteContents;
         if (path.exists()) {
-            result := __fsInfo.readChunk(path.reader());
-            if (result.digest != digest)
-                throw BadDigestError(
-                    FStr() I`chunk $(altEncode(digest)) data integrity failure.
-                             Actual data digest is $(altEncode(result.digest))`
-                );
-            return result;
+            src = path.reader();
         } else {
-            return null;
+            if (!__remote || !(remoteContents = __remote.getContents(digest)))
+                return null;
+            src = StringReader(remoteContents);
         }
+
+        result := __fsInfo.readChunk(path.reader());
+        if (result.digest != digest)
+            throw BadDigestError(
+                FStr() I`chunk $(altEncode(digest)) data integrity failure.
+                         Actual data digest is $(altEncode(result.digest))`
+            );
+
+        # Store locally if we retrieved this from the remote reader.
+        if (remoteContents)
+            path.writeAll(remoteContents);
+        return result;
     }
 
     Path __objectsDir() {
@@ -512,6 +566,13 @@ class ChunkStore @impl NodeStore {
         if (!branchFile.parent().exists())
             branchFile.parent().makeDirs();
         branchFile.writeAll(altEncode(digest));
+    }
+
+    ## Returns a RawChunkReader for the blockstore.  The mutex is locked prior
+    ## to doing any reads, allowing us to coordinate reads with the rest of
+    ## the system.  It may be null if coordination is not an issue.
+    RawChunkReader getRawChunkReader(Mutex mutex) {
+        return FSRawChunkReader(__dir, mutex);
     }
 
     ## Store an entire directory in the blockstore.  Returns its digest.
