@@ -18,7 +18,7 @@ import mawfs.blockstore Commit, Node, NodeStore, MODE_DIR;
 import crack.cont.hashmap HashMap;
 import crack.enc.base64 altDecode, altEncode;
 import crack.ext._fuse fuse_main = main, get_context, DoubleTimeSpec,
-    FuseOperations, FuseFileInfo;
+    FuseConnInfo, FuseOperations, FuseFileInfo;
 import crack.fs Path;
 import crack.io SeekableReader, SeekableWriter, SEEK_SET;
 import crack.lang Buffer, Exception, SystemError, WriteBuffer;
@@ -29,6 +29,8 @@ import crack.strutil split, StringArray;
 import crack.threads Mutex, MutexLock;
 import mawfs.path MAWFSPath;
 import mawfs.cache Cache, CachedNode;
+
+@import crack.ann interface;
 
 const int ENOSYS = 38, ENOTEMPTY = 39, EISDIR = 21;
 
@@ -48,6 +50,14 @@ class FileInfo {
     }
 }
 
+## Object that can be atteched to the filesystem, allowing the creating
+## process to inject functionality to be executed in the forked process.
+@interface UserModule {
+
+    ## Start the module.  Called during filesystem initialization.
+    @abstract void start();
+}
+
 ## A globally-locked filesystem.  A filesystem is "pointed at" a backing store
 ## and a branch.
 class LockedFilesystem {
@@ -58,16 +68,22 @@ class LockedFilesystem {
     Path root;
     HashMap[int, FileInfo] files = {};
     String __branch;
+    UserModule __userModule;
 
     ## Returns the latest commit digest on the current branch.
     String getHead() {
         return store.getHead(__branch);
     }
 
-    oper init(NodeStore store, String branch) :
+    ## userModule may be null.
+    oper init(NodeStore store, String branch, Mutex mutex,
+              UserModule userModule
+              ) :
+        mutex = mutex,
         store = store,
         cache(store, branch, null),
-        __branch = branch {
+        __branch = branch,
+        __userModule = userModule {
 
         commitDigest := getHead();
         info `loading commit $(altEncode(commitDigest))`;
@@ -87,6 +103,12 @@ class LockedFilesystem {
 
     void setHead(String commitDigest) {
         store.setHead(__branch, commitDigest);
+    }
+
+    ## Calls the start() method of the UserModule, if there is one.
+    void start() {
+        if (__userModule)
+            __userModule.start();
     }
 }
 
@@ -147,6 +169,12 @@ class Context {
     void commit() {
         __fs.cachedRoot.commitTree();
     }
+}
+
+voidptr _init(FuseConnInfo connInfo) {
+    fs := LockedFilesystem.unsafeCast(get_context().private_data);
+    fs.start();
+    return fs;
 }
 
 int _getattr(byteptr path, Stat stbuf)
@@ -471,6 +499,7 @@ int _unlink(byteptr path) {
 ## filesystem-per-process.
 int main(StringArray argv, LockedFilesystem fs) {
     ops := FuseOperations();
+    ops.init = _init;
     ops.getattr = _getattr;
     ops.readdir = _readdir;
     ops.open = _open;
@@ -497,7 +526,10 @@ int main(StringArray argv, LockedFilesystem fs) {
     return fuse_main(argv.count(), argv.makePrimArray(), ops, fs);
 }
 
-void runFuse(NodeStore store, StringArray argv, String branch) {
+## mutex: the mutex that locks the entire filesystem
+void runFuse(NodeStore store, StringArray argv, String branch, Mutex mutex,
+             UserModule userModule
+             ) {
 
     # Get the existing root node or create one if this is an empty filesystem.
     commitDigest := store.getHead(branch);
@@ -516,5 +548,5 @@ void runFuse(NodeStore store, StringArray argv, String branch) {
         store.setHead(branch, commitDigest);
     }
 
-    main(argv, LockedFilesystem(store, branch));
+    main(argv, LockedFilesystem(store, branch, mutex, userModule));
 }

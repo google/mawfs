@@ -35,10 +35,15 @@ import crack.io.readers LineReader;
 import crack.lang AppendBuffer, InvalidStateError;
 import crack.logger debug, error, setLogFile, setLogLevel, DEBUG;
 import crack.protobuf readMessageFromString;
+import crack.threads Mutex;
 
 import mawfs.blockstore hashFile, ChunkStore, FSInfo, Node, BLOCK_SIZE;
 import mawfs.configstore ConfigStore;
-import mawfs.fuse runFuse;
+import mawfs.fuse runFuse, UserModule;
+import mawfs.peernet PeerNetwork;
+import mawfs.rawchunk RawChunkReader;
+
+@import crack.ann impl;
 
 import 'libc.so.6' fsync;
 int fsync(int fd);
@@ -278,7 +283,42 @@ void main() {
             setLogLevel(DEBUG);
             configStore := ConfigStore(makePath(argv[2]), 'peers');
             chunkStore := ChunkStore(makePath(argv[2]), FSInfo(password));
-            runFuse(chunkStore, fuseArgs, 'master');
+
+            # Start the peer network.
+            mutex := Mutex();
+            chunkReader := chunkStore.getRawChunkReader(mutex);
+
+            class PeerNetModule @impl UserModule {
+                PeerNetwork __net;
+                ConfigStore __config;
+                RawChunkReader __chunkReader;
+
+                oper init(ConfigStore config, RawChunkReader chunkReader) :
+                    __config = config,
+                    __chunkReader = chunkReader {
+                }
+
+                void start() {
+                    __net = PeerNetwork(__chunkReader);
+                    __net.configure(__config);
+                }
+            }
+
+            runFuse(chunkStore, fuseArgs, 'master', mutex,
+                    PeerNetModule(configStore, chunkReader)
+                    );
+        } else if (cmd == 'pull') {
+            if (argv.count() != 3) {
+                cerr `Usage: mawfs pull <peer-address>\n`;
+                exit(1);
+            }
+            setLogFile('mawfs-puller.log');
+            setLogLevel(DEBUG);
+            net := PeerNetwork(null);
+            import mawfs.rpc parseAddr;
+            net.addPeer(parseAddr(argv[2]));
+            master := net.getHead('master');
+            cerr `master is $master\n`;
         } else if (cmd == 'dump') {
             if (argv.count() != 3) {
                 cerr I`Usage: mawfs dump <path>`;
