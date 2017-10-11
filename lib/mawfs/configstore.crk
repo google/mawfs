@@ -22,6 +22,7 @@ import crack.io StandardFormatter;
 class ConfigStore {
     String __configName;
     IniMap __config;
+    OrderedHashMap[String, String] __emptyDict = {};
     Path path;
 
     oper init(Path dir, String configName) {
@@ -45,11 +46,7 @@ class ConfigStore {
     }
 
     String get(String section, String key, String default) {
-        if(!__config[section] || !__config[section][key]) {
-            return default;
-        }
-
-        return __config[section][key];
+        return __config.get(section, __emptyDict).get(key, default);
     }
 
     void set(String section, String key, String value) {
@@ -70,4 +67,6 @@ class ConfigStore {
             __config[section] = result = OrderedHashMap[String, String]();
         return result;
     }
+
+    IniMap.Iter iter() { return __config.iter() }
 }
