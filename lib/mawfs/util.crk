@@ -1,0 +1,47 @@
+## Useful utilities.
+
+import crack.lang InvalidResourceError;
+import crack.enc.base64 altEncode;
+import crack.io FStr;
+
+import .blockstore Commit, Node, NodeStore;
+
+## Thrown when a node is not found during a tree traversal.
+class NodeNotFound : InvalidResourceError {
+    oper init(String message) : InvalidResourceError(message) {}
+}
+
+void traverse(NodeStore store, Node node) {
+    if (node.children) {
+        for (child :in node.children) {
+            childNode := store.getNode(child.hash);
+            if (!childNode)
+                throw NodeNotFound(
+                    FStr() `Missing node $(altEncode(child.hash))`
+                );
+            traverse(store, childNode);
+        }
+    }
+}
+
+## Traverse the entire node tree from 'commit'.  This is useful mainly for its
+## side-effects (such as verifying that the tree is intact or copying the
+## entire tree from another node).
+void traverse(NodeStore store, Commit commit) {
+    root := store.getNode(commit.root);
+    if (!root)
+        throw NodeNotFound(FStr() `Missing node $(altEncode(commit.root))`);
+    traverse(store, root);
+
+    # TODO: deal with the places where these merge.
+    if (commit.parent) {
+        for (parent :in commit.parent) {
+            parentCommit := store.getCommit(parent);
+            if (!parentCommit)
+                throw NodeNotFound(
+                    FStr() `Missing commit $(altEncode(parent))`
+                );
+            traverse(store, parentCommit);
+        }
+    }
+}
