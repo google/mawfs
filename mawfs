@@ -16,7 +16,7 @@
 import crack.ascii hex, radix;
 import crack.enc.base64 altDecode, altEncode;
 #import crack.exp.fuse fuseMain = main, LockedFilesystem, NodeImpl;
-import crack.lang InvalidArgumentError, SystemError;
+import crack.lang Exception, InvalidArgumentError, SystemError;
 
 import crack.fs cwd, makePath, Path;
 import crack.process Process, CRK_PIPE_STDERR, CRK_PIPE_STDOUT;
@@ -42,6 +42,7 @@ import mawfs.configstore ConfigStore;
 import mawfs.fuse runFuse, UserModule;
 import mawfs.peernet PeerNetwork;
 import mawfs.rawchunk RawChunkReader;
+import mawfs.util traverse;
 
 @import crack.ann impl;
 
@@ -308,17 +309,52 @@ void main() {
                     PeerNetModule(configStore, chunkReader)
                     );
         } else if (cmd == 'pull') {
-            if (argv.count() != 3) {
-                cerr `Usage: mawfs pull <peer-address>\n`;
+            if (argv.count() != 4) {
+                cerr `Usage: mawfs pull <peer-address> <dir>\n`;
                 exit(1);
             }
+
+            peer := argv[2];
+            backingDirName := argv[3];
+
             setLogFile('mawfs-puller.log');
             setLogLevel(DEBUG);
-            net := PeerNetwork(null);
+            password := readPassword();
             import mawfs.rpc parseAddr;
+
+            # Create the directory if it doesn't exist.
+            backingDir := makePath(backingDirName);
+            backingDir.makeDirs();
+
+            import mawfs.blockstore RemoteReader;
+
+            class RemoteReaderImpl @impl RemoteReader {
+                PeerNetwork __net;
+
+                oper init(PeerNetwork net) : __net = net {}
+
+                String getContents(String digest) {
+                    return __net.getObject(digest);
+                }
+            }
+
+            # Create a chunk store to read from remote.
+            store := ChunkStore(backingDir, FSInfo(password));
+            net := PeerNetwork(store.getRawChunkReader(Mutex()));
             net.addPeer(parseAddr(argv[2]));
+            store.setRemoteReader(RemoteReaderImpl(net));
+
             master := net.getHead('master');
-            cerr `master is $master\n`;
+            cerr `master is $(altEncode(master))\n`;
+
+            cerr `getting head\n`;
+            head := store.getCommit(master);
+            traverse(store, head);
+
+            cerr `writing master...\n`;
+            refsDir := backingDir/'refs';
+            refsDir.makeDirs();
+            (refsDir/'master').writeAll(altEncode(master));
         } else if (cmd == 'dump') {
             if (argv.count() != 3) {
                 cerr I`Usage: mawfs dump <path>`;
@@ -350,6 +386,8 @@ void main() {
         error `$(ex.text)`;
     } catch (InvalidArgumentError ex) {
         error `$(ex.text)`;
+    } catch (Exception ex) {
+        error `got general exception: $ex\n`;
     }
 }
 
