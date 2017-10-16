@@ -19,7 +19,7 @@ import crack.cont.array Array;
 import crack.enc.base64 altDecode, altEncode;
 import crack.hash Hash;
 import crack.hash.sha256 SHA256;
-import crack.io StringReader;
+import crack.io Formatter, StringReader;
 import crack.lang cmp, makeHashVal, AppendBuffer, Buffer, Exception,
     InvalidArgumentError, ManagedBuffer;
 import crack.logger debug;
@@ -44,6 +44,8 @@ const int
     MODE_EXE = 2;   # Set the executable flag.
 
 @protobuf {
+    version = 1
+
     ## A filesystem entry.  Nodes can either be directories or blobs.
     ## Directories have a mode of MODE_DIR and their entries all have name
     ## attributes.  Blobs do not have MODE_DIR and their entries all have
@@ -338,7 +340,7 @@ class FSRawChunkReader @impl RawChunkReader {
         MutexLock lock = __mutex ? MutexLock(__mutex) : null;
         path := __dir/'refs'/branch;
         if (path.exists() && !path.isDir()) {
-            result := path.readAll();
+            result := altDecode(path.readAll());
             lock = null;
             callback(result, null);
         } else {
@@ -378,7 +380,7 @@ class ChunkStore @impl NodeStore {
             src = StringReader(remoteContents);
         }
 
-        result := __fsInfo.readChunk(path.reader());
+        result := __fsInfo.readChunk(src);
         if (result.digest != digest)
             throw BadDigestError(
                 FStr() I`chunk $(altEncode(digest)) data integrity failure.
@@ -386,8 +388,10 @@ class ChunkStore @impl NodeStore {
             );
 
         # Store locally if we retrieved this from the remote reader.
-        if (remoteContents)
+        if (remoteContents) {
+            path.parent().makeDirs();
             path.writeAll(remoteContents);
+        }
         return result;
     }
 
