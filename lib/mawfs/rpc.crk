@@ -239,7 +239,7 @@ class Context {
         AppendBufferWriter backing = {out};
         SerialWriter sw = {backing};
         sw.write(reply.toString());
-        log.debug I`over the wire: $(reply.toString().getRepr())`;
+        log.debug I`sending over the wire: $(reply.toString().getRepr())`;
     }
 
     void writeError(AppendBuffer out, String errorMessage, int32 requestId) {
@@ -334,6 +334,8 @@ class ClientHandler @impl UserHandler {
 
     void addResponder(Object object) {}
 }
+
+# --- Server-side method implementation functions. ---
 
 void getObject(Context context, RPCMessage msg, AppendBuffer outBuf) {
     GetObjectRequest req = {};
