@@ -29,6 +29,11 @@ import (
 
 const BlockSize = 65536
 
+const (
+    MODE_DIR = 1
+    MODE_EXE = 2
+)
+
 type Chunk struct {
 	contents []byte
 	digest   []byte

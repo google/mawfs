@@ -15,6 +15,7 @@
 package blockstore
 
 import (
+     "errors"
 	"fmt"
 	pb "mawfs"
 	//"strings"  TODO: get latest go, use strings.Compare()
@@ -64,10 +65,10 @@ type Cache struct {
 	store NodeStore
 
 	// Cache size where we start doing GC.
-	gcThreshold uint
+	gcThreshold int
 
 	// Cache size where we stop doing GC.
-	gcBottom uint
+	gcBottom int
 
 	// Last and first elements of the doubly-linked list of GC objects.
 	// Note that newest is the last element (by direction of "Next") and
@@ -147,6 +148,25 @@ type Cache struct {
 	//    }
 }
 
+// Loads a Node from the backing store.
+func (cache *Cache) LoadNode(digest []byte) (*pb.Node, error) {
+    return cache.store.LoadNode(digest)
+}
+
+// Load a cached node.
+func (cache *Cache) makeCachedNode(parent *CachedNode, digest []byte) (
+        *CachedNode, error) {
+    fmt.Print("Loading node: ", altEncode(digest))
+    n, err := cache.LoadNode(digest)
+    if err != nil {
+        return nil, err
+    }
+
+    result := NewCachedNode(cache, digest, n)
+    result.parent = parent
+    return result, nil
+}
+
 func NewCache(store NodeStore) *Cache {
 	return &Cache{store: store,
 		gcThreshold: DefaultGcThreshold,
@@ -165,6 +185,61 @@ func (c *Cache) addObj(obj Obj) {
 		obj.SetPrev(c.newest)
 	}
 	c.newest = obj
+}
+
+// Returns a Head object for the specified branch.
+func (cache *Cache) GetHead(branch string) (*Head, error) {
+    digest, err := cache.store.GetHead(branch)
+    if isUnknownName(err) {
+        // Create a new branch.
+        var mode int32 = MODE_DIR
+        rootNode := &pb.Node{Mode: &mode}
+        rootDigest, err := cache.store.StoreNode(rootNode)
+        fmt.Print("xxx Stored root node under digest: ", altEncode(rootDigest),
+                  "\n")
+        if err != nil {
+            return nil, err
+        }
+
+        // Store the first commit under "master".
+        commit := &pb.Commit{Root: rootDigest}
+        commitDigest, err := cache.store.StoreCommit(commit)
+        fmt.Print("xxx Stored commit under digest: ", altEncode(commitDigest),
+                  "\n")
+        if err != nil {
+            return nil, err
+        }
+        if err = cache.store.SetHead(branch, commitDigest); err != nil {
+            return nil, err
+        }
+
+        digest = commitDigest
+    } else if err != nil {
+        return nil, err
+    }
+
+    return NewHead(cache, branch, digest), nil
+}
+
+func boolToString(val bool) string {
+    if val {
+        return "true"
+    } else {
+        return "false"
+    }
+}
+
+func isUnknownName(err error) bool {
+    _, ok := err.(UnknownName)
+    return ok
+}
+
+type AlreadyExists struct {
+    Branch string
+}
+
+func (e *AlreadyExists) Error() string {
+    return "Branch " + e.Branch + " already exists."
 }
 
 // Encapsulates the current head of a branch in the filesystem.
@@ -189,9 +264,9 @@ type Head struct {
 	// The name of the branch.  "master" is the default branch.
 	branch string
 
-	maxContentSize uint
-	maxChildren    uint
-	maxJournalSize uint
+	maxContentSize int
+	maxChildren    int
+	maxJournalSize int
 }
 
 // Creates a new Head object.
@@ -217,6 +292,38 @@ func (head *Head) addChange(change *pb.Change) error {
 		head.lastChange = lastChange
 	}
 	return err
+}
+
+// Returns the filesystem root at the branch head.
+// Note that the root node is not stored by the head.
+func (head *Head) GetRoot() (*CachedNode, error) {
+
+    var root *CachedNode
+    if head.baselineCommit != nil {
+        commit, err := head.store.LoadCommit(head.baselineCommit)
+        if err != nil {
+            return nil, err
+        }
+
+        root, err = head.cache.makeCachedNode(nil, commit.Root)
+        if err != nil {
+            return nil, err
+        }
+    } else {
+        // Nothing persisted, just create an empty root.
+        root = NewCachedNode(head.cache, nil, &pb.Node{})
+    }
+
+    iter, _ := head.cache.store.MakeJournalIter(head.branch)
+    if iter != nil {
+        // TODO: this is where we would normally do a replay.
+        // root.replayJournal().
+        // in replayJournal, should also verify that the final change is the
+        // one that we expect.
+        panic("journal replay not implemented yet")
+    }
+
+    return root, nil
 }
 
 // Wrapper around Node to manage its presence in the cache.
@@ -248,15 +355,32 @@ type CachedNode struct {
     // the cache).
     parent *CachedNode
 
-    children []*cachedEntry
+    // Children of the current node.
+    children childArray
+}
+
+// Used to indicate that the node has been accessed.  Brings the node to the
+// back of the LRU list.
+func touched() {
+    // Currently does nothing.
 }
 
 func (node *CachedNode) GetMode() int {
+    touched()
     return node.GetMode()
 }
 
 func NewCachedNode(cache *Cache, digest []byte, node *pb.Node) *CachedNode {
     return &CachedNode{cache: cache, digest: digest, node: node};
+}
+
+func (node *CachedNode) GetChild(index int) (*CachedNode, error) {
+    touched()
+    cachedEntry, err := node.children.getChildEntry(index)
+    if err != nil {
+        return nil, err
+    }
+    return cachedEntry.getNode()
 }
 
 // Wrapper around Entry which serves the same purpose as CachedNode.
@@ -282,6 +406,18 @@ func (e *cachedEntry) GetDigest() []byte {
     return e.entry.GetHash()
 }
 
+// Returns a cached node for the entry, loading it if necessary.
+func (e *cachedEntry) getNode() (*CachedNode, error) {
+    if e.node == nil {
+        node, err := e.cache.makeCachedNode(e.parent, e.GetDigest())
+        if err != nil {
+            return nil, err
+        }
+        e.node = node
+    }
+    return e.node, nil
+}
+
 // A managed array of entries.
 type childArray struct {
     rep []*pb.Entry
@@ -301,7 +437,7 @@ func Compare(a, b string) int {
     return -1
 }
 
-func (ca *childArray) findIndexHelper(name string, start, end uint) (uint, bool) {
+func (ca *childArray) findIndexHelper(name string, start, end int) (int, bool) {
     if len(ca.cached) == 0 {
         return 0, false
     }
@@ -329,8 +465,16 @@ func (ca *childArray) findIndexHelper(name string, start, end uint) (uint, bool)
     }
 }
 
-func (ca *childArray) findIndex(name string) (uint, bool) {
-    return ca.findIndexHelper(name, 0, uint(len(ca.rep)))
+func (ca *childArray) findIndex(name string) (int, bool) {
+    return ca.findIndexHelper(name, 0, len(ca.rep))
+}
+
+func (ca *childArray) getChildEntry(index int) (*cachedEntry, error) {
+    if index > len(ca.cached) {
+        return nil, errors.New("Index out of range.")
+    }
+
+    return ca.cached[index], nil
 }
 
 // Appends a new entry onto the childArray.

@@ -23,7 +23,7 @@ message Entry {
 // and directories.  A MAWFS node can contain both named entries and
 // contents.
 message Node {
-    required int32 checksum = 1;
+    optional int32 checksum = 1;
     optional string contents = 2;
 
     // 'size' is the size of the data in all children.

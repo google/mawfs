@@ -80,7 +80,7 @@ func Checkf(cond bool, format string, a ...interface{}) bool {
     return cond
 }
 
-func checkIndex(ca *childArray, key string, expectedIndex uint,
+func checkIndex(ca *childArray, key string, expectedIndex int,
                 expectedFound bool) bool {
     index, found := ca.findIndex(key)
     var foundText string = ""
@@ -127,4 +127,23 @@ func TestFind(t *testing.T) {
     // Try this with an empty array.
     Assert(t, checkIndex(newChildArray(make([]*pb.Entry, 0)), "howdy", 0,
                          false))
+}
+
+func newMemStoreCache() *Cache {
+    store := NewMemStore(NewFSInfo("bad-password"))
+    cache := NewCache(store)
+    return cache
+}
+
+func TestLoad(t *testing.T) {
+    cache := newMemStoreCache()
+    head, err := cache.GetHead("master")
+if !(err == nil) { t.Errorf("Assertion failed: err == nil: %s", err); return; }
+if !(head != nil) { t.Errorf("Assertion failed: head != nil"); return; }
+
+    // Try getting the root node.
+    root, err := head.GetRoot()
+    fmt.Print(err)
+    Assert(t, err == nil)
+    Assert(t, root != nil)
 }
