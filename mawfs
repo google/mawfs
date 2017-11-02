@@ -346,6 +346,7 @@ void main() {
 
             master := net.getHead('master');
             cerr `master is $(altEncode(master))\n`;
+            net.pullJournal(backingDir, 'master');
 
             cerr `getting head\n`;
             head := store.getCommit(master);

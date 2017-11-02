@@ -7,7 +7,7 @@
 import crack.functor Functor2;
 import crack.lang Exception;
 
-@import crack.ann impl, interface;
+@import crack.ann impl, interface, struct;
 
 ## Callback for returning a result or an error from an asynchronous function.
 ## If the second exception parameter is non-null, the result is an error and
@@ -48,6 +48,28 @@ class BlockingCallback[T] @impl GeneralCallback[T] {
     }
 }
 
+## Callback parameter of getJournalBlock().
+@struct JournalBlock {
+
+    ## Digest of the first block of the requested journal file.  This will be
+    ## null if:
+    ## -   No journal file exists.  In this case, 'contents' will be null and
+    ##     'done' will be true.
+    ## -   The journal file is smaller than a block.  In this case, 'contents'
+    ##     will be the entire journal file and 'done' will be true.
+    ## -   The journal file has a different first block digest than that
+    ##     requested by the user. In this case, 'contents' will be null and
+    ##     'done' will be false.
+    String firstBlockDigest;
+
+    ## Contents of the requested block of the journal file.
+    String contents;
+
+    ## True if 'contents' contains the last block of the journal or there is
+    ## no journal.
+    bool done;
+}
+
 ## An object that can read raw chunks.
 @interface RawChunkReader {
     ## Read a raw chunk asynchronously.  Calls 'callback' with the result.
@@ -63,4 +85,17 @@ class BlockingCallback[T] @impl GeneralCallback[T] {
 
     ## Returns the digest of the head of the given branch.
     @abstract void getHead(String branch, GeneralCallback[String] callback);
+
+    ## Get the next block of the journal (block size is determined by the
+    ## server).
+    ## firstBlockDigest: When obtaining anything but the first block, this
+    ##     should be the firstBlockDigest returned in the JournalBlock from
+    ##     the last call to getJournalBlock().
+    ## branch: Name of the branch to query.
+    ## pos: Position to begin reading from in the journal file.
+    @abstract void getJournalBlock(String firstBlockDigest,
+                                   String branch,
+                                   uint pos,
+                                   GeneralCallback[JournalBlock] callback
+                                   );
 }

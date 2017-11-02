@@ -6,7 +6,7 @@ import crack.logger.ctx Log;
 import crack.net InetAddress, Poller, PollEvent, PollEventCallback, Socket,
     SocketApd, AF_INET, SOCK_STREAM;
 import crack.net.comm2 Comm, CommListener, WaiterFor;
-import mawfs.rawchunk GeneralCallback, RawChunkReader;
+import mawfs.rawchunk GeneralCallback, JournalBlock, RawChunkReader;
 import mawfs.rpc Context, PeerProxy, PeerServiceCommFactory;
 
 @import crack.ann assert, impl;
@@ -33,6 +33,13 @@ class FakeChunkReader @impl RawChunkReader {
 
     void getHead(String branch, GeneralCallback[String] callback) {
         callback('digest', null);
+    }
+
+    void getJournalBlock(String firstBlockDigest, String branch, uint pos,
+                         GeneralCallback[JournalBlock] callback) {
+        callback(JournalBlock(firstBlockDigest, branch + ' contents', pos > 0),
+                 null
+                 );
     }
 }
 
@@ -70,6 +77,17 @@ class RPCTestBed {
         @assert(peer.getHead('master') == 'digest');
     }
 
+    void testReadJournal() {
+        peer := PeerProxy(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`);
+        jb := peer.getJournalBlock('digest', 'branch', 0);
+        @assert(jb.firstBlockDigest == 'digest');
+        @assert(jb.contents == 'branch contents');
+        @assert(!jb.done);
+
+        jb = peer.getJournalBlock('digest', 'branch', 1);
+        @assert(jb.done);
+    }
+
     void tearDown() {
         comm.stop();
     }
@@ -80,6 +98,7 @@ testbed.setUp();
 try {
     testbed.testGetObject();
     testbed.testGetHead();
+    testbed.testReadJournal();
 } catch (Exception ex) {
     testbed.tearDown();
     throw ex;

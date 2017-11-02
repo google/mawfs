@@ -1,0 +1,121 @@
+
+import crack.cont.array Array;
+import crack.fs makePath, Path;
+import crack.io cerr;
+import crack.lang Exception;
+import crack.net Address;
+import crack.net.comm2 Comm;
+import crack.logger.ctx Log;
+import mawfs.peernet Peer, PeerNetwork;
+import mawfs.rawchunk JournalBlock;
+import mawfs.rpc PeerProxy;
+
+@import crack.ann assert;
+
+class FakeProxy : PeerProxy {
+    Array[JournalBlock] results;
+    oper init(Array[JournalBlock] results) :
+        PeerProxy(null),
+        results = results {
+    }
+
+    JournalBlock getJournalBlock(String firstBlockDigest,
+                                 String branch,
+                                 uint pos
+                                 ) {
+        next := results[0];
+        results.delete(0);
+        return next;
+    }
+}
+
+class TestBed {
+    PeerNetwork net;
+    Array[JournalBlock] getJournalBlockResults = {};
+    Path root;
+
+    void __resetTempDir() {
+        root = makePath('/tmp/peernet_test');
+        if (root.exists())
+            root.deleteTree();
+    }
+
+    void setUp() {
+        __resetTempDir();
+        net = PeerNetwork(null);
+        peer := Peer(null, null, null);
+        peer.setProxy(FakeProxy(getJournalBlockResults));
+        net.addPeer(peer);
+    }
+
+    void tearDown() {
+        __resetTempDir();
+    }
+
+    void __assertNoJournal() {
+        @assert(!(root/'journals/master').exists());
+    }
+
+    void testEmptyJournal() {
+        getJournalBlockResults.append(JournalBlock(null, null, true));
+        net.pullJournal(root, 'master');
+        __assertNoJournal();
+    }
+
+    void __assertJournalContents(String contents) {
+        journal := root/'journals/master';
+        @assert(journal.exists());
+        @assert(journal.readAll() == contents);
+    }
+
+    void testTinyJournal() {
+        getJournalBlockResults.append(JournalBlock(null, 'test data', true));
+        net.pullJournal(root, 'master');
+        __assertJournalContents('test data');
+    }
+
+    void testMultiBlockJournal() {
+        getJournalBlockResults.append(JournalBlock('digest', 'block1 ', false));
+        getJournalBlockResults.append(JournalBlock('digest', 'block2', true));
+        net.pullJournal(root, 'master');
+        __assertJournalContents('block1 block2');
+    }
+
+    void testJournalChanged() {
+        getJournalBlockResults.append(JournalBlock('digest', 'block1 ', false));
+        getJournalBlockResults.append(JournalBlock(null, null, false));
+        net.pullJournal(root, 'master');
+        __assertNoJournal();
+    }
+
+    # If the journal has changed to a less than 1 block value, the server
+    # should still reply with a null first block digest and not done
+    # Test that the server gives us null, null, false when the journal is
+    # changed to empty.
+
+    oper init() {}
+
+    @static void __run(function[void, TestBed] func, String name) {
+        bed := TestBed();
+        bed.setUp();
+        try {
+            func(bed);
+        } catch (Exception ex) {
+            bed.tearDown();
+            cerr `Exception thrown from $name: $ex\n`;
+            return;
+        }
+        bed.tearDown();
+    }
+
+    @static void runAll() {
+        __run(testEmptyJournal, 'empty journal');
+        __run(testTinyJournal, 'tiny journal');
+        __run(testMultiBlockJournal, 'multi-block journal');
+        __run(testJournalChanged, 'journal changed');
+    }
+}
+
+TestBed.runAll();
+cerr `ok\n`;
+

@@ -2,7 +2,8 @@
 
 import crack.ascii toLower;
 import crack.cont.array Array;
-import crack.io FStr, StandardFormatter;
+import crack.fs Path;
+import crack.io Formatter, FStr, StandardFormatter, Writer;
 import crack.lang Buffer;
 import crack.logger cerrLogger, DEBUG, ERROR, INFO, FATAL, WARN;
 import crack.logger.ctx Log;
@@ -29,6 +30,13 @@ class Peer {
         if (!__proxy)
             __proxy = PeerProxy(__comm, __log, addr);
         return __proxy;
+    }
+
+    ## Sets the peer proxy (intended for testing).
+    void setProxy(PeerProxy proxy) { __proxy = proxy }
+
+    void formatTo(Formatter out) {
+        out `peer-$addr`;
     }
 }
 
@@ -57,6 +65,11 @@ class PeerNetwork {
 
     void addPeer(Address addr) {
         __peers.append(Peer(__comm, Log(__log, FStr() `peer-$addr`), addr));
+    }
+
+    ## A a new peer object constructed by the user (intended for testing).
+    void addPeer(Peer peer) {
+        __peers.append(peer);
     }
 
     oper del() {
@@ -90,6 +103,58 @@ class PeerNetwork {
         }
 
         return null;
+    }
+
+    ## Pull the entire journal from a peer.
+    ##
+    ## TODO: we really need to get the journal and head from the same peer at
+    ## the same time.  If the remote peer commits while we're pulling, the
+    ## journal will change out from under us.
+    ##
+    ## root: Root of the backing directory to replicate into.
+    ## branch: branch of the journal.
+    void pullJournal(Path root, String branch) {
+        Writer dst;
+        uint pos;
+        for (peer :in __peers) {
+            proxy := peer.getProxy();
+            if (proxy) {
+                __log.info `Pulling journal from $peer`;
+
+                # Get the first block.
+                jb := proxy.getJournalBlock(null, branch, 0);
+
+                branchPath := root/'journals'/branch;
+                if (jb.contents) {
+                    branchPath.parent().makeDirs();
+                    dst = branchPath.writer();
+                    dst.write(jb.contents);
+                    pos = jb.contents.size;
+                }
+
+                while (!jb.done) {
+                    jb := proxy.getJournalBlock(jb.firstBlockDigest, branch,
+                                                pos
+                                                );
+                    if (jb.contents) {
+                        pos += jb.contents.size;
+                        dst.write(jb.contents);
+                    } else if (!jb.firstBlockDigest && !jb.done) {
+                        # The journal has changed.
+                        # TODO: This is where we really need to get the new
+                        # head and start over again.
+                        __log.info `Remote journal has changed.`;
+                        branchPath.delete();
+                        return;
+                    }
+
+                    if (jb.done)
+                        break;
+                }
+
+                __log.info `Journal of size $pos retrieved.`;
+            }
+        }
     }
 
     ## Convfigure the peer network from the config store.

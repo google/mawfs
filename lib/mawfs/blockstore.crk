@@ -19,7 +19,7 @@ import crack.cont.array Array;
 import crack.enc.base64 altDecode, altEncode;
 import crack.hash Hash;
 import crack.hash.sha256 SHA256;
-import crack.io Formatter, StringReader;
+import crack.io Formatter, StringReader, SEEK_SET;
 import crack.lang cmp, makeHashVal, AppendBuffer, Buffer, Exception,
     InvalidArgumentError, ManagedBuffer;
 import crack.logger debug;
@@ -32,7 +32,7 @@ import crack.io FStr, Reader, StringWriter, Writer;
 import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
 import crack.crypt.ssl.cipher EVP_aes_256_cbc, DecryptWriter, EncryptWriter;
 
-import mawfs.rawchunk GeneralCallback, RawChunkReader;
+import mawfs.rawchunk GeneralCallback, JournalBlock, RawChunkReader;
 
 @import crack.ann interface, impl;
 @import crack.protobuf.ann protobuf;
@@ -346,6 +346,56 @@ class FSRawChunkReader @impl RawChunkReader {
         } else {
             callback(null, null);
         }
+    }
+
+    void getJournalBlock(String firstBlockDigest, String branch, uint pos,
+                         GeneralCallback[JournalBlock] callback
+                         ) {
+        MutexLock lock = __mutex ? MutexLock(__mutex) : null;
+        path := __dir/'journals'/branch;
+        if (!path.exists()) {
+            callback(JournalBlock(null, null, true), null);
+            return;
+        }
+
+        # If we're getting the first block, and the journal is smaller than
+        # the block size, just give back the first block.
+        journalSize := path.getStat().st_size;
+        if (journalSize <= BLOCK_SIZE) {
+            if (pos == 0) {
+                callback(JournalBlock(null, path.readAll(), true), null);
+            } else {
+                # The user is requesting a block from beyond the end of the
+                # journal.
+                callback(JournalBlock(null, null, true), null);
+            }
+            return;
+        }
+
+        src := path.reader();
+
+        # The journal is larger than a block.
+        # If the user specified a first block digest, verify that it matches
+        # that of the current journal.
+        if (firstBlockDigest) {
+            firstBlock := src.read(BLOCK_SIZE);
+            hasher := SHA256();
+            hasher.update(firstBlock);
+            digest := hasher.digest();
+            if (digest != firstBlockDigest) {
+                callback(JournalBlock(null, null, true), null);
+                return;
+            }
+        }
+
+        # Finally, try to read the block requested by the user.
+        src.seek(int32(pos), SEEK_SET);
+        data := src.read(BLOCK_SIZE);
+        callback(JournalBlock(firstBlockDigest, data,
+                              journalSize - pos <= BLOCK_SIZE
+                              ),
+                 null
+                 );
     }
 }
 

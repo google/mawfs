@@ -12,7 +12,7 @@ import crack.net.comm2 Comm, CommHandler, CommHandlerFactory, NewConnection,
 import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
 import crack.regex Regex;
 import crack.serial SerialReader, SerialWriter;
-import mawfs.rawchunk GeneralCallback, RawChunkReader;
+import mawfs.rawchunk GeneralCallback, JournalBlock, RawChunkReader;
 
 @import crack.ann cvars, impl;
 @import crack.protobuf.ann  protobuf;
@@ -67,6 +67,18 @@ class AppError : Exception {
 
     message GetHeadResponse {
         optional string digest = 1;
+    }
+
+    message GetJournalBlockRequest {
+        optional bytes firstBlockDigest = 1;
+        optional string branch = 2;
+        optional int32 pos = 3;
+    }
+
+    message GetJournalBlockResponse {
+        optional bytes firstBlockDigest = 1;
+        optional bytes contents = 2;
+        optional bool done = 3;
     }
 }
 
@@ -174,6 +186,10 @@ class PeerProxy {
         __proxy = __comm.getSyncProxy(addr, _Handler());
     }
 
+    ## Test constructor.
+    class TestOnly {}
+    oper init(TestOnly test) {}
+
     String __serialize(RPCMessage message) {
         StringWriter out = {};
         SerialWriter sw = {out};
@@ -221,6 +237,22 @@ class PeerProxy {
         respData := __invoke('getHead', req.toString());
         readMessageFromString(resp, respData);
         return resp.digest;
+    }
+
+    ## Gets the next journal block from the remote peer.  See RawChunkReader
+    ## for details.
+    JournalBlock getJournalBlock(String firstBlockDigest,
+                                 String branch,
+                                 uint pos
+                                 ) {
+        GetJournalBlockRequest req = {};
+        GetJournalBlockResponse resp = {};
+        req.firstBlockDigest = firstBlockDigest;
+        req.branch = branch;
+        req.pos = int32(pos);
+        respData := __invoke('getJournalBlock', req.toString());
+        readMessageFromString(resp, respData);
+        return JournalBlock(resp.firstBlockDigest, resp.contents, resp.done);
     }
 }
 
@@ -370,6 +402,26 @@ void getHead(Context context, RPCMessage msg, AppendBuffer outBuf) {
     context.reader.getHead(req.branch, ResponseCallback(context, outBuf, msg.id));
 }
 
+void getJournalBlock(Context context, RPCMessage msg, AppendBuffer outBuf) {
+    GetJournalBlockRequest req = {};
+    readMessageFromString(req, msg.request);
+
+    class ResponseCallback @impl GeneralCallback[JournalBlock] {
+        @cvars {Context context; AppendBuffer outBuf; int32 requestId;}
+        void oper call(JournalBlock block, Exception ex) {
+            GetJournalBlockResponse resp = {};
+            resp.firstBlockDigest = block.firstBlockDigest;
+            resp.contents = block.contents;
+            resp.done = block.done;
+            context.writeResponse(outBuf, resp, requestId);
+        }
+    }
+
+    context.reader.getJournalBlock(req.firstBlockDigest, req.branch, req.pos,
+                                   ResponseCallback(context, outBuf, msg.id)
+                                   );
+}
+
 class PeerServiceCommFactory @impl CommHandlerFactory {
     MethodMap __methods = {};
     Context __context;
@@ -377,6 +429,7 @@ class PeerServiceCommFactory @impl CommHandlerFactory {
     oper init(Context context) : __context = context {
         __methods['getObject'] = MethodHandler.Wrap(getObject);
         __methods['getHead'] = MethodHandler.Wrap(getHead);
+        __methods['getJournalBlock'] = MethodHandler.Wrap(getJournalBlock);
     }
 
     CommHandler makeCommHandler(NewConnection conn) {
