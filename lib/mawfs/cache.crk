@@ -67,16 +67,6 @@ const int32
 class Cache {
     NodeStore store;
 
-    ## The digest of the last commit.  Changes in the journal are relative to
-    ## this.
-    String baselineCommit;
-
-    ## The digest of the last change.
-    String lastChange;
-
-    ## The name of the branch.  "master" is the default branch.
-    String branch;
-
     uint maxContentSize = DEFAULT_MAX_CONTENT_SIZE;
     uint maxChildren = DEFAULT_MAX_CHILDREN;
     uint maxJournalSize = DEFAULT_MAX_JOURNAL_SIZE;
@@ -111,48 +101,6 @@ class Cache {
     ## removed from the head when we do garbage collection.
     DLList[Obj] __oldest = {};
 
-    oper init(NodeStore store, String branch, String baselineCommit) :
-        store = store,
-        branch = branch,
-        baselineCommit = baselineCommit {
-    }
-
-    @final void addChange(Change change) {
-        if (lastChange) {
-            change.lastChange = lastChange;
-        } else {
-            change.commit = baselineCommit;
-        }
-        lastChange = store.writeToJournal(branch, change);
-    }
-
-    ## Returns true if the caller should commit.
-    @final bool shouldCommit() {
-        return store.getJournalSize(branch) >= maxJournalSize;
-    }
-
-    @final String storeNode(Node node) {
-        return store.storeNode(node);
-    }
-
-    @final Node getNode(String digest) {
-        return store.getNode(digest);
-    }
-
-    @final void clearJournal() {
-        store.deleteJournal(branch);
-    }
-
-    @final JournalIter makeJournalIter() {
-        return store.makeJournalIter(branch);
-    }
-
-    ## Records the digest of a new commit.
-    @final void recordCommit(String commit) {
-        lastChange = null;
-        baselineCommit = commit;
-    }
-
     ## Adds a new object as the most recently used.
     @final void addObj(Obj obj) {
         @assert(!obj.next && !obj.prev);
@@ -174,7 +122,8 @@ class Cache {
 
     ## Run garbage collection.  'amount' is the number of bytes that we want
     ## to release.
-    void garbageCollect(uintz amount) {
+    void garbageCollect() {
+        uintz amount = gcThreshold - gcBottom;
         Obj cur = __oldest.head;
         uintz amountPruned;
         while (cur && amountPruned < amount) {
@@ -190,14 +139,158 @@ class Cache {
     }
 }
 
+class Head {
+
+    ## The digest of the last commit.  Changes in the journal are relative to
+    ## this.
+    String baselineCommit;
+
+    ## The digest of the last change.
+    String lastChange;
+
+    ## The name of the branch.  "master" is the default branch.
+    String branch;
+
+    oper init(String branch, String baselineCommit) :
+        baselineCommit = baselineCommit,
+        branch = branch {
+    }
+}
+
+## Wrapper for the three disjoint elements of a node.  These can vary
+## independently.
+## - The NodeStore, which can vary if the FSInfo changes (we probably should
+##   have had FSInfo wrap the NodeStore).
+## - The Cache, which always stays the same.
+## - The Head, which can vary with different branches.
+class NodeContext {
+    NodeStore __store;
+    Cache __cache;
+    Head __head;
+
+    oper init(NodeStore store, Cache cache, Head head) :
+        __store = store,
+        __cache = cache,
+        __head = head {
+    }
+
+    ## Convenience constructor to create a NodeContext complete with a Cache
+    ## and Head object.
+    oper init(NodeStore store, String branch, String baselineCommit) :
+        __store = store,
+        __cache = Cache(),
+        __head = Head(branch, baselineCommit) {
+    }
+
+    @final void addChange(Change change) {
+        if (__head.lastChange) {
+            change.lastChange = __head.lastChange;
+        } else {
+            change.commit = __head.baselineCommit;
+        }
+        __head.lastChange = __store.writeToJournal(__head.branch, change);
+    }
+
+    ## Returns true if the caller should commit.
+    @final bool shouldCommit() {
+        return __store.getJournalSize(__head.branch) >= __cache.maxJournalSize;
+    }
+
+    @final String storeNode(Node node) {
+        return __store.storeNode(node);
+    }
+
+    @final Node getNode(String digest) {
+        return __store.getNode(digest);
+    }
+
+    @final void clearJournal() {
+        __store.deleteJournal(__head.branch);
+    }
+
+    @final uint getJournalSize(String branch) {
+        return __store.getJournalSize(branch)
+    }
+
+    @final JournalIter makeJournalIter() {
+        return __store.makeJournalIter(__head.branch);
+    }
+
+    @final String makeDigest(Node node) { return __store.makeDigest(node) }
+
+    @final uint getMaxChildren() { return __cache.maxChildren }
+    @final void setMaxChildren(uint val) { __cache.maxChildren = val }
+
+    @final uint getMaxJournalSize() { return __cache.maxJournalSize }
+    @final void setMaxJournalSize(uint val) { __cache.maxJournalSize = val }
+
+    @final uint getMaxContentSize() { return __cache.maxContentSize }
+
+    @final uint getGCThreshold() { return __cache.gcThreshold }
+    @final void setGCThreshold(uint val) { __cache.gcThreshold = val }
+
+    @final uint getGCBottom() { return __cache.gcBottom }
+
+    @final Cache getCache() { return __cache }
+
+    ## Records the digest of a new commit.
+    @final void recordCommit(String commit) {
+        __head.lastChange = null;
+        __head.baselineCommit = commit;
+    }
+
+    @final void addObj(Cache.Obj obj) { __cache.addObj(obj) }
+
+    ## Release the object from the LRU queue.
+    @final void releaseObj(Cache.Obj obj) { __cache.releaseObj(obj) }
+
+    ## Bring an object to the end of the least recently used queue.
+    @final void touch(Cache.Obj obj) { __cache.touch(obj) }
+
+    ## Run garbage collection.  'amount' is the number of bytes that we want
+    ## to release.
+    @final void garbageCollect() { __cache.garbageCollect() }
+
+    ## Call the "object create" handler.  This should be used when a CacheNode is
+    ## constructed.
+    @final void onObjCreate(Cache.Obj obj) {
+        if (__cache.onObjCreate)
+            __cache.onObjCreate(obj);
+    }
+
+    ## Call the "Object destroy" handler.
+    @final void onObjDestroy(Cache.Obj obj) {
+        if (__cache.onObjDestroy)
+            __cache.onObjDestroy(obj);
+    }
+
+    @final String getBaselineCommit() { return __head.baselineCommit }
+    @final String getLastChange() { return __head.lastChange }
+    @final void setLastChange(String digest) { __head.lastChange = digest }
+
+    ## Returns the branch name.
+    @final String getBranch() { return __head.branch }
+
+    ## Get the head revision of the current branch.
+    @final String getHead() { return __store.getHead(__head.branch) }
+
+    ## Stores a new commit and updates the branch head.
+    @final void storeCommit(Commit commit) {
+        __store.setHead(getBranch(), commitDigest := __store.storeCommit(commit));
+        recordCommit(commitDigest);
+        info I`commit: digest = $(altEncode(commitDigest)), \
+               new root = $(altEncode(commit.root))`;
+    }
+}
+
 class CachedNode;
 
 ## Creates a CachedNode.
-CachedNode _makeCachedNode(CachedNode parent, Cache cache, String digest);
+CachedNode _makeCachedNode(CachedNode parent, NodeContext ctx, String digest);
 
 ## Wraps a Node object with caching functionality.
 class CachedNode : Cache.Obj {
-    Cache __cache;
+    NodeContext __ctx;
 
     String digest;
     Node node;
@@ -239,13 +332,13 @@ class CachedNode : Cache.Obj {
     ##   in one parent's children list.  This must be enforced by CachedNode.
     class CachedEntry {
         Entry entry;
-        Cache __cache;
+        NodeContext __ctx;
         CachedNode node;
         CachedNode __parent;
 
-        oper init(Cache cache, Entry entry, CachedNode parent) :
+        oper init(NodeContext ctx, Entry entry, CachedNode parent) :
             entry = entry,
-            __cache = cache,
+            __ctx = ctx,
             __parent = parent {
         }
 
@@ -256,7 +349,7 @@ class CachedNode : Cache.Obj {
 
             # We shouldn't really need the cache if we've already got the
             # node, but this gives us a clean invariant.
-            __cache = node.__cache;
+            __ctx = node.__ctx;
         }
 
         @final String getName() {
@@ -283,7 +376,7 @@ class CachedNode : Cache.Obj {
                     throw InvalidStateError(
                         FStr() `No hash or node for $(entry.name)`
                     );
-                node = _makeCachedNode(__parent, __cache, entry.hash);
+                node = _makeCachedNode(__parent, __ctx, entry.hash);
             }
             return node;
         }
@@ -472,23 +565,21 @@ class CachedNode : Cache.Obj {
     ## Moves the node to the back of the least-recently-used queue.  Should
     ## be called all public and all recursive functions that references the
     ## node.
-    @final void __touched() { __cache.touch(this) }
+    @final void __touched() { __ctx.touch(this) }
 
     ## digest should be null for a new node.
-    oper init(Cache cache, String digest, Node node) :
-        __cache = cache,
+    oper init(NodeContext cache, String digest, Node node) :
+        __ctx = cache,
         digest = digest,
         node = node,
         dirty = !digest {
 
-        __cache.addObj(this);
-        if (__cache.onObjCreate)
-            __cache.onObjCreate(this);
+        __ctx.addObj(this);
+        __ctx.onObjCreate(this);
     }
 
     oper del() {
-        if (__cache.onObjDestroy)
-            __cache.onObjDestroy(this);
+        __ctx.onObjDestroy(this);
     }
 
     ## Allocate __children array to mirror the values in node.children.
@@ -545,7 +636,7 @@ class CachedNode : Cache.Obj {
             }
         }
 
-        __cache.releaseObj(this);
+        __ctx.releaseObj(this);
         if (__children) {
             # Releasing the children breaks all cyclic links to the parent.
             for (child :in __children)
@@ -633,7 +724,7 @@ class CachedNode : Cache.Obj {
             __makeChildren();
             for (iter :on node.children)
                 __children[iter.index] =
-                    CachedEntry(__cache, iter.elem(), this);
+                    CachedEntry(__ctx, iter.elem(), this);
             return true;
         } else {
             return false;
@@ -649,7 +740,7 @@ class CachedNode : Cache.Obj {
         if (!cachedEntry) {
             entry := node.children[index];
 
-            node := _makeCachedNode(this, __cache, entry.hash);
+            node := _makeCachedNode(this, __ctx, entry.hash);
             if (!node) {
                 error `Unable to load node $(entry.hash)`;
                 return null;
@@ -786,18 +877,12 @@ class CachedNode : Cache.Obj {
     ## Commit the entire tree and record a commit object.
     void commitTree() {
         # We don't need to __touched(), we're about to call commit().
-        info `committing on branch $(__cache.branch).`;
+        info `committing on branch $(__ctx.getBranch()).`;
         newRootDigest := getRoot().commit();
         Commit commit = {};
         commit.root = newRootDigest;
-        commit.parent_append(__cache.store.getHead(__cache.branch));
-
-        __cache.store.setHead(__cache.branch,
-                              commitDigest := __cache.store.storeCommit(commit))
-                              ;
-        __cache.recordCommit(commitDigest);
-        info I`commit: digest = $(altEncode(commitDigest)), \
-               new root = $(altEncode(commit.root))`;
+        commit.parent_append(__ctx.getHead());
+        __ctx.storeCommit(commit);
         size := getSize();
 
         # After commit is the best time to run garbage collection because
@@ -810,8 +895,8 @@ class CachedNode : Cache.Obj {
     void __recordChange(Change change) {
         change.path = Array[int32]();
         __makePath(change.path);
-        __cache.addChange(change);
-        if (__cache.shouldCommit())
+        __ctx.addChange(change);
+        if (__ctx.shouldCommit())
             commitTree();
     }
 
@@ -851,7 +936,7 @@ class CachedNode : Cache.Obj {
     ## Add a new child node with the specified name.
     CachedNode addChild(String name, Node node) {
         # we don't call __touched() because this addChild() does.
-        addChild(name, child := CachedNode(__cache, null, node));
+        addChild(name, child := CachedNode(__ctx, null, node));
         return child;
     }
 
@@ -890,17 +975,17 @@ class CachedNode : Cache.Obj {
             return parent.getRoot();
     }
 
-    ## Returns the cache object for the node.
-    Cache getCache() {
+    ## Returns the node context object for the node.
+    NodeContext getContext() {
         # We don't __touched() because we're not interested in the object.
-        return __cache;
+        return __ctx;
     }
 
     ## Make a new unnamed entry for the node parented by 'this'.
     CachedEntry __makeUnnamedEntry(CachedNode node, CachedNode parent) {
         entry := Entry();
         entry.size = node.getSize();
-        cachedEntry := CachedEntry(__cache, entry, this);
+        cachedEntry := CachedEntry(__ctx, entry, this);
         cachedEntry.node = node;
         cachedEntry.setParent(parent);
         return cachedEntry;
@@ -910,7 +995,7 @@ class CachedNode : Cache.Obj {
     ## node is split, return the new node full of the higher children.
     ## Otherwise return null.
     CachedNode __maybeSplit() {
-        if (__children.count() <= __cache.maxChildren)
+        if (__children.count() <= __ctx.getMaxChildren())
             return null;
 
         # Number of nodes in the new first child.
@@ -931,7 +1016,7 @@ class CachedNode : Cache.Obj {
         }
 
         # Create a new node and copy the higher children.
-        CachedNode newNode = {__cache, null, Node()};
+        CachedNode newNode = {__ctx, null, Node()};
         newNode.__populateChildren(true);
         for (; i < children.count(); ++i) {
             newNode.__children.append(child := children[i]);
@@ -1019,7 +1104,7 @@ class CachedNode : Cache.Obj {
         @assert(__populateChildren(false));
 
         # Create a new node to hold the existing children.
-        firstChild := CachedNode(__cache, null, Node());
+        firstChild := CachedNode(__ctx, null, Node());
         firstChild.__stealChildren(this);
 
         # Create a new node with a child array.
@@ -1035,7 +1120,7 @@ class CachedNode : Cache.Obj {
     void append(String contents) {
         # We don't __touched() because __appendChild() does.
         newNode := __makeNode(contents);
-        cached := CachedNode(__cache, null, newNode);
+        cached := CachedNode(__ctx, null, newNode);
         extra := __appendChild(cached);
         if (extra) {
             # If this is a content node, we need to convert it to an
@@ -1043,7 +1128,7 @@ class CachedNode : Cache.Obj {
             if (node.children is null) {
                 CachedNode firstChild;
                 if (node.contents != null)
-                    firstChild = CachedNode(__cache, null, node);
+                    firstChild = CachedNode(__ctx, null, node);
 
                 # Create a new node with a child array.
                 __resetNode(Node());
@@ -1472,7 +1557,7 @@ class CachedNode : Cache.Obj {
     }
 
     void __insert(uint64 pos, String contents) {
-        newNode := CachedNode(__cache, null, __makeNode(contents));
+        newNode := CachedNode(__ctx, null, __makeNode(contents));
 
         extra := __insertChild(pos, newNode);
         if (extra) {
@@ -1679,9 +1764,9 @@ class CachedNode : Cache.Obj {
             }
         }
 
-        digest = __cache.storeNode(node);
+        digest = __ctx.storeNode(node);
         dirty = false;
-        __cache.clearJournal();
+        __ctx.clearJournal();
 
         return digest;
     }
@@ -1732,7 +1817,7 @@ class CachedNode : Cache.Obj {
 
     void __applyChange(Change change) {
         if (change.type == CHANGE_ADD_CHILD) {
-            __addChild(change.name, CachedNode(__cache, null, change.node));
+            __addChild(change.name, CachedNode(__ctx, null, change.node));
         } else if (change.type == CHANGE_DELETE_CHILD) {
             if (!__populateChildren(false) || !__children.delete(change.name))
                 throw InvalidStateError(
@@ -1771,7 +1856,7 @@ class CachedNode : Cache.Obj {
                                        );
 
         String lastChangeDigest;
-        for (entry :in __cache.makeJournalIter()) {
+        for (entry :in __ctx.makeJournalIter()) {
             change := entry.change;
             if (!lastChangeDigest) {
                 # First change after a commit.  Verify that the change has a
@@ -1780,11 +1865,11 @@ class CachedNode : Cache.Obj {
                     throw InvalidStateError('First change in the journal '
                                              'does not have a commit field.'
                                             );
-                if (change.commit != __cache.baselineCommit)
+                if (change.commit != __ctx.getBaselineCommit())
                     throw InvalidStateError(
                         FStr() I`First change in the journal is for commit \
                                  $(altEncode(change.commit)), current commit \
-                                 is $(altEncode(__cache.baselineCommit))`
+                                 is $(altEncode(__ctx.getBaselineCommit()))`
                     );
             } else if (lastChangeDigest != change.lastChange) {
                 throw InvalidStateError(
@@ -1799,8 +1884,8 @@ class CachedNode : Cache.Obj {
             lastChangeDigest = entry.digest;
         }
 
-        # Give this to the cache.
-        __cache.lastChange = lastChangeDigest;
+        # Store this in the context.
+        __ctx.setLastChange(lastChangeDigest);
     }
 
     uint read(uint64 pos, WriteBuffer buffer) {
@@ -1863,11 +1948,12 @@ class CachedNode : Cache.Obj {
     }
 
     void garbageCollect() {
+        # TODO: move this entirely into the NodeContext.
         totalSize := getRoot().getRSize();
-        if (totalSize > __cache.gcThreshold) {
+        if (totalSize > __ctx.getGCThreshold()) {
             info I`running garbage collection (total size $totalSize \
-                   threshold = $(__cache.gcThreshold)`;
-            __cache.garbageCollect(__cache.gcThreshold - __cache.gcBottom);
+                   threshold = $(__ctx.getGCThreshold())`;
+            __ctx.garbageCollect();
         }
     }
 
@@ -1881,12 +1967,12 @@ class CachedNode : Cache.Obj {
         # If the node isn't dirty, verify that we have a correct digest.
         if (!dirty) {
             @assert(digest);
-            @assert(digest == __cache.store.makeDigest(node));
+            @assert(digest == __ctx.makeDigest(node));
         }
 
         if (node.contents) {
             @assert(node.contents.size == node.size);
-            @assert(node.contents.size <= __cache.maxContentSize);
+            @assert(node.contents.size <= __ctx.getMaxContentSize());
             return VerifyReport(node.contents.size, 1);
         } else if (node.children) {
             @assert(__populateChildren(false));
@@ -1943,12 +2029,12 @@ class CachedNode : Cache.Obj {
     }
 }
 
-CachedNode _makeCachedNode(CachedNode parent, Cache cache, String digest) {
-    node := cache.getNode(digest);
+CachedNode _makeCachedNode(CachedNode parent, NodeContext ctx, String digest) {
+    node := ctx.getNode(digest);
     if (!node)
         return null;
 
-    result := CachedNode(cache, digest, node);
+    result := CachedNode(ctx, digest, node);
     result.parent = parent;
     return result;
 }

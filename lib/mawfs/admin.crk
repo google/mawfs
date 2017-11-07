@@ -241,7 +241,7 @@ class BranchFile : AdminPath {
     }
 
     String _getContents() {
-        return root.getCache().branch;
+        return root.getContext().getBranch();
     }
 }
 

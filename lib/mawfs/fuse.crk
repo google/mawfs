@@ -28,7 +28,7 @@ import crack.runtime free, memcpy, Stat, EACCES, EEXIST, EINVAL, ENOENT,
 import crack.strutil split, StringArray;
 import crack.threads Mutex, MutexLock;
 import mawfs.path MAWFSPath;
-import mawfs.cache Cache, CachedNode;
+import mawfs.cache CachedNode, NodeContext;
 
 @import crack.ann interface;
 
@@ -63,7 +63,7 @@ class FileInfo {
 class LockedFilesystem {
     Mutex mutex = {};
     NodeStore store;
-    Cache cache;
+    NodeContext ctx;
     CachedNode cachedRoot;
     Path root;
     HashMap[int, FileInfo] files = {};
@@ -81,7 +81,7 @@ class LockedFilesystem {
               ) :
         mutex = mutex,
         store = store,
-        cache(store, branch, null),
+        ctx(store, branch, null),
         __branch = branch,
         __userModule = userModule {
 
@@ -90,12 +90,12 @@ class LockedFilesystem {
         commit := store.getCommit(commitDigest);
 
         # Store the commit digest now that we've got it.
-        cache.baselineCommit = commitDigest;
+        ctx.recordCommit(commitDigest);
 
         # Get the root node, create the CachedNode and the MAWFSPath for it.
         info `loading root $(altEncode(commit.root))`;
         rootNode := store.getNode(commit.root);
-        cachedRoot = CachedNode(cache, commit.root, rootNode);
+        cachedRoot = CachedNode(ctx, commit.root, rootNode);
         root = MAWFSPath(cachedRoot);
 
         cachedRoot.replayJournal();

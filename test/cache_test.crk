@@ -23,7 +23,7 @@ import crack.lang AppendBuffer, ManagedBuffer;
 import crack.logger debug, setLogLevel, DEBUG;
 import mawfs.blockstore Commit, Entry, Node, NodeStore, MODE_DIR;
 import mawfs.memstore MemNodeStore;
-import mawfs.cache Cache, CachedNode;
+import mawfs.cache Cache, CachedNode, NodeContext;
 import mawfs.testutil copy, makeRandomData;
 import mawfs.memtrace Tracer;
 
@@ -83,8 +83,8 @@ nodeStore.storeRoot(digest);
 
 # NOTE: We should be passing a commit digest to this, but the root digest
 # (or any other non-empty string) should work just as well for this exercise.
-cache := Cache(nodeStore, 'master', digest);
-cachedRoot := CachedNode(cache, digest, root);
+ctx := NodeContext(nodeStore, 'master', digest);
+cachedRoot := CachedNode(ctx, digest, root);
 cachedNode := cachedRoot.getChild(0);
 @assert(cachedNode.getContents() == 'contents of foo');
 
@@ -156,13 +156,13 @@ void verifyContents() {
 # back from the cache.
 
 # Test reconstructing changes from cache.
-cachedRoot = CachedNode(cache, digest, nodeStore.getRoot());
+cachedRoot = CachedNode(ctx, digest, nodeStore.getRoot());
 cachedRoot.replayJournal();
 verifyContents();
 
 # Test committing changes.
 nodeStore.storeRoot(digest = cachedRoot.commit());
-cachedRoot = CachedNode(cache, digest, nodeStore.getRoot());
+cachedRoot = CachedNode(ctx, digest, nodeStore.getRoot());
 verifyContents();
 
 # Test a write.
@@ -179,9 +179,9 @@ if (true) {
 # Test appending children.
 if (true) {
     cerr `appending master\n`;
-    cache := Cache(nodeStore, 'master', digest);
-    cache.maxChildren = 4;
-    CachedNode root = {cache, digest, Node()};
+    ctx := NodeContext(nodeStore, 'master', digest);
+    ctx.setMaxChildren(4);
+    CachedNode root = {ctx, digest, Node()};
 
     AppendBuffer originalData = {4096};
     for (int i = 0; i < 100; ++i) {
@@ -197,8 +197,8 @@ if (true) {
 # Case 1: verify that we can insert objects into an empty node.
 if (true) {
     cerr `inserting objects into an empty node\n`;
-    cache := Cache(nodeStore, 'master', digest);
-    CachedNode root = {cache, digest, Node()};
+    ctx := NodeContext(nodeStore, 'master', digest);
+    CachedNode root = {ctx, digest, Node()};
     randomData := makeRandomData();
     root.write(0, randomData);
 
@@ -212,8 +212,8 @@ if (true) {
 # Write a large amount of random data into the middle of a node with contents.
 if (true) {
     cerr `write random data into the middle of a content node.\n`;
-    cache := Cache(nodeStore, 'master', digest);
-    CachedNode root = {cache, digest, Node()};
+    ctx := NodeContext(nodeStore, 'master', digest);
+    CachedNode root = {ctx, digest, Node()};
     root.node.contents = 'this is a test';
 
     randomData := String(makeRandomData(), true);
@@ -226,8 +226,8 @@ if (true) {
 # Write into the middle of a node with contents.
 if (true) {
     cerr `write simple data into the middle of a content node.\n`;
-    cache := Cache(nodeStore, 'master', digest);
-    CachedNode root = {cache, digest, Node()};
+    ctx := NodeContext(nodeStore, 'master', digest);
+    CachedNode root = {ctx, digest, Node()};
     root.node.contents = 'this is a test';
 
     root.write(5, 'crzy');
@@ -239,8 +239,8 @@ if (true) {
 # Write data after the end of a node with children.
 if (true) {
     cerr `write data after the end of a node with children\n`;
-    cache := Cache(nodeStore, 'master', digest);
-    CachedNode root = {cache, digest, Node()};
+    ctx := NodeContext(nodeStore, 'master', digest);
+    CachedNode root = {ctx, digest, Node()};
 
     # populate an empty node.
     data := String(makeRandomData(), true);
@@ -255,8 +255,8 @@ if (true) {
 # Write a large amount of random data into a node with children.
 if (false) {
     cerr `write random data into a node with children\n`;
-    cache := Cache(nodeStore, 'master', digest);
-    CachedNode root = {cache, digest, Node()};
+    ctx := NodeContext(nodeStore, 'master', digest);
+    CachedNode root = {ctx, digest, Node()};
 
     # populate an empty node.
     data := String(makeRandomData(), true);
@@ -266,10 +266,10 @@ if (false) {
     root.write(25000, data);
 }
 
-CachedNode makeSmallFileTree(Cache cache) {
-    Cache c;
-    c = cache ? cache : Cache(nodeStore, 'master', digest);
-    c.maxChildren = 3;
+CachedNode makeSmallFileTree(NodeContext ctx) {
+    NodeContext c;
+    c = ctx ? ctx : NodeContext(nodeStore, 'master', digest);
+    c.setMaxChildren(3);
     CachedNode root = {c, digest, Node()};
     root.append('alpha');
     root.append('bravo');
@@ -285,10 +285,10 @@ CachedNode makeSmallFileTree() { return makeSmallFileTree(null) }
 # Unit tests for node merge.
 if (true) {
     cerr `delete nodes\n`;
-    cache = Cache(nodeStore, 'master', digest);
+    ctx = NodeContext(nodeStore, 'master', digest);
     tracer := Tracer();
-    tracer.instrument(cache);
-    root := makeSmallFileTree(cache);
+    tracer.instrument(ctx.getCache());
+    root := makeSmallFileTree(ctx);
 
     # The root should have two children, one with three content nodes and one
     # with two.
@@ -304,10 +304,10 @@ if (true) {
 
     root.verify();
 
-    cache = Cache(nodeStore, 'master', digest);
+    ctx = NodeContext(nodeStore, 'master', digest);
     tracer = Tracer();
-    tracer.instrument(cache);
-    root = makeSmallFileTree(cache);
+    tracer.instrument(ctx.getCache());
+    root = makeSmallFileTree(ctx);
 
     root.deleteNode(10); # Delete "charlie".
     root.deleteNode(10); # Delete "delta".
@@ -318,7 +318,8 @@ if (true) {
 
     root.commit();
     initRSize := root.getRSize();
-    cache.garbageCollect(initRSize);
+    ctx.setGCThreshold(ctx.getGCBottom() + initRSize);
+    ctx.garbageCollect();
     root.traverseResident(tracer.makeVisitor());
     @assert(!tracer.hasLeaks());
     @assert(root.getRSize() < initRSize);
@@ -375,14 +376,14 @@ if (true) {
     commitDigest := nodeStore.storeCommit(commit);
     nodeStore.setHead('master', commitDigest);
 
-    root := CachedNode(cache, digest, Node());
+    root := CachedNode(ctx, digest, Node());
     randomData := String(makeRandomData(), true);
     root.write(0, randomData);
     root.write(500, randomData);
     @assert(root.getContents() == randomData.substr(0, 500) + randomData);
 
     # Test writing to the middle of a chunk.
-    root = CachedNode(cache, digest, Node());
+    root = CachedNode(ctx, digest, Node());
     root.write(0, randomData);
     root.write(10, randomData.substr(0, 20));
     @assert(root.getContents().substr(0, 30) ==
@@ -394,7 +395,7 @@ if (true) {
             );
 
     # Test writing in the fingerprint zone of a chunk.
-    root = CachedNode(cache, digest, Node());
+    root = CachedNode(ctx, digest, Node());
     root.write(0, randomData);
     subseq := randomData.substr(0, root.getChunks()[0].size - 20);
     root.write(10, subseq);
@@ -404,7 +405,7 @@ if (true) {
             );
 
     # Test writing into the beginning of the second chunk.
-    root = CachedNode(cache, digest, Node());
+    root = CachedNode(ctx, digest, Node());
     root.write(0, randomData);
     firstChunkSize := root.getChunks()[0].size;
     root.write(firstChunkSize, 'stuff');
@@ -420,9 +421,9 @@ if (true) {
 
     if (true) {
         # Test modifying the fingerprint at the end of a node boundary.
-        cache = Cache(nodeStore, 'master', digest);
-        cache.maxChildren = 3;
-        root = CachedNode(cache, digest, Node());
+        ctx = NodeContext(nodeStore, 'master', digest);
+        ctx.setMaxChildren(3);
+        root = CachedNode(ctx, digest, Node());
         root.write(0, randomData);
 
         # We should have two leafs grouped under an intermediate node.
@@ -444,7 +445,7 @@ if (true) {
         # Test the exciting boundary conditions for all existing chunks.
         # failed at 2170, 17614, 63393, 66881, 66903
         uint64 startOff, endOff;
-        root = CachedNode(cache, digest, Node());
+        root = CachedNode(ctx, digest, Node());
         root.write(0, randomData);
         chunks := root.getChunks();
         const EMPTY := randomData.substr(0, 0);
@@ -470,7 +471,7 @@ if (true) {
                                             ]
                         ) {
                         if (i + ix <= j + jx) {
-                            root = CachedNode(cache, digest, Node());
+                            root = CachedNode(ctx, digest, Node());
                             root.write(0, randomData);
                             start := uint64(ix);
                             size := uint64(jx - start);
@@ -498,7 +499,7 @@ if (true) {
 
     if (true) {
         cerr `resize to larger\n`;
-        root = CachedNode(cache, digest, Node());
+        root = CachedNode(ctx, digest, Node());
         root.write(0, randomData);
         cerr `size is $(randomData.size + 1000)\n`;
         root.resize(randomData.size + 1000);
@@ -530,13 +531,13 @@ cerr `appends merge last chunk\n`;
 if (true) {
     # Write the entire buffer in one fell swoop.
     randomData := String(makeRandomData(), true);
-    root := CachedNode(cache, digest, Node());
+    root := CachedNode(ctx, digest, Node());
     root.write(0, randomData);
     chunks := root.getChunks();
     contents := root.getContents();
 
     # Now write it one page at a time.
-    root = CachedNode(cache, digest, Node());
+    root = CachedNode(ctx, digest, Node());
     writeChunked(root, randomData, 4096);
 
     # Chunking should be the same.
@@ -553,7 +554,7 @@ void writeChunks(Formatter out, Array[String] chunks) {
 
 cerr `verify auto-commit\n`;
 if (true) {
-    root := CachedNode(cache, digest, Node());
+    root := CachedNode(ctx, digest, Node());
 
     # Store an initial commit.
     commit := Commit();
@@ -561,25 +562,25 @@ if (true) {
     commitDigest := nodeStore.storeCommit(commit);
     nodeStore.setHead('master', commitDigest);
 
-    cache.maxJournalSize = 4096;
+    ctx.setMaxJournalSize(4096);
     randomData := String(makeRandomData());
     writeChunked(root, randomData, 1024);
-    @assert(cache.store.getJournalSize('master') < 4096);
+    @assert(ctx.getJournalSize('master') < 4096);
     @assert(root.getContents() == randomData);
 
     # Verify that we can load it back up.
     commitDigest = nodeStore.getHead('master');
     commit = nodeStore.getCommit(commitDigest);
-    cache.baselineCommit = commitDigest;
-    root = CachedNode(cache, commit.root, nodeStore.getNode(commit.root));
+    ctx.recordCommit(commitDigest);
+    root = CachedNode(ctx, commit.root, nodeStore.getNode(commit.root));
     root.replayJournal();
     @assert(root.getContents() == randomData);
 }
 
 cerr `commit of unmaterialized node\n`;
 if (true) {
-    cache = Cache(nodeStore, 'master', digest);
-    root := CachedNode(cache, digest, Node());
+    ctx = NodeContext(nodeStore, 'master', digest);
+    root := CachedNode(ctx, digest, Node());
 
     # Store an initial commit.
     commit := Commit();
@@ -595,7 +596,7 @@ if (true) {
     # reload.
     commitDigest = nodeStore.getHead('master');
     commit = nodeStore.getCommit(commitDigest);
-    root = CachedNode(cache, commit.root, nodeStore.getNode(commit.root));
+    root = CachedNode(ctx, commit.root, nodeStore.getNode(commit.root));
 
     root.addChild('c', makeFileNode('contents of c', 0));
     root.commitTree();

@@ -17,5 +17,8 @@
 root=$(dirname $0)
 for test in $root/test/*_test.crk; do
     echo -n "$test..."
-    crack $test
+    ~/w/crack/crack -l ~/w/crack/lib:lib $test || {
+        echo -e "$test \033[31mFAILED\033[0m"
+        exit 1
+    }
 done

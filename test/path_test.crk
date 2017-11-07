@@ -18,7 +18,7 @@ import crack.cont.array Array;
 import crack.logger debug, setLogLevel, DEBUG;
 import mawfs.path MAWFSPath;
 import mawfs.memstore MemNodeStore;
-import mawfs.cache Cache, CachedNode;
+import mawfs.cache CachedNode, NodeContext;
 import mawfs.testutil makeRandomData;
 
 @import crack.ann assert;
@@ -27,8 +27,8 @@ setLogLevel(DEBUG);
 
 # Create an empty filesystem.
 nodeStore := MemNodeStore();
-cache := Cache(nodeStore, 'master', 'Branch Commit Digest');
-rootNode := CachedNode(cache, null, Node());
+ctx := NodeContext(nodeStore, 'master', 'Branch Commit Digest');
+rootNode := CachedNode(ctx, null, Node());
 rootNode.node.mode = MODE_DIR;
 rootNode.node.children = Array[Entry]();
 rootNode.commit();

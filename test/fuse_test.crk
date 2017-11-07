@@ -52,7 +52,7 @@ class TestFailure : Exception {
     }
 
     void startFS() {
-        proc := Process(StringArray!['./mawfs', 'run', 'backing', 'fs'],
+        proc := Process(StringArray!['/home/mmuller/w/crack/crack', './mawfs', 'run', 'backing', 'fs'],
                         CRK_PIPE_STDIN
                         );
         proc.putStdIn('TestPasswordDudeBestAsstwordFood');
