@@ -64,6 +64,39 @@ const int32
     ## Resize node contents.  Contains newSize.
     CHANGE_RESIZE = 4;
 
+
+## Return the size of a node.
+uintz _getNodeSize(Node node) {
+    class End : VTableBase {}
+    class NodeSizer : Node, End {}
+    class EntryArraySizer : Array[Entry], End {}
+    class Ptr { voidptr p; }
+    class PtrSizer : Ptr, End {}
+    class EntrySizer : Entry, End {}
+    uintz sizeof(End end) { return uintz(end) }
+    class StringSizer : String, End {}
+    stringSize := sizeof(StringSizer.unsafeCast(null));
+
+    # Add the node size.
+    sz := sizeof(NodeSizer.unsafeCast(null));
+    if (!(node.contents is null))
+        sz += stringSize + node.contents.size;
+
+    # Add the child array.
+    if (!(node.children is null)) {
+        sz += sizeof(EntryArraySizer.unsafeCast(null));
+        sz += sizeof(PtrSizer.unsafeCast(null)) * node.children.count();
+        sz += sizeof(EntrySizer.unsafeCast(null)) * node.children.count();
+        for (child :in node.children) {
+            if (child.hash)
+                sz += stringSize + child.hash.size;
+            if (child.name)
+                sz += stringSize + child.name.size;
+        }
+    }
+    return sz;
+}
+
 class Cache {
     NodeStore store;
 
@@ -90,6 +123,9 @@ class Cache {
         ## Returns the resident size of the object.
         @abstract uintz getRSize();
     }
+
+    # Node objects indexed by digest.
+    HashMap[String, Node] __nodes = {};
 
     ## Callbacks to be invoked on object creation and destruction.  These are
     ## intended for instrumentation purposes so we can verify that there have
@@ -135,6 +171,29 @@ class Cache {
             } else {
                 cur = cur.next;
             }
+        }
+    }
+
+    ## Wrapper for Node so we can include it in the cache.
+    class CachedRawNode : Cache.Obj {
+        Node node;
+
+        oper init(Node node) : node = node {}
+
+        bool disposable() { return true }
+        void release() {} # !MM! we need to remove the item from the cache.
+        uintz getRSize() { return _getNodeSize(node) }
+    }
+
+    ## Returns the node if it is in the cache, null if not.
+    @final Node getNode(String digest) {
+        return __nodes.get(digest);
+    }
+
+    @final void storeNode(String digest, Node node) {
+        if (!__nodes.hasKey(digest)) {
+            __nodes[digest] = node;
+            __oldest.append(CachedRawNode(node));
         }
     }
 }
@@ -201,7 +260,12 @@ class NodeContext {
     }
 
     @final Node getNode(String digest) {
-        return __store.getNode(digest);
+        node := __cache.getNode(digest);
+        if (!node) {
+            node = __store.getNode(digest);
+            __cache.storeNode(digest, node);
+        }
+        return node;
     }
 
     @final void clearJournal() {
@@ -655,14 +719,12 @@ class CachedNode : Cache.Obj {
             oper init() : CachedNode(null, null, null) {}
         }
         class StringSizer : String, End {}
-        class NodeSizer : Node, End {}
         class ChildArraySizer : __ChildArray, End {
             oper init() : __ChildArray(null) {}
         }
         class EntryArraySizer : Array[Entry], End {}
         class Ptr { voidptr p; }
         class PtrSizer : Ptr, End {}
-        class EntrySizer : Entry, End {}
         class CachedEntrySizer : CachedEntry, End {
             oper init() : CachedEntry(null, null, null) {}
         }
@@ -673,23 +735,7 @@ class CachedNode : Cache.Obj {
         if (digest)
             sz += stringSize + digest.size;
 
-        # Add the node size.
-        sz += sizeof(NodeSizer.unsafeCast(null));
-        if (!(node.contents is null))
-            sz += stringSize + node.contents.size;
-
-        # Add the child array.
-        if (!(node.children is null)) {
-            sz += sizeof(EntryArraySizer.unsafeCast(null));
-            sz += sizeof(PtrSizer.unsafeCast(null)) * node.children.count();
-            sz += sizeof(EntrySizer.unsafeCast(null)) * node.children.count();
-            for (child :in node.children) {
-                if (child.hash)
-                    sz += stringSize + child.hash.size;
-                if (child.name)
-                    sz += stringSize + child.name.size;
-            }
-        }
+        sz += _getNodeSize(node);
 
         if (!(__children is null)) {
             sz += sizeof(ChildArraySizer.unsafeCast(null));
@@ -2034,7 +2080,7 @@ CachedNode _makeCachedNode(CachedNode parent, NodeContext ctx, String digest) {
     if (!node)
         return null;
 
-    result := CachedNode(ctx, digest, node);
+    result := CachedNode(ctx, digest, node.clone());
     result.parent = parent;
     return result;
 }
