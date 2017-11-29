@@ -2,6 +2,7 @@
 
 import crack.cont.hashmap HashMap;
 import crack.functor Functor1, Function1;
+import crack.lang KeyError;
 import crack.logger debug, error;
 import mawfs.cache Cache, CachedNode;
 
@@ -17,23 +18,27 @@ class Tracer {
     ## The cache we are bound to.
     Cache __cache;
 
-    alias CacheObj = Cache.Obj;
-
-    class __CreateCallback @impl Functor1[void, CacheObj] {
+    class __CreateCallback @impl Functor1[void, Object] {
         HashMap[uintz, bool] __map;
         oper init(HashMap[uintz, bool] map) : __map = map {}
 
-        void oper call(Cache.Obj obj) {
+        void oper call(Object obj) {
             __map[uintz(obj)] = true
         }
     }
 
-    class __DestroyCallback @impl Functor1[void, CacheObj] {
+    class __DestroyCallback @impl Functor1[void, Object] {
         HashMap[uintz, bool] __map;
         oper init(HashMap[uintz, bool] map) : __map = map {}
 
-        void oper call(CacheObj obj) {
-            __map.delete(uintz(obj))
+        void oper call(Object obj) {
+            try {
+                __map.delete(uintz(obj));
+            } catch (KeyError ex) {
+                # Ignore this.  An address can be removed from the map by the
+                # visitor during the leak check, so its absence from the map
+                # doesn't indicate a double-delete.
+            }
         }
     }
 

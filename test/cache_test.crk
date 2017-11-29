@@ -73,10 +73,13 @@ digest := nodeStore.storeNode(node);
 
 root := Node();
 node.children = Array[Entry]();
+root.mode = MODE_DIR;
 entry := Entry();
 entry.hash = digest;
 entry.name = 'foo';
+entry.size = node.size;
 root.children_append(entry);
+root.size = node.size;
 
 digest = nodeStore.storeNode(root);
 nodeStore.storeRoot(digest);
@@ -319,7 +322,7 @@ if (true) {
     root.commit();
     initRSize := root.getRSize();
     ctx.setGCThreshold(ctx.getGCBottom() + initRSize);
-    ctx.garbageCollect();
+    root.garbageCollect();
     root.traverseResident(tracer.makeVisitor());
     @assert(!tracer.hasLeaks());
     @assert(root.getRSize() < initRSize);
