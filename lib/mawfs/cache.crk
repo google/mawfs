@@ -354,7 +354,7 @@ class CachedNode {
 
     ## The parent node (the directory if this is a directory or top-level
     ## file node, an intermediate node for anything else).  Note that this
-    ## introduces a reference cycle, so you need to call release() on a node
+    ## introduces a reference cycle, so you need to call __release() on a node
     ## to break this cycle (and also to remove the node from the LRU queue in
     ## the cache).
     CachedNode parent;
@@ -373,7 +373,7 @@ class CachedNode {
     }
 
     @final uint64 getSize();
-    @final void release();
+    @final void __release();
 
     ## Manages caching for an Entry record and the associated child node.
     ##
@@ -457,7 +457,7 @@ class CachedNode {
         ## Release the node (if any) allowing it to be GCed.
         @final void releaseNode() {
             if (node) {
-                node.release();
+                node.__release();
                 node = null;
             }
         }
@@ -666,7 +666,7 @@ class CachedNode {
     }
 
     ## Release the cached node from its parent and from all children.
-    @final void release() {
+    @final void __release() {
         # Remove the node from its parent.
         if (parent && parent.__children) {
             for (child :in parent.__children) {
@@ -1284,7 +1284,7 @@ class CachedNode {
                 nextChild.mergeChild(0);
 
             # Release the node now that we're done with it.
-            node.release();
+            node.__release();
 
             # Split the new entry.
             newChild := nextChild.__maybeSplit();
@@ -1320,7 +1320,7 @@ class CachedNode {
                 prevChild.mergeChild(prevChild.__getChildren().count() - 1);
 
             # Release the node now that we're done with it.
-            node.release();
+            node.__release();
 
             # Split the new entry.
             newChild := prevChild.__maybeSplit();
@@ -1349,7 +1349,7 @@ class CachedNode {
                     # The child is a content node.  Remove it.
                     childSize = int64(child.getSize());
                     __children.delete(index);
-                    child.node.release();
+                    child.node.__release();
                 } else {
                     # The child is an intermediate node, have it remove the
                     # appropriate content node.
@@ -1380,6 +1380,8 @@ class CachedNode {
     ## Delete the leaf node at the position.  Call this on the top-level node
     ## of a file.
     ## Returns the size of the deleted node.
+    ##
+    ## Public only for testing.
     int64 deleteNode(uint64 pos) {
         size := __deleteNode(pos);
 
@@ -1389,7 +1391,7 @@ class CachedNode {
             cachedNode := __children[0].getNode();
             node = cachedNode.node;
             __stealChildren(cachedNode);
-            cachedNode.release();
+            cachedNode.__release();
             if (parent) {
                 entry := parent.__getChildEntry(this);
                 entry.setCachedNode(this);
@@ -1497,7 +1499,7 @@ class CachedNode {
                 __stealChildren(firstChild);
             }
 
-            firstChild.release();
+            firstChild.__release();
         }
 
         __markDirty();
@@ -1963,7 +1965,7 @@ class CachedNode {
 
     void __pruneCleanNodes() {
         if (!dirty)
-            release();
+            __release();
     }
 
     void garbageCollect() {
