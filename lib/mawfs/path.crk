@@ -108,6 +108,11 @@ class MAWFSIter : PathIter {
     oper init(Path path, CachedNode node) :
         __path = path,
         __node = node {
+        __node.addExtRef();
+    }
+
+    oper del() {
+        __node.releaseExtRef();
     }
 
     bool next() {
@@ -139,12 +144,22 @@ class MAWFSPath : RWPath {
     MAWFSPath __parent;
     String __name;
 
-    oper init(CachedNode rep) : __rep = rep, __name = '' {}
+    oper init(CachedNode rep) : __rep = rep, __name = '' {
+        if (__rep)
+            __rep.addExtRef();
+    }
 
     oper init(CachedNode rep, MAWFSPath parent, String name) :
         __rep = rep,
         __parent = parent,
         __name = name {
+        if (__rep)
+            __rep.addExtRef();
+    }
+
+    oper del() {
+        if (__rep)
+            __rep.releaseExtRef();
     }
 
     SeekableWriter appender() {
@@ -166,6 +181,8 @@ class MAWFSPath : RWPath {
 
     void delete() {
         __parent.__rep.deleteChild(__name);
+        __rep.releaseExtRef();
+        __rep = null;
     }
 
     bool exists() {
@@ -229,9 +246,17 @@ class MAWFSPath : RWPath {
     SeekableWriter appender() { return null }
 
     void makeDir(bool errorOnExists) {
+
+        if (__rep) {
+            if (__rep.isDir() && !errorOnExists)
+                return;
+            throw SystemError(FStr() `$(getFullName()) already exists`);
+        }
+
         node := Node();
         node.mode = MODE_DIR;
         __rep = __parent.__rep.addChild(__name, node);
+        __rep.addExtRef();
     }
 
     void makeDirs() {}
@@ -242,10 +267,17 @@ class MAWFSPath : RWPath {
     }
 
     SeekableWriter writer() {
-        # Create a new node.
-        if (__parent) {
+        if (__rep) {
+            if (__rep.isDir())
+                throw SystemError(FStr() I`Can not write to directory \
+                                           $(getFullName())`
+                                  );
+            __rep.resize(0);
+        } else if (__parent) {
+            # Create a new node.
             parentRep := __parent.__rep;
             __rep = parentRep.addChild(__name, Node());
+            __rep.addExtRef();
         } else {
             # The root path should have been created with a cached node.
             throw Exception('Root has no cached node!');

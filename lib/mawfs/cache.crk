@@ -207,6 +207,10 @@ class Head {
     }
 }
 
+class CachedNode;
+class NodeContext;
+Object _makeOrphanContext(NodeContext context);
+
 ## Wrapper for the three disjoint elements of a node.  These can vary
 ## independently.
 ## - The NodeStore, which can vary if the FSInfo changes (we probably should
@@ -218,10 +222,29 @@ class NodeContext {
     Cache __cache;
     Head __head;
 
+    void addChange(Change change);
+
+    ## The Orphan Context is a node context for portions of the filesystem
+    ## that have been "orphaned" - deleted from the filesystem, but with
+    ## references still held by external datastructures (e.g. open files in
+    ## FUSE).  It is different from a normal NodeContext in that it doesn't
+    ## record changes in the journal and doesn't ever trigger a commit.
+    ##
+    ## It's actually an instance of OrphanContext, but we haven't defined that
+    ## or its base class yet, and can't,
+    Object __orphanContext;
+
+    # XXX remove, unused.
     oper init(NodeStore store, Cache cache, Head head) :
         __store = store,
         __cache = cache,
         __head = head {
+    }
+
+    oper init(NodeContext other) :
+        __store = other.__store,
+        __cache = other.__cache,
+        __head = other.__head {
     }
 
     ## Convenience constructor to create a NodeContext complete with a Cache
@@ -232,17 +255,16 @@ class NodeContext {
         __head = Head(branch, baselineCommit) {
     }
 
-    @final void addChange(Change change) {
-        if (__head.lastChange) {
+    void addChange(Change change) {
+        if (__head.lastChange)
             change.lastChange = __head.lastChange;
-        } else {
+        else
             change.commit = __head.baselineCommit;
-        }
         __head.lastChange = __store.writeToJournal(__head.branch, change);
     }
 
     ## Returns true if the caller should commit.
-    @final bool shouldCommit() {
+    bool shouldCommit() {
         return __store.getJournalSize(__head.branch) >= __cache.maxJournalSize;
     }
 
@@ -290,7 +312,7 @@ class NodeContext {
 
     @final Cache getCache() { return __cache }
 
-    ## Records the digest of a new commit.
+    ## Records the digest of a new commit within the Head datastructure.
     @final void recordCommit(String commit) {
         __head.lastChange = null;
         __head.baselineCommit = commit;
@@ -330,9 +352,23 @@ class NodeContext {
         info I`commit: digest = $(altEncode(commitDigest)), \
                new root = $(altEncode(commit.root))`;
     }
-}
 
-class CachedNode;
+    ## Base class for OrphanContext.  This has to be an abstract base class
+    ## because we can't use CachedNode yet.
+    @abstract class _OrphanContextBase : NodeContext {
+        oper init(NodeContext other) :
+            NodeContext(other) {
+        }
+        @abstract void addOrphan(CachedNode node);
+    }
+
+    @final _OrphanContextBase getOrphanContext() {
+        if (!__orphanContext)
+            # Create an orphan context and root.
+            __orphanContext = _makeOrphanContext(this);
+        return _OrphanContextBase.cast(__orphanContext);
+    }
+}
 
 ## Creates a CachedNode.
 CachedNode _makeCachedNode(CachedNode parent, NodeContext ctx, String digest);
@@ -351,6 +387,13 @@ class CachedNode {
     ## which case, they have a valid digest) or created as part of an
     ## operation (in which case they should have no digest and be dirty).
     bool dirty;
+
+    ## If true, the node has been orphaned (released while an external object
+    ## still holds a reference to it).
+    bool __orphaned;
+
+    ## The number of external references holding this node.
+    uint __extRefCount;
 
     ## The parent node (the directory if this is a directory or top-level
     ## file node, an intermediate node for anything else).  Note that this
@@ -619,8 +662,8 @@ class CachedNode {
     __ChildArray __children;
 
     ## digest should be null for a new node.
-    oper init(NodeContext cache, String digest, Node node) :
-        __ctx = cache,
+    oper init(NodeContext ctx, String digest, Node node) :
+        __ctx = ctx,
         digest = digest,
         node = node,
         dirty = !digest {
@@ -667,7 +710,15 @@ class CachedNode {
 
     ## Release the cached node from its parent and from all children.
     @final void __release() {
-        # Remove the node from its parent.
+        # If there are external references, add the node to an orphan context.
+        if (__extRefCount) {
+            __orphaned = true;
+            __ctx = ctx := __ctx.getOrphanContext();
+            ctx.addOrphan(this);
+            return;
+        }
+
+        # Find the entry that holds the node in the parent (if any).
         if (parent && parent.__children) {
             for (child :in parent.__children) {
                 if (child.node is this) {
@@ -683,6 +734,22 @@ class CachedNode {
                 child.releaseNode();
             __children = null;
         }
+    }
+
+    ## Add an external reference to the node.  External systems that may
+    ## continue to modify the node should call this to ensure that the node
+    ## does not get released if it is deleted without notice.
+    ##
+    ## Returns the node itself.
+    @final CachedNode addExtRef() {
+        ++__extRefCount;
+        return this;
+    }
+
+    ## Release an external reference claimed with addExtRef().
+    @final void releaseExtRef() {
+        if (__orphaned && !--__extRefCount)
+            __release();
     }
 
     ## Returns the "resident size" of the node.  This is an approximation of
@@ -898,7 +965,8 @@ class CachedNode {
         newRootDigest := getRoot().commit();
         Commit commit = {};
         commit.root = newRootDigest;
-        commit.parent_append(__ctx.getHead());
+        if (head := __ctx.getHead())
+            commit.parent_append(__ctx.getHead());
         __ctx.storeCommit(commit);
         size := getSize();
 
@@ -966,6 +1034,7 @@ class CachedNode {
         if (!child)
             return false;
         node.size -= child.getSize();
+        child.releaseNode();
 
         # Record the change.
         change := Change();
@@ -1130,6 +1199,8 @@ class CachedNode {
     }
 
     ## Append a new content string to the end of the tree.
+    ## This is only public for tests.  It doesn't write a journal entry, use
+    ## write() instead.
     void append(String contents) {
         newNode := __makeNode(contents);
         cached := CachedNode(__ctx, null, newNode);
@@ -2075,4 +2146,24 @@ CachedNode _makeCachedNode(CachedNode parent, NodeContext ctx, String digest) {
     result := CachedNode(ctx, digest, node);
     result.parent = parent;
     return result;
+}
+
+class OrphanContext : NodeContext._OrphanContextBase {
+    CachedNode root;
+    oper init(NodeContext other) : NodeContext._OrphanContextBase(other) {
+        node := Node();
+        node.mode = MODE_DIR;
+        root = CachedNode(this, null, node);
+    }
+
+    void addChange(Change change) {}
+    bool shouldCommit() { return false }
+
+    void addOrphan(CachedNode node) {
+        root.addChild(FStr() `$(uintz(node))`, node);
+    }
+}
+
+Object _makeOrphanContext(NodeContext context) {
+    return OrphanContext(context);
 }

@@ -23,7 +23,7 @@ import crack.lang AppendBuffer, ManagedBuffer;
 import crack.logger debug, setLogLevel, DEBUG;
 import mawfs.blockstore Commit, Entry, Node, NodeStore, MODE_DIR;
 import mawfs.memstore MemNodeStore;
-import mawfs.cache Cache, CachedNode, NodeContext;
+import mawfs.cache sig, Cache, CachedNode, NodeContext;
 import mawfs.testutil copy, makeRandomData;
 import mawfs.memtrace Tracer;
 
@@ -603,6 +603,42 @@ if (true) {
 
     root.addChild('c', makeFileNode('contents of c', 0));
     root.commitTree();
+}
+
+cerr `delete and then modify.\n`;
+if (true) {
+    nodeStore = MemNodeStore();
+    ctx = NodeContext(nodeStore, 'master', null);
+    root := CachedNode(ctx, null, makeDirNode());
+    root.commitTree();
+    baselineCommitDigest := ctx.getBaselineCommit();
+    data := String(makeRandomData());
+    root.addChild('zombie', makeFileNode(data, 0));
+    root.addChild('healthy', makeFileNode('some data', 0));
+    zombie := root.getChild('zombie');
+    zombie.addExtRef();
+    root.deleteChild('zombie');
+    zombie.write(zombie.getSize(), 'foo');
+    zombie.write(zombie.getSize(), 'bar');
+    zombie.write(zombie.getSize(), 'baz');
+    @assert(zombie.getContents() == data + 'foobarbaz');
+    zombie.releaseExtRef();
+
+    @assert(root.getChild('zombie') is null);
+
+    # Do some modifications to healthy after the updates to zombie.
+    healthy := root.getChild('healthy');
+    healthy.write(healthy.getSize(), ', more data');
+
+    # Reload
+    ctx = NodeContext(nodeStore, 'master', baselineCommitDigest);
+    commitDigest := nodeStore.getHead('master');
+    commit := nodeStore.getCommit(commitDigest);
+    root = CachedNode(ctx, commit.root, nodeStore.getNode(commit.root));
+    root.replayJournal();
+
+    @assert(root.getChild('healthy').getContents() == 'some data, more data');
+    @assert(root.getChild('zombie') is null);
 }
 
 # TODO:
