@@ -397,7 +397,7 @@ if (true) {
 if (true) {
     nodeStore := MemNodeStore();
     root := Node();
-    nodeStore.storeRoot(nodeStore.storeNode(root));
+    nodeStore.storeRoot(nodeStore.storeNode(root)); # {store,get}Root() obsolete
     MAWFSNode fs = {nodeStore, root};
     Context ctx = {'/foo', fs};
     @assert(fs.create(ctx, 0, null) == 0);
@@ -407,7 +407,7 @@ if (true) {
     @assert(!nodeStore.getNode(children[0].hash).mode);
 
     # Verify that we can reproduce this from the node store.
-    root = nodeStore.getRoot();
+    root = nodeStore.getRoot(); # {store,get}Root() obsolete
     children = root.children;
     @assert(children.count() == 1);
     @assert(children[0].name == 'foo');
@@ -424,7 +424,7 @@ if (true) {
 if (true) {
     nodeStore := MemNodeStore();
     root := Node();
-    nodeStore.storeRoot(nodeStore.storeNode(root));
+    nodeStore.storeRoot(nodeStore.storeNode(root)); # {store,get}Root() obsolete
     MAWFSNode fs = {nodeStore, root};
     Context ctx = {'/foo', fs};
 
@@ -438,7 +438,7 @@ if (true) {
     @assert(foo.create(ctx, 0, null) == 0);
 
     # Read back all the way from the node store.
-    root = nodeStore.getRoot();
+    root = nodeStore.getRoot(); # {store,get}Root() obsolete
     children = root.children;
     @assert(children.count() == 1);
     @assert(children[0].name == 'foo');
@@ -455,7 +455,7 @@ if (true) {
 if (true) {
     nodeStore := MemNodeStore();
     root := Node();
-    nodeStore.storeRoot(nodeStore.storeNode(root));
+    nodeStore.storeRoot(nodeStore.storeNode(root)); # {store,get}Root() obsolete
     MAWFSNode fs = {nodeStore, root};
     Context ctx = {'/foo', fs};
 
@@ -465,7 +465,7 @@ if (true) {
     @assert(foo.write(ctx, text.buffer, text.size, 0, null));
     @assert(foo.truncate(ctx, 4) == 0);
 
-    root = nodeStore.getRoot();
+    root = nodeStore.getRoot(); # {store,get}Root() obsolete
     fs.setRep(root);
     ManagedBuffer temp = {10};
     foo = ctx.lookUp();
@@ -473,7 +473,7 @@ if (true) {
     @assert(foo.read(ctx, temp.buffer, temp.cap, 0, null) == 4);
 
     foo.truncate(ctx, 0);
-    root = nodeStore.getRoot();
+    root = nodeStore.getRoot(); # {store,get}Root() obsolete
     fs.setRep(root);
     foo = ctx.lookUp();
     rc = temp.size = foo.read(ctx, temp.buffer, temp.cap, 0, null);

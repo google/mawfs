@@ -82,12 +82,11 @@ root.children_append(entry);
 root.size = node.size;
 
 digest = nodeStore.storeNode(root);
-nodeStore.storeRoot(digest);
 
 # NOTE: We should be passing a commit digest to this, but the root digest
 # (or any other non-empty string) should work just as well for this exercise.
 ctx := NodeContext(nodeStore, 'master', digest);
-cachedRoot := CachedNode(ctx, digest, root);
+cachedRoot := CachedNode(ctx, digest, root.clone());
 cachedNode := cachedRoot.getChild(0);
 @assert(cachedNode.getContents() == 'contents of foo');
 
@@ -159,13 +158,13 @@ void verifyContents() {
 # back from the cache.
 
 # Test reconstructing changes from cache.
-cachedRoot = CachedNode(ctx, digest, nodeStore.getRoot());
+cachedRoot = CachedNode(ctx, digest, root.clone());
 cachedRoot.replayJournal();
 verifyContents();
 
 # Test committing changes.
-nodeStore.storeRoot(digest = cachedRoot.commit());
-cachedRoot = CachedNode(ctx, digest, nodeStore.getRoot());
+digest = cachedRoot.commit();
+cachedRoot = CachedNode(ctx, digest, nodeStore.getNode(digest));
 verifyContents();
 
 # Test a write.

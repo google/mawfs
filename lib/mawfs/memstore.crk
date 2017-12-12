@@ -81,18 +81,6 @@ class MemNodeStore @impl NodeStore {
         return result;
     }
 
-    Node getRoot() {
-        return getNode(__root);
-    }
-
-    String getRootDigest() {
-        return __root;
-    }
-
-    void storeRoot(String digest) {
-        __root = digest;
-    }
-
     void setHead(String branch, String head) {
         __branches[branch] = head;
     }

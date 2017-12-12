@@ -280,15 +280,6 @@ class ChangeEntry {
     ## stored.
     @abstract Commit getCommit(String digest);
 
-    # Get the root node (null if there is no root).
-    @abstract Node getRoot();
-
-    # Get the root digest (null if there is no root).
-    @abstract String getRootDigest();
-
-    ## Store the digest of the root node.
-    @abstract void storeRoot(String digest);
-
     ## Returns the digest of the head commit of a given branch.   Returns
     ## null if the branch is not defined.
     @abstract String getHead(String branch);
@@ -504,27 +495,6 @@ class ChunkStore @impl NodeStore {
 
     String storeCommit(Commit commit) {
         return store(commit.toString());
-    }
-
-    ## Returns the root node or null if there is none.
-    Node getRoot() {
-        rootFile := __dir/'refs/root';
-        if (!rootFile.exists())
-            return null;
-        digest := altDecode(rootFile.readAll());
-        return getNode(digest);
-    }
-
-    String getRootDigest() {
-        rootFile := __dir/'refs/root';
-        if (!rootFile.exists())
-            return null;
-        return altDecode(rootFile.readAll());
-    }
-
-    # Store the current root digest.
-    void storeRoot(String digest) {
-        (__dir/'refs/root').writeAll(altEncode(digest));
     }
 
     String writeToJournal(String branch, Change change) {
