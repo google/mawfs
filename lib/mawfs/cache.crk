@@ -234,13 +234,6 @@ class NodeContext {
     ## or its base class yet, and can't,
     Object __orphanContext;
 
-    # XXX remove, unused.
-    oper init(NodeStore store, Cache cache, Head head) :
-        __store = store,
-        __cache = cache,
-        __head = head {
-    }
-
     oper init(NodeContext other) :
         __store = other.__store,
         __cache = other.__cache,
@@ -1027,7 +1020,6 @@ class CachedNode {
     ## Delete the named child and return true, or return false if the child
     ## doesn't exist.
     bool deleteChild(String name) {
-        # TODO: I think the argument to populateChildren should be false here
         if (!__populateChildren(false))
             return false;
         child := __children.delete(name);
