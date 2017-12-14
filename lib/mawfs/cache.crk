@@ -370,16 +370,10 @@ CachedNode _makeCachedNode(CachedNode parent, NodeContext ctx, String digest);
 class CachedNode {
     NodeContext __ctx;
 
+    ## The node digest.  This is null for a "dirty" node -- a node that has
+    ## not yet been stored, or has been modified since it was loaded.
     String digest;
     Node node;
-
-    ## Indicates that a node has been changed in memory and in the transaction
-    ## log but needs to be committed.  A dirty node is assumed to have an
-    ## invalid digest.  Likewise, a non-dirty node is assumed to have a valid
-    ## digest.  All nodes should either be loaded from the block store (in
-    ## which case, they have a valid digest) or created as part of an
-    ## operation (in which case they should have no digest and be dirty).
-    bool dirty;
 
     ## If true, the node has been orphaned (released while an external object
     ## still holds a reference to it).
@@ -658,8 +652,7 @@ class CachedNode {
     oper init(NodeContext ctx, String digest, Node node) :
         __ctx = ctx,
         digest = digest,
-        node = node,
-        dirty = !digest {
+        node = node {
 
         __ctx.onObjCreate(this);
     }
@@ -667,6 +660,10 @@ class CachedNode {
     oper del() {
         __ctx.onObjDestroy(this);
     }
+
+    ## Returns true if the node is dirty (hasn't been stored or has been
+    ## modified since being stored).
+    @final bool isDirty() { return !digest }
 
     ## Allocate __children array to mirror the values in node.children.
     ## Creates node.children if it doesn't exist.
@@ -684,7 +681,7 @@ class CachedNode {
     ## to be memory resident.  A CachedNode is disposable if it is not dirty
     ## and has no children.
     bool disposable() {
-        if (dirty) {
+        if (isDirty()) {
             return false;
         }
 
@@ -922,7 +919,6 @@ class CachedNode {
             }
         }
 
-        dirty = true;
         digest = null;
         if (parent) parent.__markDirty();
     }
@@ -1149,7 +1145,6 @@ class CachedNode {
         this.node = node;
         __children = null;
         digest = null;
-        dirty = true;
     }
 
     Node __makeNode(String contents) {
@@ -1479,7 +1474,6 @@ class CachedNode {
                 node.contents = node.contents.substr(0, start);
             }
             node.size = node.contents.size;
-            dirty = true;
             digest = null;
             return false;
         }
@@ -1494,7 +1488,6 @@ class CachedNode {
                 # The entire child node must be deleted.
                 __children.delete(i);
                 node.size -= childSize;
-                dirty = true;
                 digest = null;
                 --i;
                 end -= childSize;
@@ -1505,7 +1498,6 @@ class CachedNode {
                 child.fixSize();
                 amtDeleted := childSize - child.getSize();
                 node.size -= amtDeleted;
-                dirty = true;
                 digest = null;
                 spanSize := end - start;
                 start = 0;
@@ -1574,7 +1566,6 @@ class CachedNode {
         @assert(pos <= this.node.size);
         int i;
 
-        dirty = true;
         digest = null;
 
         if (!__children) {
@@ -1811,7 +1802,7 @@ class CachedNode {
     ## Commit all outstanding changes in the tree.  Returns the new digest.
     String commit() {
         # If our digest is up to date, we don't need to do anything.
-        if (!dirty)
+        if (!isDirty())
             return digest;
 
         if (__populateChildren(false)) {
@@ -1844,7 +1835,6 @@ class CachedNode {
         }
 
         digest = __ctx.storeNode(node);
-        dirty = false;
         __ctx.clearJournal();
 
         return digest;
@@ -2027,7 +2017,7 @@ class CachedNode {
 
 
     void __pruneCleanNodes() {
-        if (!dirty)
+        if (!isDirty())
             __release();
     }
 
@@ -2055,7 +2045,7 @@ class CachedNode {
     VerifyReport verify(bool materializeAll) {
 
         # If the node isn't dirty, verify that we have a correct digest.
-        if (!dirty) {
+        if (!isDirty()) {
             @assert(digest);
             @assert(digest == __ctx.makeDigest(node));
         }
