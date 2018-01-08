@@ -276,6 +276,11 @@ class NodeContext {
         return node;
     }
 
+    ## Get the specified commit from the node store.
+    @final Commit getCommit(String commitDigest) {
+        return __store.getCommit(commitDigest);
+    }
+
     @final void clearJournal() {
         __store.deleteJournal(__head.branch);
     }
@@ -2148,4 +2153,49 @@ class OrphanContext : NodeContext._OrphanContextBase {
 
 Object _makeOrphanContext(NodeContext context) {
     return OrphanContext(context);
+}
+
+## Facade for a complete cached filesystem tree representing the head of a
+## branch.
+@final class Tree {
+    NodeContext __ctx;
+    CachedNode __root;
+
+    oper init(NodeStore store, String branch) :
+        __ctx(store, branch, null) {
+    }
+
+    ## Initialize the tree if it's not already initialized.  This obtains the
+    ## current head revision and root node and replays the journal, so it's a
+    ## fairly heavy operation.
+    @final void initialize() {
+        if (!__root) {
+            commitDigest := __ctx.getHead();
+            info `loading commit $(sig(commitDigest))`;
+            commit := __ctx.getCommit(commitDigest);
+
+            # Store the commit digest now that we've got it.
+            __ctx.recordCommit(commitDigest);
+
+            info `loading root $(sig(commit.root))`;
+            rootNode := __ctx.getNode(commit.root);
+            __root = CachedNode(__ctx, commit.root, rootNode);
+            __root.replayJournal();
+        }
+    }
+
+    ## Returns the root node for the tree.  Calls 'initialize()', so it's
+    ## always safe to call this.
+    @final CachedNode getRoot() {
+        initialize();
+        return __root;
+    }
+
+    ## Commit the tree.  This ends up setting the local branch head and
+    ## clearing the journal as well as doing garbage collection.  Note that
+    ## this will call 'initialize()' so it's safe to call this at any time.
+    @final void commit() {
+        initialize();
+        __root.commitTree();
+    }
 }

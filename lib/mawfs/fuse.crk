@@ -28,7 +28,7 @@ import crack.runtime free, memcpy, Stat, EACCES, EEXIST, EINVAL, ENOENT,
 import crack.strutil split, StringArray;
 import crack.threads Mutex, MutexLock;
 import mawfs.path MAWFSPath;
-import mawfs.cache CachedNode, NodeContext;
+import mawfs.cache CachedNode, NodeContext, Tree;
 
 @import crack.ann interface;
 
@@ -63,8 +63,7 @@ class FileInfo {
 class LockedFilesystem {
     Mutex mutex = {};
     NodeStore store;
-    NodeContext ctx;
-    CachedNode cachedRoot;
+    Tree __tree;
     Path root;
     HashMap[int, FileInfo] files = {};
     String __branch;
@@ -81,24 +80,12 @@ class LockedFilesystem {
               ) :
         mutex = mutex,
         store = store,
-        ctx(store, branch, null),
+        __tree(store, branch),
         __branch = branch,
         __userModule = userModule {
 
-        commitDigest := getHead();
-        info `loading commit $(altEncode(commitDigest))`;
-        commit := store.getCommit(commitDigest);
-
-        # Store the commit digest now that we've got it.
-        ctx.recordCommit(commitDigest);
-
-        # Get the root node, create the CachedNode and the MAWFSPath for it.
-        info `loading root $(altEncode(commit.root))`;
-        rootNode := store.getNode(commit.root);
-        cachedRoot = CachedNode(ctx, commit.root, rootNode);
+        cachedRoot := __tree.getRoot();
         root = MAWFSPath(cachedRoot);
-
-        cachedRoot.replayJournal();
     }
 
     void setHead(String commitDigest) {
@@ -109,6 +96,11 @@ class LockedFilesystem {
     void start() {
         if (__userModule)
             __userModule.start();
+    }
+
+    ## Does a full commit on the tree (see Tree.commit()).
+    void commit() {
+        __tree.commit();
     }
 }
 
@@ -167,7 +159,7 @@ class Context {
     }
 
     void commit() {
-        __fs.cachedRoot.commitTree();
+        __fs.commit();
     }
 }
 
