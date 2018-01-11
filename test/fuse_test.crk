@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import crack.cmdline CmdOptions, Option, CMD_STR;
 import crack.cont.hashmap HashMap;
 import crack.fs cwd, makePath, Path;
 import crack.io cerr, FStr, SEEK_SET;
@@ -30,9 +31,16 @@ int chown(byteptr path, int user, int group);
 # Change directory to the parent of this file.
 cwd.set(makePath(argv[0]).parent().parent());
 
+# Parse command line options.
+opts := CmdOptions![
+    Option('crack-path', 'c', 'path to the crack binary', 'crack', CMD_STR)
+];
+otherArgs := opts.parse().subarray(1);
+crackPath := opts.getString('crack-path');
+
 # The rest of the command line arguments are test names.
 HashMap[String, bool] tests = {};
-for (test :in argv.subarray(1))
+for (test :in otherArgs)
     tests[test] = true;
 
 class TestFailure : Exception {
@@ -51,8 +59,11 @@ class TestFailure : Exception {
         return backing;
     }
 
-    void startFS() {
-        proc := Process(StringArray!['/home/mmuller/w/crack/crack', './mawfs', 'run', 'backing', 'fs'],
+    void startFS(String branch) {
+        proc := Process(StringArray![
+                            crackPath, './mawfs', 'run', '-b', branch, 'backing',
+                            'fs'
+                        ],
                         CRK_PIPE_STDIN
                         );
         proc.putStdIn('TestPasswordDudeBestAsstwordFood');
@@ -61,16 +72,6 @@ class TestFailure : Exception {
         if (rc != CRK_PROC_EXITED)
             throw Exception('Failed in startup');
     }
-
-    void setUp() {
-        deleteBacking().makeDir();
-        fsDir := makePath('fs');
-        if (!fsDir.exists())
-            fsDir.makeDir();
-        startFS();
-    }
-
-    @abstract void run();
 
     void stopFS() {
         rc := Process(StringArray!['fusermount', '-u', 'fs']).run();
@@ -87,6 +88,21 @@ class TestFailure : Exception {
             cerr `$(makePath('mawfs.log').readAll())\n`;
         }
     }
+
+    void restartFS(String branch) {
+        stopFS();
+        startFS(branch);
+    }
+
+    void setUp() {
+        deleteBacking().makeDir();
+        fsDir := makePath('fs');
+        if (!fsDir.exists())
+            fsDir.makeDir();
+        startFS('master');
+    }
+
+    @abstract void run();
 
     void tearDown() {
         stopFS();
@@ -203,7 +219,7 @@ class SubDirFileTest : TestCase {
 
         # Restart to verify that everything got committed properly.
         stopFS();
-        startFS();
+        startFS('master');
 
         assertEqual(foo.readAll(), 'test data');
     }
@@ -275,6 +291,23 @@ class AdminFSTest : TestCase {
         @assert((admin/'README').readAll().lfind('Copyright') >= 0);
     }
 }
+
+class BranchTest : TestCase {
+    void run() {
+        admin := makePath('fs')/'.mawfs';
+        testFile := makePath('fs')/'test.file';
+        testFile.writeAll('file data');
+        restartFS('other');
+        @assert(!testFile.exists());
+        otherFile := makePath('fs')/'other.file';
+        otherFile.writeAll('another file');
+        branchDir := admin/'alt'/'master';
+        branchDir.makeDir();
+        assertEqual((branchDir/'test.file').readAll(), 'file data');
+    }
+}
+BranchTest().exec();
+
 
 /*
 String readNode(Node node, int pos, int size) {

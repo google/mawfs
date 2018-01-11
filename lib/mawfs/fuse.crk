@@ -30,6 +30,8 @@ import crack.threads Mutex, MutexLock;
 import mawfs.path MAWFSPath;
 import mawfs.cache CachedNode, NodeContext, Tree;
 
+import .alt ResidentBranches;
+
 @import crack.ann interface;
 
 const int ENOSYS = 38, ENOTEMPTY = 39, EISDIR = 21;
@@ -85,6 +87,12 @@ class LockedFilesystem {
         __userModule = userModule {
 
         cachedRoot := __tree.getRoot();
+
+        # Create the set of resident branches and attach it to the root node
+        # context.
+        branches := ResidentBranches(store);
+        branches.putIn(cachedRoot.getContext());
+
         root = MAWFSPath(cachedRoot);
     }
 

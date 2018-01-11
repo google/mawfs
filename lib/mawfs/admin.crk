@@ -18,17 +18,21 @@
 import crack.cont.array Array;
 import crack.cont.treemap TreeMap;
 import crack.io FStr, SeekableReader, SeekableWriter, StringReader;
+import crack.fieldset FieldSet;
 import crack.functor Functor1, Function1, Functor0, Function0;
 import crack.fs Path, PathIter, PathStat;
-import crack.lang AppendBuffer, Buffer, SystemError, WriteBuffer;
+import crack.lang AppendBuffer, Buffer, Exception, SystemError, WriteBuffer;
 import crack.logger debug;
-import crack.runtime ENOENT, ENOTDIR, EINVAL, S_IFDIR, S_IFREG, SEEK_CUR,
+import crack.runtime ENOENT, ENOTDIR, EEXIST, EINVAL, S_IFDIR, S_IFREG, SEEK_CUR,
     SEEK_END, SEEK_SET;
 import mawfs.cache CachedNode;
 
-@import crack.ann impl;
+@import crack.ann impl, interface;
+@import crack.fieldset_ann fieldset_accessors;
 
 alias PathMap = TreeMap[String, Path];
+
+@export_symbols PathMap;
 
 class AdminPathIter : PathIter {
     PathMap.Iter __iter;
@@ -245,11 +249,77 @@ class BranchFile : AdminPath {
     }
 }
 
+## Interface for classes that provide the contents of the "alt" directory.
+@interface AltSourceDir {
+
+    ## Get the map of all branch directories.
+    @abstract PathMap getBranches();
+
+    ## Create a new directory containing the branch.  Returns null if the
+    ## branch is not currrently defined.
+    @abstract Path makeBranchDir(String name);
+
+    @fieldset_accessors(AltSourceDir);
+}
+
+## BranchDir exists as a stand-in for branch subdirectories of AltDir that
+## don't exist yet.
+class BranchDir : AdminPath {
+    AltSourceDir __source;
+    AdminPath __parent;
+
+    oper init(AdminPath parent, String name, AltSourceDir source) :
+        AdminPath(name, false),
+        __source = source,
+        __parent = parent {
+    }
+
+    void makeDir(bool errorOnExists) {
+        import crack.logger info;
+        if (__parent._children.hasKey(name)) {
+            if (errorOnExists)
+                throw SystemError('Branch directory already exists', EEXIST);
+            else
+                return;
+        }
+
+        branch := __source.makeBranchDir(name);
+        if (!branch)
+            throw SystemError('Branch does not exists', ENOENT);
+
+        # Replace the branch dir with
+        __parent._children[name] = branch;
+    }
+}
+
+class AltDir : AdminPath {
+    AltSourceDir __source;
+
+    oper init(String name, AltSourceDir source) :
+        AdminPath(name, true),
+        __source = source {
+
+        _children = source.getBranches();
+    }
+
+    Path oper [](String child) {
+        if (c := _children.get(child))
+            return c;
+
+        # If the node doesn't exist in _children, we create a BranchDir so
+        # that the caller can create it.  Don't store it in children, that
+        # would create a reference count.
+        return BranchDir(this, child, __source);
+    }
+}
+
 ## File object for the root of the admin tree (the '.mawfs' directory).
 class AdminRoot : AdminPath {
     oper init(CachedNode root, String name) : AdminPath(name, true) {
         _children = PathMap();
         _children['README'] = READMEFile('README');
         _children['branch'] = BranchFile(root, 'branch');
+        if (altSourceDir := AltSourceDir.get(root.getContext()))
+            _children['alt'] = AltDir('alt', altSourceDir);
     }
 }

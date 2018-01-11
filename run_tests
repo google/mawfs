@@ -15,9 +15,10 @@
 # limitations under the License.
 
 root=$(dirname $0)
+export CRACK_LIB_PATH=$root/lib
 for test in $root/test/*_test.crk; do
     echo -n "$test..."
-    ~/w/crack/crack -l ~/w/crack/lib:lib $test || {
+    ~/w/crack/crack -l $test || {
         echo -e "$test \033[31mFAILED\033[0m"
         exit 1
     }

@@ -15,7 +15,7 @@
 ## Filesystem Path adapter.
 module;
 
-import crack.runtime ENOENT, ENOTDIR;
+import crack.runtime EACCES, ENOENT, ENOTDIR;
 import crack.fs Path, PathIter, PathStat;
 import crack.io Formatter, FStr, SeekableReader, SeekableWriter, SEEK_CUR,
     SEEK_END, SEEK_SET;
@@ -143,8 +143,17 @@ class MAWFSPath : RWPath {
 
     MAWFSPath __parent;
     String __name;
+    bool __readonly;
 
     oper init(CachedNode rep) : __rep = rep, __name = '' {
+        if (__rep)
+            __rep.addExtRef();
+    }
+
+    oper init(CachedNode rep, bool readonly) :
+        __rep = rep,
+        __name = '',
+        __readonly = readonly {
         if (__rep)
             __rep.addExtRef();
     }
@@ -152,7 +161,8 @@ class MAWFSPath : RWPath {
     oper init(CachedNode rep, MAWFSPath parent, String name) :
         __rep = rep,
         __parent = parent,
-        __name = name {
+        __name = name,
+        __readonly = parent ? parent.__readonly : false {
         if (__rep)
             __rep.addExtRef();
     }
@@ -162,7 +172,13 @@ class MAWFSPath : RWPath {
             __rep.releaseExtRef();
     }
 
+    @final void __checkMutable() {
+        if (__readonly)
+            throw SystemError('Readonly filesystem', EACCES);
+    }
+
     SeekableWriter appender() {
+        __checkMutable();
         return RWPathAppender(this);
     }
 
@@ -180,6 +196,7 @@ class MAWFSPath : RWPath {
     }
 
     void delete() {
+        __checkMutable();
         __parent.__rep.deleteChild(__name);
         __rep.releaseExtRef();
         __rep = null;
@@ -246,7 +263,7 @@ class MAWFSPath : RWPath {
     SeekableWriter appender() { return null }
 
     void makeDir(bool errorOnExists) {
-
+        __checkMutable();
         if (__rep) {
             if (__rep.isDir() && !errorOnExists)
                 return;
@@ -267,6 +284,7 @@ class MAWFSPath : RWPath {
     }
 
     SeekableWriter writer() {
+        __checkMutable();
         if (__rep) {
             if (__rep.isDir())
                 throw SystemError(FStr() I`Can not write to directory \
@@ -288,11 +306,13 @@ class MAWFSPath : RWPath {
     Path parent() { return __parent }
 
     void truncate(uint64 newSize) {
+        __checkMutable();
         __checkExists();
         __rep.resize(newSize);
     }
 
     void moveTo(Path other) {
+        __checkMutable();
         o := MAWFSPath.cast(other);
         newParent := o.__parent;
         __parent.__rep.deleteChild(__name);
@@ -322,6 +342,7 @@ class MAWFSPath : RWPath {
     Path moveToDir(Path other) { return null }
 
     void write(uint pos, Buffer data) {
+        __checkMutable();
         __checkExists();
         if (__rep.isDir())
             throw InvalidStateError(

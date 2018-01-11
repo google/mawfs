@@ -20,6 +20,7 @@ import crack.cont.hashmap HashMap;
 import crack.io.fmtutil Indenter;
 import crack.io Formatter, FStr, Writer;
 import crack.cont.array Array;
+import crack.fieldset HashMapFieldSet;
 import crack.functor Functor1;
 import crack.lang cmp, AppendBuffer, AssertionError, Buffer, Exception,
     InvalidArgumentError, InvalidStateError, KeyError, ManagedBuffer,
@@ -217,7 +218,10 @@ Object _makeOrphanContext(NodeContext context);
 ##   have had FSInfo wrap the NodeStore).
 ## - The Cache, which always stays the same.
 ## - The Head, which can vary with different branches.
-class NodeContext {
+##
+## Note that this is also a HashMapFieldSet, allowing external systems to
+## attach arbitrary data to it.
+class NodeContext : HashMapFieldSet {
     NodeStore __store;
     Cache __cache;
     Head __head;
@@ -2161,6 +2165,8 @@ Object _makeOrphanContext(NodeContext context) {
     NodeContext __ctx;
     CachedNode __root;
 
+    # XXX Think we want to also allow you to pass in a cache, since the cache
+    # can be shared too.
     oper init(NodeStore store, String branch) :
         __ctx(store, branch, null) {
     }
