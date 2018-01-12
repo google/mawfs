@@ -18,7 +18,7 @@ root=$(dirname $0)
 export CRACK_LIB_PATH=$root/lib
 for test in $root/test/*_test.crk; do
     echo -n "$test..."
-    ~/w/crack/crack -l $test || {
+    crack $test || {
         echo -e "$test \033[31mFAILED\033[0m"
         exit 1
     }
