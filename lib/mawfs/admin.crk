@@ -283,12 +283,11 @@ class BranchDir : AdminPath {
                 return;
         }
 
+        # We don't need to add the branch to _children, makeBranchDir() does
+        # this for us.
         branch := __source.makeBranchDir(name);
         if (!branch)
             throw SystemError('Branch does not exists', ENOENT);
-
-        # Replace the branch dir with
-        __parent._children[name] = branch;
     }
 }
 
@@ -308,7 +307,7 @@ class AltDir : AdminPath {
 
         # If the node doesn't exist in _children, we create a BranchDir so
         # that the caller can create it.  Don't store it in children, that
-        # would create a reference count.
+        # would create a reference cycle.
         return BranchDir(this, child, __source);
     }
 }

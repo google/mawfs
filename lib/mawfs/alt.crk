@@ -35,20 +35,23 @@ import .path MAWFSPath;
 ## gets attached to the node context for use throughout the filesystem.
 class ResidentBranches @impl AltSourceDir {
     TreeMap[String, BranchInfo] __branches = {};
+    PathMap __branchPaths = {};
     NodeStore __store;
     Cache __cache;
 
     oper init(NodeStore store, Cache cache) : __store = store, __cache = cache {}
 
+    ## Returns a PathMap containing the set of branches.  Note that this
+    ## remains owned and maintained by the instance and is shared by all
+    ## owning directories, so the caller should not attempt to manage the
+    ## contents (for example, by adding new branches: makeBranchDir() does
+    ## that).
     PathMap getBranches() {
-        # Generate a path map parented by the parent dir.
-        pathMap := PathMap();
-        for (branch :in __branches)
-            pathMap[branch.key] =
-                MAWFSPath(branch.val.tree.getRoot(), null, branch.key);
-        return pathMap;
+        return __branchPaths;
     }
 
+    ## Make a new branch directory and add it to the set that is accessed by
+    ## getBranches().
     Path makeBranchDir(String name) {
         if (__branches.hasKey(name))
             throw Exception(FStr() `Branch $name Already defined`);
@@ -60,6 +63,7 @@ class ResidentBranches @impl AltSourceDir {
         tree := Tree(__store, __cache, name);
         root := tree.getRoot();
         __branches[name] = BranchInfo(name, tree);
+        __branchPaths[name] = MAWFSPath(tree.getRoot(), null, name);
         return MAWFSPath(root, false);
     }
 }
