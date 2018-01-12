@@ -21,7 +21,7 @@ import crack.lang Exception;
 import crack.io FStr;
 import .admin AltSourceDir, PathMap;
 import .blockstore NodeStore;
-import .cache Tree;
+import .cache Cache, Tree;
 import .path MAWFSPath;
 
 @import crack.ann impl, struct;
@@ -36,8 +36,9 @@ import .path MAWFSPath;
 class ResidentBranches @impl AltSourceDir {
     TreeMap[String, BranchInfo] __branches = {};
     NodeStore __store;
+    Cache __cache;
 
-    oper init(NodeStore store) : __store = store {}
+    oper init(NodeStore store, Cache cache) : __store = store, __cache = cache {}
 
     PathMap getBranches() {
         # Generate a path map parented by the parent dir.
@@ -56,7 +57,7 @@ class ResidentBranches @impl AltSourceDir {
         if (!__store.getHead(name))
             return null;
 
-        tree := Tree(__store, name);
+        tree := Tree(__store, __cache, name);
         root := tree.getRoot();
         __branches[name] = BranchInfo(name, tree);
         return MAWFSPath(root, false);

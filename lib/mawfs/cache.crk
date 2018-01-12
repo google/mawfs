@@ -244,8 +244,17 @@ class NodeContext : HashMapFieldSet {
         __head = other.__head {
     }
 
+    ## Convenience constructor to create a context from an existing NodeStore
+    ## and Cache.
+    oper init(NodeStore store, Cache cache, String branch) :
+        __store = store,
+        __cache = cache,
+        __head = Head(branch, null) {
+    }
+
     ## Convenience constructor to create a NodeContext complete with a Cache
     ## and Head object.
+    ## TODO: Remove this.
     oper init(NodeStore store, String branch, String baselineCommit) :
         __store = store,
         __cache = Cache(),
@@ -2165,10 +2174,15 @@ Object _makeOrphanContext(NodeContext context) {
     NodeContext __ctx;
     CachedNode __root;
 
-    # XXX Think we want to also allow you to pass in a cache, since the cache
-    # can be shared too.
+    ## Create from a NodeStore and branch name,
     oper init(NodeStore store, String branch) :
-        __ctx(store, branch, null) {
+        __ctx(store, Cache(), branch) {
+    }
+
+    ## Create from an existing node context.  Both the NodeStore and the Cache
+    ## from 'context' will be used, but a new branch will be created.
+    oper init(NodeStore context, Cache cache, String branch) :
+        __ctx(context, cache, branch) {
     }
 
     ## Initialize the tree if it's not already initialized.  This obtains the

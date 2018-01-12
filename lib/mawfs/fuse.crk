@@ -90,8 +90,9 @@ class LockedFilesystem {
 
         # Create the set of resident branches and attach it to the root node
         # context.
-        branches := ResidentBranches(store);
-        branches.putIn(cachedRoot.getContext());
+        ctx := cachedRoot.getContext();
+        branches := ResidentBranches(store, ctx.getCache());
+        branches.putIn(ctx);
 
         root = MAWFSPath(cachedRoot);
     }
