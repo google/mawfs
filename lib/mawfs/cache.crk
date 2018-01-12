@@ -245,7 +245,8 @@ class NodeContext : HashMapFieldSet {
     }
 
     ## Convenience constructor to create a context from an existing NodeStore
-    ## and Cache.
+    ## and Cache.  Note that you must call recordCommit() after creating an
+    ## instance with this constructor.
     oper init(NodeStore store, Cache cache, String branch) :
         __store = store,
         __cache = cache,
@@ -253,8 +254,7 @@ class NodeContext : HashMapFieldSet {
     }
 
     ## Convenience constructor to create a NodeContext complete with a Cache
-    ## and Head object.
-    ## TODO: Remove this.
+    ## and Head object.  This is primarily useful for the unit tests.
     oper init(NodeStore store, String branch, String baselineCommit) :
         __store = store,
         __cache = Cache(),
