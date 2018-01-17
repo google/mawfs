@@ -19,9 +19,11 @@ import crack.cont.array Array;
 import crack.ext._ssl EVP_aes_128_cbc, EVP_aes_128_ctr, CMACContext,
     EVPCipherContext;
 import crack.io cerr, Writer;
-import crack.lang free, ManagedBuffer;
+import crack.lang free, Buffer, ManagedBuffer;
 
-@import crack.ann assert;
+import .ciphers Cipher;
+
+@import crack.ann assert, impl;
 
 ## Computes the Cipher-based Message Authentication Code (see RFC-4493).
 String computeCMAC(String key, String plaintext) {
@@ -77,7 +79,7 @@ String xor(String a, String b) {
 }
 
 ## Returns the bitwise "and" of 'a' and 'b'.  They must be the same length.
-String bitand(String a, String b) {
+String bitand(Buffer a, Buffer b) {
     @assert(a.size == b.size);
     ManagedBuffer result = {a.size};
     for (int i; i < a.size; ++i)
@@ -132,7 +134,7 @@ const COUNTER_CONST :=
 
 ## Encapsulates an encryption key and additional data vector, providing
 ## methods for encrypting and decrypting with them.
-class SIVCipher {
+class SIVCipher @impl Cipher {
 
     Array[String] __ad;
     String __k1, __k2;
@@ -147,15 +149,15 @@ class SIVCipher {
         __k2 = key.slice(16);
     }
 
-    Array[String] __getS2VData(String plaintext) {
+    Array[String] __getS2VData(Buffer plaintext) {
         s2vData := __ad ? __ad.clone() : Array[String](1);
-        s2vData.append(plaintext);
+        s2vData.append(String(plaintext));
         return s2vData;
     }
 
     ## Returns the encrypted form of 'plaintext'.
     ## 'ad' may be null.
-    String encrypt(String plaintext) {
+    String encrypt(Buffer plaintext) {
         s2vData := __getS2VData(plaintext);
         vec := computeS2V(__k1, s2vData);
 
@@ -178,10 +180,14 @@ class SIVCipher {
     ## Returns the decrypted plaintext of 'ciphertext'.  Returns null if the
     ## key or additional data is not the same as that used to encrypt
     ## 'ciphertext'.
-    String decrypt(String ciphertext) {
+    String decrypt(Buffer ciphertext) {
         @assert(ciphertext.size > 16);
-        iv := ciphertext.slice(0, 16);
-        content := ciphertext.slice(16);
+        iv := Buffer(ciphertext.buffer,
+                     (ciphertext.size >= 16) ? 16 : ciphertext.size
+                     );
+        content := (ciphertext.size >= 16) ?
+                       Buffer(ciphertext.buffer + 16, ciphertext.size - 16) :
+                       Buffer(null, 0);
         counter := bitand(iv, COUNTER_CONST);
 
         ManagedBuffer result = {ciphertext.size};

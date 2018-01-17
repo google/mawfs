@@ -30,9 +30,9 @@ import crack.fs Path;
 import crack.io FStr, Reader, StringWriter, Writer;
 
 import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
-import crack.crypt.ssl.cipher EVP_aes_256_cbc, DecryptWriter, EncryptWriter;
 
-import mawfs.rawchunk GeneralCallback, JournalBlock, RawChunkReader;
+import .rawchunk GeneralCallback, JournalBlock, RawChunkReader;
+import .ciphers AES256Cipher, Cipher;
 
 @import crack.ann interface, impl;
 @import crack.protobuf.ann protobuf;
@@ -196,43 +196,34 @@ class HashAndWrite @impl Writer {
 
 ## Information on a MAWFS filesystem.
 class FSInfo {
-    String password;
+    Cipher cipher;
 
-    oper init(String password) : password = password {}
+    ## Legacy constructor, uses AES256 cipher.
+    oper init(String password) : cipher = AES256Cipher(password) {}
+
+    oper init(Cipher cipher) : cipher = cipher {}
 
     ## Reads a "Chunk" from a Reader.  A chunk is the basic unit of data.  The
     ## reader is assumed to be an encrypted stream
     Chunk readChunk(Reader src) {
         hasher := SHA256();
-        back := StringWriter();
-        decrypter := DecryptWriter(EVP_aes_256_cbc(), password, back);
+        tmp := StringWriter();
         while (data := src.read(BLOCK_SIZE)) {
             hasher.update(data);
-            decrypter.write(data);
+            tmp.write(data);
         }
 
-        decrypter.close();
-
-        return Chunk(back.string(), hasher.digest());
+        return Chunk(cipher.decrypt(tmp.string()), hasher.digest());
     }
 
     ## Writes and encrypts raw chunk data, returns the digest of the encrypted
     ## data.
     String writeChunk(Writer dst, Buffer data) {
-        temp := Buffer(null, 0);
-        uint cur;
-        HashAndWrite back = {SHA256(), dst};
-        encrypter := EncryptWriter(EVP_aes_256_cbc(), password, back);
-        while (cur < data.size) {
-            temp.size = (data.size - cur > BLOCK_SIZE) ? BLOCK_SIZE :
-                                                         data.size - cur;
-            temp.buffer = data.buffer + cur;
-            encrypter.write(temp);
-            cur += temp.size;
-        }
-
-        encrypter.close();
-        return back.getDigest();
+        ciphertext := cipher.encrypt(data);
+        dst.write(ciphertext);
+        hasher := SHA256();
+        hasher.update(ciphertext);
+        return hasher.digest();
     }
 
     ## Writes and encrypts a chunk and verifies the digest.  If the digest

@@ -1,0 +1,57 @@
+# Copyright 2017 Google Inc. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+## Cryptographic ciphers interface and implementations.
+##
+## Since MAWFS chunks should generally be small (< 16K) these interfaces just
+## do encrypt/decrypt in one operation.
+
+import crack.crypt.ssl.cipher EVP_aes_256_cbc, DecryptWriter, EncryptWriter;
+import crack.ext._ssl EVPCipher;
+import crack.io StringWriter;
+import crack.lang Buffer;
+
+@import crack.ann interface, impl, implements, struct;
+
+@interface Cipher {
+    @abstract String encrypt(Buffer plaintext);
+    @abstract String decrypt(Buffer ciphertext);
+}
+
+## Wraps the system AES 256 CBC cipher.
+##
+## This is the original cipher used by MAWFS, it should not be used: AES SIV
+## is much more secure.
+class AES256Cipher @impl Cipher {
+
+    String __password;
+
+    oper init(String password) : __password = password {}
+
+    String encrypt(Buffer plaintext) {
+        StringWriter out = {};
+        enc := EncryptWriter(EVP_aes_256_cbc(), __password, out);
+        enc.write(plaintext);
+        enc.close();
+        return out.string();
+    }
+
+    String decrypt(Buffer ciphertext) {
+        out := StringWriter();
+        dec := DecryptWriter(EVP_aes_256_cbc(), __password, out);
+        dec.write(ciphertext);
+        dec.close();
+        return out.string();
+    }
+}
