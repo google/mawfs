@@ -41,6 +41,7 @@ import crack.threads Mutex;
 import mawfs.blockstore hashFile, ChunkStore, FSInfo, Node, BLOCK_SIZE;
 import mawfs.configstore ConfigStore;
 import mawfs.fuse runFuse, UserModule;
+import mawfs.params DeviceEntropySource, ParamInfo;
 import mawfs.peernet PeerNetwork;
 import mawfs.rawchunk RawChunkReader;
 import mawfs.util traverse;
@@ -189,6 +190,32 @@ String readPassword() {
     return hashed_password;
 }
 
+class Abort : Exception {
+    oper init(String message) : Exception(message) {}
+}
+
+## initializes the chunk store from disk.  Reads the password from the user.
+ChunkStore makeChunkStore(Path backingDir) {
+    password := readPassword();
+    entropy := DeviceEntropySource(makePath('/dev/urandom'));
+    paramsFile := backingDir/'params';
+    ParamInfo params;
+
+    if (backingDir.exists() && paramsFile.exists()) {
+        params = ParamInfo.read(backingDir/'params', password);
+        if (!params)
+            throw Abort('Invalid password');
+    } else {
+        # Write a new params file.
+        if (!backingDir.exists())
+            backingDir.makeDir();
+        params = ParamInfo.getDefault(password);
+        params.writeTo((backingDir/'params').writer(), entropy);
+    }
+
+    return ChunkStore(backingDir, FSInfo(params.cipher));
+}
+
 opts := CmdOptions![
     Option('branch', 'b', 'branch name', 'master', CMD_STR),
 ];
@@ -225,15 +252,13 @@ void main() {
                 exit(1);
             }
 
-            password := readPassword();
-
             # Read the file contents.
             src := getReader(args[2]);
             contents := AppendBuffer(BLOCK_SIZE);
             while (data := src.read(BLOCK_SIZE))
                 contents.extend(data);
 
-            store := ChunkStore(cwd, FSInfo(password));
+            store := makeChunkStore(cwd);
             digest := store.store(contents);
             cout `$(hex(digest))\n`;
         } else if (cmd == 'loadchunk') {
@@ -242,9 +267,7 @@ void main() {
                 exit(1);
             }
 
-            password := readPassword();
-
-            store := ChunkStore(cwd, FSInfo(password));
+            store := makeChunkStore(cwd);
             chunk := store.load(altDecode(args[2]));
             if (!chunk)
                 cerr `Chunk $(args[2]) not found\n`;
@@ -272,8 +295,6 @@ void main() {
                 exit(1);
             }
 
-            password := readPassword();
-
             sa := SigAction();
             sa.sa_sigaction = trapHandler;
             sa.sa_flags = SA_SIGINFO;
@@ -289,7 +310,7 @@ void main() {
             setLogFile('mawfs.log');
             setLogLevel(DEBUG);
             configStore := ConfigStore(makePath(args[2]), 'peers');
-            chunkStore := ChunkStore(makePath(args[2]), FSInfo(password));
+            chunkStore := makeChunkStore(makePath(args[2]));
 
             # Start the peer network.
             mutex := Mutex();
@@ -325,7 +346,6 @@ void main() {
 
             setLogFile('mawfs-puller.log');
             setLogLevel(DEBUG);
-            password := readPassword();
             import mawfs.rpc parseAddr;
 
             # Create the directory if it doesn't exist.
@@ -345,7 +365,7 @@ void main() {
             }
 
             # Create a chunk store to read from remote.
-            store := ChunkStore(backingDir, FSInfo(password));
+            store := makeChunkStore(backingDir);
             net := PeerNetwork(store.getRawChunkReader(Mutex()));
             net.addPeer(parseAddr(args[2]));
             store.setRemoteReader(RemoteReaderImpl(net));
@@ -389,6 +409,8 @@ void main() {
             usage();
             exit(1);
         }
+    } catch (Abort ex) {
+        cerr `$(ex.text)\n`;
     } catch (SystemError ex) {
         error `$(ex.text)`;
     } catch (InvalidArgumentError ex) {

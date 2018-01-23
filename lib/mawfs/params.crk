@@ -1,0 +1,193 @@
+## Tools for dealing with the params file.
+##
+## A Params file consists of
+## -   A protobuf string containing a plaintext PublicParams protobuf.
+## -   Another protobuf string containing an encrypted parcel of:
+##     -   a variable-length random header,
+##     -   An 8 byte magic value of ASCII "MAWFS1.0"
+##     -   A PrivateParams protobuf.
+##     -   A variable length random tail.
+## As you might expect, the encrypted parcel is encrypted with the cipher
+## specified in the PublicParams and the password provided to the methods.
+##
+## The variable length parts consist of a single byte length followed by 0 to
+## 255 bytes of random data.
+
+import crack.cont.array Array;
+import crack.fs Path;
+import crack.io cerr, AppendBufferWriter, BufferReader, Formatter, FStr, Reader,
+    StringWriter, Writer;
+import crack.lang cmp, makeHashVal, AppendBuffer, Buffer, Exception;
+import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
+import crack.random random, srandom;
+import crack.serial SerialReader, SerialWriter;
+
+import .aes_siv SIVCipher;
+import .ciphers Cipher, AES256Cipher;
+
+@import crack.ann cvars, impl, interface;
+@import crack.protobuf.ann protobuf;
+
+@protobuf {
+
+    ## These parameters are stored in plaintext at the head of the file, the
+    ## only thing that we currently want here is the cipher.
+    message PublicParams {
+        ## The cipher is public so that we can distinguish between unknown
+        ## cipher and incorrect password.  In general, we try to reveal as
+        ## little as possible, but since there are only a small set of ciphers
+        ## anyway, if there's a weakness in one of them an attacker need only
+        ## iterate over the set to attempt to exploit it.
+        optional int32 cipher = 1;
+    }
+
+    message PrivateParams {
+        optional int32 version = 1;
+    }
+}
+
+@interface EntropySource {
+    ## Returns a single random byte.
+    @abstract byte getByte();
+
+    ## Returns a string of random bytes of length 'len'.
+    @abstract String getString(uint len);
+}
+
+const PARAMS_MAGIC_NUMBER := 'MAWFS1.0';
+const DEFAULT_VERSION := 1;
+
+const CIPHER_AES256 := 1;
+const CIPHER_AESSIV := 2;
+
+## Bundles the params and cipher determined from the params file.
+## Use the read() method to create.
+class ParamInfo {
+    @cvars {
+        Cipher cipher;
+        PublicParams publicParams;
+        PrivateParams params;
+    }
+
+    ## Reads the params from 'src'.  Returns the ParamInfo or null if unable
+    ## to decode the file (invalid password).  Throws an exception if the file
+    ## content is corrupt or the cipher is unknown.
+    @static ParamInfo read(Reader src, String password) {
+        temp := StringWriter();
+        while (data := src.read(4096))
+            temp.write(data);
+
+        # Read the PublicParams and get the cipher type.
+        reader := SerialReader(BufferReader(temp.string()));
+        publicParamsData := reader.readString();
+        publicParams := PublicParams();
+        readMessageFromString(publicParams, publicParamsData);
+        Cipher cipher;
+        if (publicParams.cipher == CIPHER_AES256)
+            cipher = AES256Cipher(password);
+        else if (publicParams.cipher == CIPHER_AESSIV)
+            cipher = SIVCipher(password, null);
+        else
+            throw Exception(FStr() `Unknown cipher type $(publicParams.cipher)`);
+
+        # Read the next string
+        ciphertext := reader.readString();
+
+        # Try decrypting with the cipher.
+        plaintext := cipher.decrypt(ciphertext);
+        if (!plaintext)
+            return null;
+
+        # Need a magic number, at least one byte for the params proto
+        # and one byte for the end padding.
+        len := plaintext[0];
+        if (len + 10 > plaintext.size)
+            # If the length extends beyond the length of the string, we have
+            # to assume we've decrypted wrong which means we've
+            # TODO: SIV shouldn't have this problem, we probably want to add a
+            # method to the cipher to indicate whether to expect an error if
+            # decryption fails.
+            return null;
+
+        # Check for the magic number.
+        Buffer window = {plaintext.buffer + len + 1, 8};
+        if (window != PARAMS_MAGIC_NUMBER)
+            return null;
+
+        # Read the PrivateParams
+        window = Buffer(plaintext.buffer + len + 9,
+                        plaintext.size - len - 9
+                        );
+        paramsData := SerialReader(BufferReader(window)).readString();
+        PrivateParams privateParams = {};
+        readMessageFromString(privateParams, paramsData);
+
+        # We can ignore the rest of the padding.
+        return ParamInfo(cipher, publicParams, privateParams);
+    }
+
+    ## Reads the parameter file, returns the ParamInfo for it or null if
+    ## unable to process it.
+    @static ParamInfo read(Path file, String password) {
+        return read(file.reader(), password);
+    }
+
+    ## Returns the default parameters for new filesystems.
+    @static ParamInfo getDefault(String password) {
+        publicParams := PublicParams();
+        publicParams.cipher = CIPHER_AESSIV;
+        privateParams := PrivateParams();
+        privateParams.version = DEFAULT_VERSION;
+        return ParamInfo(SIVCipher(password, null), publicParams, privateParams);
+    }
+
+    ## Write the ParamInfo to 'dst'.  The user should provide a source of
+    ## entropy with which to generate random padding.
+    void writeTo(Writer dst, EntropySource rand) {
+        sw := SerialWriter(dst);
+
+        # First write and encrypt the PublicParams.
+        sw.write(publicParams.toString());
+
+        # Now create the encrypted part.
+
+        # Write the padding.
+        buf := AppendBuffer(4096);
+        void writePadding(AppendBuffer buf, EntropySource rand) {
+            len := rand.getByte();
+            padding := rand.getString(len);
+            buf.append(len);
+            buf.extend(padding);
+        }
+        writePadding(buf, rand);
+
+        # Write the magic number.
+        buf.extend(PARAMS_MAGIC_NUMBER);
+
+        # Write the params, encapsulated in a string.
+        SerialWriter(AppendBufferWriter(buf)).write(params.toString());
+
+        # Write the end padding.
+        writePadding(buf, rand);
+
+        # Finally encrypt and write the buffer to the destination stream.
+        sw.write(cipher.encrypt(buf));
+    }
+}
+
+class DeviceEntropySource @impl EntropySource {
+    Reader __dev;
+
+    oper init(Path urandomDevice) : __dev = urandomDevice.reader() {}
+
+    ## Returns a single random byte.
+    byte getByte() {
+        return __dev.read(1)[0];
+    }
+
+
+    ## Returns a string of random bytes of length 'len'.
+    String getString(uint len) {
+        return __dev.read(len);
+    }
+}

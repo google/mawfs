@@ -15,12 +15,15 @@
 import crack.cmdline CmdOptions, Option, CMD_STR;
 import crack.cont.hashmap HashMap;
 import crack.fs cwd, makePath, Path;
+import crack.hash.sha256 SHA256;
 import crack.io cerr, FStr, SEEK_SET;
 import crack.lang Exception, ManagedBuffer;
 import crack.process Process, CRK_PROC_EXITED, CRK_PIPE_STDIN;
 import crack.strutil StringArray;
 import crack.sys argv;
 import crack.runtime open, close, sleep, O_RDONLY;
+
+import mawfs.params ParamInfo;
 
 import 'libc.so.6' fsync, chown;
 int fsync(int fd);
@@ -47,6 +50,14 @@ class TestFailure : Exception {
     oper init(String text) : Exception(text) {}
 }
 
+const TEST_PASSWORD := 'TestPasswordDudeBestAsstwordFood';
+String _expandPw(String pw) {
+    hasher := SHA256();
+    hasher.update(TEST_PASSWORD);
+    return hasher.digest();
+}
+const EXPANDED_TEST_PASSWORD := _expandPw(TEST_PASSWORD);
+
 @abstract class TestCase {
 
     bool failed;
@@ -66,7 +77,7 @@ class TestFailure : Exception {
                         ],
                         CRK_PIPE_STDIN
                         );
-        proc.putStdIn('TestPasswordDudeBestAsstwordFood');
+        proc.putStdIn(TEST_PASSWORD);
         proc.closeStdIn();
         rc := proc.run();
         if (rc != CRK_PROC_EXITED)
@@ -308,6 +319,15 @@ class BranchTest : TestCase {
 }
 BranchTest().exec();
 
+## Verify that a params file exists and is readable.
+class ParamsTest : TestCase {
+    void run() {
+        params := makePath('backing/params');
+        @assert(params.exists());
+        @assert(ParamInfo.read(params, EXPANDED_TEST_PASSWORD));
+    }
+}
+ParamsTest().exec();
 
 /*
 String readNode(Node node, int pos, int size) {
