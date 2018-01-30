@@ -98,4 +98,13 @@ class BlockingCallback[T] @impl GeneralCallback[T] {
                                    uint pos,
                                    GeneralCallback[JournalBlock] callback
                                    );
+
+    ## Read a file from the backing filesystem asynchronously.
+    ##
+    ## This is intended for use with relatively small files (most files in the
+    ## backing store should be relatively small except for the journal) and
+    ## was created for reading the params file.
+    @abstract void getFile(String filename,
+                           GeneralCallback[String] callback
+                           );
 }

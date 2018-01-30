@@ -21,9 +21,10 @@ import crack.hash Hash;
 import crack.hash.sha256 SHA256;
 import crack.io Formatter, StringReader, SEEK_SET;
 import crack.lang cmp, makeHashVal, AppendBuffer, Buffer, Exception,
-    InvalidArgumentError, ManagedBuffer;
+    InvalidArgumentError, ManagedBuffer, SystemError;
 import crack.logger debug;
 import crack.serial SerialReader, SerialWriter;
+import crack.runtime ENOENT;
 import crack.threads Mutex, MutexLock;
 
 import crack.fs Path;
@@ -378,6 +379,18 @@ class FSRawChunkReader @impl RawChunkReader {
                               ),
                  null
                  );
+    }
+
+    void getFile(String filename, GeneralCallback[String] callback) {
+        path := __dir/filename;
+        if (path.exists()) {
+            callback(path.readAll(), null);
+        } else {
+            callback(null, SystemError(FStr() `File "$filename" not found`,
+                                       ENOENT
+                                       )
+                     );
+        }
     }
 }
 

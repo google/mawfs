@@ -41,6 +41,10 @@ class FakeChunkReader @impl RawChunkReader {
                  null
                  );
     }
+
+    void getFile(String filename, GeneralCallback[String] callback) {
+        callback('contents', null);
+    }
 }
 
 class RPCTestBed {
@@ -88,6 +92,11 @@ class RPCTestBed {
         @assert(jb.done);
     }
 
+    void testGetFile() {
+        peer := PeerProxy(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`);
+        @assert(peer.getFile('filename') == 'contents');
+    }
+
     void tearDown() {
         comm.stop();
     }
@@ -99,6 +108,7 @@ try {
     testbed.testGetObject();
     testbed.testGetHead();
     testbed.testReadJournal();
+    testbed.testGetFile();
 } catch (Exception ex) {
     testbed.tearDown();
     throw ex;

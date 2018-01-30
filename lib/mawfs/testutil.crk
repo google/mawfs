@@ -16,6 +16,10 @@ import crack.io Reader, Writer;
 import crack.lang AppendBuffer;
 import crack.runtime random, srandom;
 
+import .params EntropySource;
+
+@import crack.ann impl;
+
 ## Fill a buffer full of 70K of random data (the same data every time).
 AppendBuffer makeRandomData() {
     # The seed is the first 4 bytes of the sha1 sum of "this is some
@@ -33,5 +37,19 @@ void copy(Reader src, Writer dst) {
     while (data := src.read(1024))
         dst.write(data);
 }
+
+class FakeEntropySource @impl EntropySource {
+    byte n;
+    oper init(byte n) : n = n {}
+    byte getByte() {
+        return n;
+    }
+
+    String getString(uint len) {
+        # Random string of 55s.
+        return String(len, 55);
+    }
+}
+
 
 

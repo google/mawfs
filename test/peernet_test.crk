@@ -1,16 +1,26 @@
 
 import crack.cont.array Array;
 import crack.fs makePath, Path;
-import crack.io cerr;
+import crack.hash.sha256 SHA256;
+import crack.io cerr, StringWriter;
 import crack.lang Exception;
 import crack.net Address;
 import crack.net.comm2 Comm;
 import crack.logger.ctx Log;
+import crack.sys exit;
+import mawfs.params ParamInfo;
 import mawfs.peernet Peer, PeerNetwork;
 import mawfs.rawchunk JournalBlock;
 import mawfs.rpc PeerProxy;
+import mawfs.testutil FakeEntropySource;
 
 @import crack.ann assert;
+
+String sha256(String data) {
+    hasher := SHA256();
+    hasher.update(data);
+    return hasher.digest();
+}
 
 class FakeProxy : PeerProxy {
     Array[JournalBlock] results;
@@ -26,6 +36,17 @@ class FakeProxy : PeerProxy {
         next := results[0];
         results.delete(0);
         return next;
+    }
+
+    String getFile(String filename) {
+        if (filename == 'params') {
+            pi := ParamInfo.getDefault(sha256('password'));
+            StringWriter temp = {};
+            pi.writeTo(temp, FakeEntropySource(10));
+            return temp.string();
+        } else {
+            return 'contents';
+        }
     }
 }
 
@@ -88,6 +109,12 @@ class TestBed {
         __assertNoJournal();
     }
 
+    void testGetFile() {
+        paramInfo := net.pullParams(root, sha256('password'));
+        @assert(paramInfo);
+        @assert((root/'params').exists());
+    }
+
     # If the journal has changed to a less than 1 block value, the server
     # should still reply with a null first block digest and not done
     # Test that the server gives us null, null, false when the journal is
@@ -95,7 +122,7 @@ class TestBed {
 
     oper init() {}
 
-    @static void __run(function[void, TestBed] func, String name) {
+    @static bool __run(function[void, TestBed] func, String name) {
         bed := TestBed();
         bed.setUp();
         try {
@@ -103,19 +130,28 @@ class TestBed {
         } catch (Exception ex) {
             bed.tearDown();
             cerr `Exception thrown from $name: $ex\n`;
-            return;
+            return false;
         }
         bed.tearDown();
+        return true;
     }
 
-    @static void runAll() {
-        __run(testEmptyJournal, 'empty journal');
-        __run(testTinyJournal, 'tiny journal');
-        __run(testMultiBlockJournal, 'multi-block journal');
-        __run(testJournalChanged, 'journal changed');
+    @static bool runAll() {
+        bool result = true;
+        result = __run(testEmptyJournal, 'empty journal') ? result : false;
+        result = __run(testTinyJournal, 'tiny journal') ? result : false;
+        result = __run(testMultiBlockJournal, 'multi-block journal') ?
+            result : false;
+        result = __run(testJournalChanged, 'journal changed') ? result : false;
+        result = __run(testGetFile, 'get file') ? result : false;
+        return result;
     }
 }
 
-TestBed.runAll();
-cerr `ok\n`;
+if (TestBed.runAll()) {
+    cerr `ok\n`;
+} else {
+    cerr `FAILED\n`;
+    exit(1);
+}
 

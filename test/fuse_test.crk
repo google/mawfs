@@ -15,15 +15,12 @@
 import crack.cmdline CmdOptions, Option, CMD_STR;
 import crack.cont.hashmap HashMap;
 import crack.fs cwd, makePath, Path;
-import crack.hash.sha256 SHA256;
 import crack.io cerr, FStr, SEEK_SET;
 import crack.lang Exception, ManagedBuffer;
 import crack.process Process, CRK_PROC_EXITED, CRK_PIPE_STDIN;
 import crack.strutil StringArray;
 import crack.sys argv;
 import crack.runtime open, close, sleep, O_RDONLY;
-
-import mawfs.params ParamInfo;
 
 import 'libc.so.6' fsync, chown;
 int fsync(int fd);
@@ -50,14 +47,6 @@ class TestFailure : Exception {
     oper init(String text) : Exception(text) {}
 }
 
-const TEST_PASSWORD := 'TestPasswordDudeBestAsstwordFood';
-String _expandPw(String pw) {
-    hasher := SHA256();
-    hasher.update(TEST_PASSWORD);
-    return hasher.digest();
-}
-const EXPANDED_TEST_PASSWORD := _expandPw(TEST_PASSWORD);
-
 @abstract class TestCase {
 
     bool failed;
@@ -70,22 +59,23 @@ const EXPANDED_TEST_PASSWORD := _expandPw(TEST_PASSWORD);
         return backing;
     }
 
-    void startFS(String branch) {
-        proc := Process(StringArray![
-                            crackPath, './mawfs', 'run', '-b', branch, 'backing',
-                            'fs'
-                        ],
-                        CRK_PIPE_STDIN
-                        );
-        proc.putStdIn(TEST_PASSWORD);
+    void runMawfs(StringArray args) {
+        cmd := StringArray![crackPath, './mawfs'];
+        cmd.extend(args);
+        proc := Process(cmd, CRK_PIPE_STDIN);
+        proc.putStdIn('TestPasswordDudeBestAsstwordFood');
         proc.closeStdIn();
         rc := proc.run();
         if (rc != CRK_PROC_EXITED)
             throw Exception('Failed in startup');
     }
 
-    void stopFS() {
-        rc := Process(StringArray!['fusermount', '-u', 'fs']).run();
+    void startFS(String branch) {
+        runMawfs(StringArray!['run', '-b', branch, 'backing', 'fs']);
+    }
+
+    void stopFS(String dir) {
+        rc := Process(StringArray!['fusermount', '-u', dir]).run();
         if (rc != CRK_PROC_EXITED) {
             # There seems to be a timing issue here. This doesn't always
             # succeed on the first try.  So if the unmount fails, sleep and
@@ -101,7 +91,7 @@ const EXPANDED_TEST_PASSWORD := _expandPw(TEST_PASSWORD);
     }
 
     void restartFS(String branch) {
-        stopFS();
+        stopFS('fs');
         startFS(branch);
     }
 
@@ -116,7 +106,7 @@ const EXPANDED_TEST_PASSWORD := _expandPw(TEST_PASSWORD);
     @abstract void run();
 
     void tearDown() {
-        stopFS();
+        stopFS('fs');
         deleteBacking();
     }
 
@@ -155,9 +145,7 @@ const EXPANDED_TEST_PASSWORD := _expandPw(TEST_PASSWORD);
 
     void assertEqual(Object a, Object b) {
         if (a != b)
-            throw TestFailure(
-                FStr() `[$a] != [$b]`
-            );
+            throw TestFailure(FStr() `[$a] != [$b]`);
     }
 }
 
@@ -229,7 +217,7 @@ class SubDirFileTest : TestCase {
         close(fd);
 
         # Restart to verify that everything got committed properly.
-        stopFS();
+        stopFS('fs');
         startFS('master');
 
         assertEqual(foo.readAll(), 'test data');
@@ -325,9 +313,46 @@ class ParamsTest : TestCase {
         params := makePath('backing/params');
         @assert(params.exists());
         @assert(ParamInfo.read(params, EXPANDED_TEST_PASSWORD));
+     }
+ }
+ParamsTest().exec();
+
+class PullTest : TestCase {
+    Path backing2, fs2;
+
+    void setUp() {
+        backing2 = makePath('backing2');
+        fs2 = makePath('fs2');
+        if (backing2.exists())
+            backing2.deleteTree();
+        if (fs2.exists())
+            fs2.deleteTree();
+        TestCase.setUp();
+    }
+
+    void run() {
+        # Start up a server on port 12543
+        (makePath('backing')/'config/peers').writeAll('[server]\nport = 12543\n');
+        (makePath('fs')/'foo').writeAll('test file contents');
+        restartFS('master');
+        runMawfs(StringArray!['pull', 'localhost:12543', 'backing2']);
+        @assert((backing2/'params').exists());
+        fs2.makeDir();
+        runMawfs(StringArray!['run', 'backing2', 'fs2']);
+        @assert((fs2/'foo').readAll() == 'test file contents');
+    }
+
+    void tearDown() {
+        cerr `tearing down\n`;
+        stopFS('fs2');
+        if (backing2.exists())
+            backing2.deleteTree();
+        if (fs2.exists())
+            fs2.deleteTree();
+        TestCase.tearDown();
     }
 }
-ParamsTest().exec();
+PullTest().exec();
 
 /*
 String readNode(Node node, int pos, int size) {

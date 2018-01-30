@@ -20,6 +20,7 @@ import crack.enc.base64 altDecode, altEncode;
 import crack.lang Exception, InvalidArgumentError, SystemError;
 
 import crack.fs cwd, makePath, Path;
+import crack.net Address;
 import crack.process Process, CRK_PIPE_STDERR, CRK_PIPE_STDOUT;
 import crack.runtime abort, backtrace, close, free, getLocation, isatty,
     memcmp, open, sigaction, strlen, SigAction, SigInfo, O_RDONLY,
@@ -44,6 +45,7 @@ import mawfs.fuse runFuse, UserModule;
 import mawfs.params DeviceEntropySource, ParamInfo;
 import mawfs.peernet PeerNetwork;
 import mawfs.rawchunk RawChunkReader;
+import mawfs.rpc parseAddr;
 import mawfs.util traverse;
 
 @import crack.ann impl;
@@ -341,12 +343,18 @@ void main() {
                 exit(1);
             }
 
-            peer := args[2];
+            Address peerAddr;
+            try {
+                peerAddr = parseAddr(args[2]);
+            } catch (Exception ex) {
+                cerr I`Invalid address specification for peer address: \
+                       $(args[2])\n`;
+                exit(1);
+            }
             backingDirName := args[3];
 
             setLogFile('mawfs-puller.log');
             setLogLevel(DEBUG);
-            import mawfs.rpc parseAddr;
 
             # Create the directory if it doesn't exist.
             backingDir := makePath(backingDirName);
@@ -364,10 +372,27 @@ void main() {
                 }
             }
 
-            # Create a chunk store to read from remote.
-            store := makeChunkStore(backingDir);
-            net := PeerNetwork(store.getRawChunkReader(Mutex()));
-            net.addPeer(parseAddr(args[2]));
+            password := readPassword();
+
+            # Only need a raw chunk reader if we're running a server, so we
+            # can give it a null.
+            net := PeerNetwork(null);
+            net.addPeer(peerAddr);
+
+            # If there's no params file, get one.
+            ChunkStore store;
+            if (!(backingDir/'params').exists()) {
+                paramInfo := net.pullParams(backingDir, password);
+                if (!paramInfo) {
+                    cerr `No peers found.\n`;
+                    exit(1);
+                }
+                store = ChunkStore(backingDir, FSInfo(paramInfo.cipher));
+            } else {
+                store = ChunkStore(backingDir, FSInfo(password));
+                # TODO: verify that the params are the same.
+            }
+
             store.setRemoteReader(RemoteReaderImpl(net));
 
             master := net.getHead('master');
@@ -412,10 +437,13 @@ void main() {
     } catch (Abort ex) {
         cerr `$(ex.text)\n`;
     } catch (SystemError ex) {
+        cerr `system error: $ex\n`;
         error `$(ex.text)`;
     } catch (InvalidArgumentError ex) {
+        cerr `invalid argument: $ex\n`;
         error `$(ex.text)`;
     } catch (Exception ex) {
+        cerr `general exception: $ex\n`;
         error `got general exception: $ex\n`;
     }
 }

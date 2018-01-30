@@ -3,8 +3,8 @@
 import crack.ascii toLower;
 import crack.cont.array Array;
 import crack.fs Path;
-import crack.io Formatter, FStr, StandardFormatter, Writer;
-import crack.lang Buffer;
+import crack.io Formatter, FStr, StandardFormatter, StringReader, Writer;
+import crack.lang Buffer, Exception;
 import crack.logger cerrLogger, DEBUG, ERROR, INFO, FATAL, WARN;
 import crack.logger.ctx Log;
 import crack.net Address, InetAddress;
@@ -12,6 +12,12 @@ import crack.net.comm2 Comm;
 import mawfs.configstore ConfigStore;
 import mawfs.rawchunk RawChunkReader;
 import mawfs.rpc parseAddr, Context, PeerProxy, PeerServiceCommFactory;
+import .params ParamInfo;
+
+## Thrown by pullParams() in the case of an invalid password.
+class InvalidPasswordError : Exception {
+    oper init(String message) : Exception(message) {}
+}
 
 class Peer {
     Address addr;
@@ -155,6 +161,28 @@ class PeerNetwork {
                 __log.info `Journal of size $pos retrieved.`;
             }
         }
+    }
+
+    ## Pull the params file from a peer.  Returns null if no peer could be
+    ## found.
+    ## Throws InvalidPasswordError on an invalid password, RemoteError if the peer
+    ## doesn't have a params file (or runs into problems reading it) and any
+    ## of the exceptions raised by ParamInfo.read() if the file is corrupt,
+    ParamInfo pullParams(Path root, String password) {
+        for (peer :in __peers) {
+            proxy := peer.getProxy();
+            if (proxy) {
+                __log.info `Pulling params from $peer`;
+                contents := proxy.getFile('params');
+                pi := ParamInfo.read(StringReader(contents), password);
+                if (!pi)
+                    throw Exception('Invalid password');
+                root.makeDirs();
+                (root/'params').writeAll(contents);
+                return pi;
+            }
+        }
+        return null;
     }
 
     ## Convfigure the peer network from the config store.

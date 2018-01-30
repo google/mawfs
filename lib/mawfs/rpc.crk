@@ -69,6 +69,14 @@ class AppError : Exception {
         optional string digest = 1;
     }
 
+    message GetFileRequest {
+        optional string filename = 1;
+    }
+
+    message GetFileResponse {
+        optional string data = 1;
+    }
+
     message GetJournalBlockRequest {
         optional bytes firstBlockDigest = 1;
         optional string branch = 2;
@@ -239,6 +247,18 @@ class PeerProxy {
         return resp.digest;
     }
 
+    ## Get a file from the remote backing store.
+    ##
+    ## This method can probably subsume getObject() and getHead().
+    String getFile(String filename) {
+        GetFileRequest req = {};
+        req.filename = filename;
+        GetFileResponse resp = {};
+        respData := __invoke('getFile', req.toString());
+        readMessageFromString(resp, respData);
+        return resp.data;
+    }
+
     ## Gets the next journal block from the remote peer.  See RawChunkReader
     ## for details.
     JournalBlock getJournalBlock(String firstBlockDigest,
@@ -402,6 +422,23 @@ void getHead(Context context, RPCMessage msg, AppendBuffer outBuf) {
     context.reader.getHead(req.branch, ResponseCallback(context, outBuf, msg.id));
 }
 
+void getFile(Context context, RPCMessage msg, AppendBuffer outBuf) {
+    GetFileRequest req = {};
+    readMessageFromString(req, msg.request);
+
+    class ResponseCallback @impl GeneralCallback[String] {
+        @cvars {Context context; AppendBuffer outBuf; int32 requestId;}
+        void oper call(String data, Exception ex) {
+            GetFileResponse resp = {};
+            resp.data = data;
+            context.writeResponse(outBuf, resp, requestId);
+        }
+    }
+
+    context.reader.getFile(req.filename,
+                           ResponseCallback(context, outBuf, msg.id));
+}
+
 void getJournalBlock(Context context, RPCMessage msg, AppendBuffer outBuf) {
     GetJournalBlockRequest req = {};
     readMessageFromString(req, msg.request);
@@ -430,6 +467,7 @@ class PeerServiceCommFactory @impl CommHandlerFactory {
         __methods['getObject'] = MethodHandler.Wrap(getObject);
         __methods['getHead'] = MethodHandler.Wrap(getHead);
         __methods['getJournalBlock'] = MethodHandler.Wrap(getJournalBlock);
+        __methods['getFile'] = MethodHandler.Wrap(getFile);
     }
 
     CommHandler makeCommHandler(NewConnection conn) {
