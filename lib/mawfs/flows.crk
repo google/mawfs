@@ -1,0 +1,126 @@
+## High-level workflows.
+
+import crack.fs Path;
+import crack.functor Functor0;
+import crack.lang Exception;
+import crack.logger debug, info;
+import crack.threads Mutex, MutexLock, Queue, Thread;
+
+import .blockstore ChunkStore;
+import .peernet PeerNetwork;
+import .rawchunk GeneralCallback;
+import .rpc InstIFace;
+
+@import crack.ann cvars, define, impl;
+
+alias Task = Functor0[void];
+
+## The thread pool used to run flows. It's currently just a single thread.
+##
+## Use the submit() method to submit tasks for execution, submit a task that
+## evaluates to "false" to kill the thread.
+class ThreadPool {
+    Mutex __mutex = {};
+    Queue[Task] __queue = {};
+
+    class __Thread : Thread {
+        @cvars { Queue[Task] __queue; }
+
+        void run() {
+            info `Worker thread pool started.`;
+            while (task := __queue.get())
+                task();
+            info `Worker thread pool terminating.`;
+        }
+    }
+
+    __Thread __thread;
+
+    void __start() {
+        MutexLock lock = {__mutex};
+        if (!__thread) {
+            __thread = __Thread(__queue);
+            __thread.start();
+        }
+    }
+
+    ## Subit a task for execution.
+    void submit(Task task) {
+        __start();
+        __queue.add(task);
+        if (!task) {
+            lock := MutexLock(__mutex);
+            __thread = null;
+        }
+    }
+}
+
+ThreadPool __pool = {};
+
+@define task(vars, action) {
+    class MyTask @impl Task {
+        @cvars {
+            vars
+            GeneralCallback[String] callback;
+        }
+
+        void oper call() {
+            String result;
+            Exception exception;
+            try {
+                result = (action);
+            } catch (Exception ex) {
+                exception = ex;
+            }
+            callback(result, exception);
+        }
+    }
+}
+
+import crack.io cerr;
+class MAWFSInstance @impl InstIFace {
+    Path __root;
+    ChunkStore __store;
+    PeerNetwork __net;
+
+    oper init(Path root, ChunkStore store, PeerNetwork net) :
+        __root = root,
+        __store = store,
+        __net = net {
+    }
+
+    ## Pull a branch from a peer to the local instance.  This can result in the
+    ## production of a tracking branch.
+    String pullBranch(String name, String peer) {
+        branch := __store.getHead(name);
+        if (!branch) {
+            # The branch isn't present locally, so we can pull it.
+            __net.pullJournal(__root, name);
+            jiter := __store.makeJournalIter(name);
+            if (!jiter) {
+                # Try pulling the commit.
+                head := __net.getHead(name);
+                if (!head)
+                    throw Exception('Unable to retrieve branch');
+
+                __store.setHead(name, head);
+                return name;
+            }
+            __store.setHead(name, jiter.elem().change.commit);
+            cerr `returning branch name $name\n`;
+            return name;
+        } else {
+            cerr `not implemented!!!\n`;
+            throw Exception('not implemented');
+        }
+    }
+
+    ## RPC service for pullBranch.  Starts the call off in a new thread.
+    void pullBranch(String name, String peer,
+                    GeneralCallback[String] callback
+                    ) {
+        @task(MAWFSInstance inst; String name; String peer;,
+              inst.pullBranch(name, peer));
+        __pool.submit(MyTask(this, name, peer, callback));
+    }
+}

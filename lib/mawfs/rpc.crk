@@ -3,7 +3,7 @@
 import crack.ascii parseInt;
 import crack.cont.hashmap HashMap;
 import crack.functor Functor3;
-import crack.io cerr, AppendBufferWriter, FStr, StringWriter, Reader;
+import crack.io cerr, FStr, StringWriter, Reader;
 import crack.lang cmp, makeHashVal, AppendBuffer, Exception, WriteBuffer;
 import crack.logger.ctx Log;
 import crack.net resolve, Address, InetAddress;
@@ -14,7 +14,7 @@ import crack.regex Regex;
 import crack.serial SerialReader, SerialWriter;
 import mawfs.rawchunk GeneralCallback, JournalBlock, RawChunkReader;
 
-@import crack.ann cvars, impl;
+@import crack.ann cvars, impl, interface;
 @import crack.protobuf.ann  protobuf;
 
 const DEFAULT_PORT := 9119
@@ -88,7 +88,25 @@ class AppError : Exception {
         optional bytes contents = 2;
         optional bool done = 3;
     }
+
+    message PullBranchRequest {
+        optional string branch = 1;
+        optional string peer = 2;
+    }
+
+    message PullBranchResponse {
+        optional string localName = 1;
+    }
 }
+
+@interface InstIFace {
+    @abstract void pullBranch(String branch, String peer,
+                              GeneralCallback[String] callback
+                              );
+}
+
+InstIFace _inst;
+void setInst(InstIFace inst) { _inst = inst }
 
 alias RPCWaiter = WaiterFor[RPCMessage, int];
 
@@ -135,7 +153,15 @@ class _Handler @impl UserHandler {
         }
     }
 
-    void terminate(CommHandler comm) {}
+    void terminate(CommHandler comm) {
+        # Close all of the open connections.
+        for (waiter :in __waiters) {
+            RPCMessage response = {};
+            response.id = int32(waiter.key);
+            response.error = 'Connection closed prematurely.';
+            waiter.val.setResult(response);
+        }
+    }
 
     void addResponder(Object waiter) {
         w := RPCWaiter.cast(waiter);
@@ -274,6 +300,19 @@ class PeerProxy {
         readMessageFromString(resp, respData);
         return JournalBlock(resp.firstBlockDigest, resp.contents, resp.done);
     }
+
+    ## Pull the specified branch from the specified peer or from any peer in
+    ## the network if 'peer' is null.
+    ## Returns the local name of the branch.
+    String pullBranch(String branch, String peer) {
+        PullBranchRequest req = {};
+        PullBranchResponse resp = {};
+        req.branch = branch;
+        req.peer = peer;
+        respData := __invoke('pullBranch', req.toString());
+        readMessageFromString(resp, respData);
+        return resp.localName;
+    }
 }
 
 ## Server-side RPC message context.
@@ -284,31 +323,33 @@ class Context {
     oper init(RawChunkReader reader) : reader = reader {}
 
     ## Utility function for writing a response message.
-    void writeResponse(AppendBuffer out, Message response, int32 requestId) {
+    void writeResponse(CommHandler comm, Message response, int32 requestId) {
         RPCMessage reply = {};
         reply.id = requestId;
         reply.response = response.toString();
-        AppendBufferWriter backing = {out};
+        StringWriter backing = {};
         SerialWriter sw = {backing};
         sw.write(reply.toString());
-        log.debug I`sending over the wire: $(reply.toString().getRepr())`;
+        comm.write(backing.string());
+        log.debug I`sent to poller thread: $(reply.toString().getRepr())`;
     }
 
-    void writeError(AppendBuffer out, String errorMessage, int32 requestId) {
+    void writeError(CommHandler comm, String errorMessage, int32 requestId) {
         RPCMessage reply = {};
         reply.id = requestId;
         reply.error = errorMessage;
-        AppendBufferWriter backing = {out};
+        StringWriter backing = {};
         SerialWriter sw = {backing};
         sw.write(reply.toString());
-        log.debug I`error over the wire: $(reply.toString().getRepr())`;
+        comm.write(backing.string());
+        log.debug I`sent to poller thread: $(reply.toString().getRepr())`;
     }
 }
 
 # Mapping from method name to method processing function.  In addition to a
 # context, a method handler accepts a string containing the serialized request
 # and an AppendBuffer into which to write the serialized response.
-alias MethodHandler = Functor3[void, Context, RPCMessage, AppendBuffer];
+alias MethodHandler = Functor3[void, Context, RPCMessage, CommHandler];
 alias MethodMap = HashMap[String, MethodHandler];
 
 ## Handles communication from an RPC client.
@@ -327,21 +368,21 @@ class ClientHandler @impl UserHandler {
         __context = context {
     }
 
-    void process(Log log, RPCMessage msg, AppendBuffer outBuf) {
-        log.debug `processing method $(msg.method)`;
+    void process(CommHandler comm, RPCMessage msg) {
+        comm.log.debug `processing method $(msg.method)`;
         String error;
 
         handler := __methods.get(msg.method);
         if (handler) {
             try {
-                log.debug `calling handler`;
-                handler(__context, msg, outBuf);
+                comm.log.debug `calling handler`;
+                handler(__context, msg, comm);
                 return;
             } catch (Exception ex) {
                 error = FStr() `$ex`;
             }
         } else {
-            log.error `got unknown method $(msg.method)`;
+            comm.log.error `got unknown method $(msg.method)`;
             error = FStr() `Method $(msg.method.getRepr()) not found`;
         }
 
@@ -354,8 +395,8 @@ class ClientHandler @impl UserHandler {
 
 
         # Wrap the reply in a string and ship it back to the client.
-        log.debug I`sending reply, error $error`;
-        __context.writeError(outBuf, error, msg.id);
+        comm.log.debug I`sending reply, error $error`;
+        __context.writeError(comm, error, msg.id);
     }
 
     void process(CommHandler comm) {
@@ -375,7 +416,8 @@ class ClientHandler @impl UserHandler {
             # We've got a complete message, so process it.
             RPCMessage msg = {};
             readMessageFromString(msg, serializedMsg);
-            process(comm.log, msg, comm.outBuf);
+
+            process(comm, msg);
         }
     }
 
@@ -389,74 +431,97 @@ class ClientHandler @impl UserHandler {
 
 # --- Server-side method implementation functions. ---
 
-void getObject(Context context, RPCMessage msg, AppendBuffer outBuf) {
+void getObject(Context context, RPCMessage msg, CommHandler comm) {
     GetObjectRequest req = {};
     readMessageFromString(req, msg.request);
 
     class ResponseCallback @impl GeneralCallback[String] {
-        @cvars {Context context; AppendBuffer outBuf; int32 requestId;}
+        @cvars {Context context; CommHandler comm; int32 requestId;}
         void oper call(String contents, Exception ex) {
             GetObjectResponse resp = {};
             resp.data = contents;
-            context.writeResponse(outBuf, resp, requestId);
+            context.writeResponse(comm, resp, requestId);
         }
     }
 
     context.reader.readRawChunk(req.digest,
-                                ResponseCallback(context, outBuf, msg.id));
+                                ResponseCallback(context, comm, msg.id));
 }
 
-void getHead(Context context, RPCMessage msg, AppendBuffer outBuf) {
+void getHead(Context context, RPCMessage msg, CommHandler comm) {
     GetHeadRequest req = {};
     readMessageFromString(req, msg.request);
 
     class ResponseCallback @impl GeneralCallback[String] {
-        @cvars {Context context; AppendBuffer outBuf; int32 requestId;}
+        @cvars {Context context; CommHandler comm; int32 requestId;}
         void oper call(String digest, Exception ex) {
             GetHeadResponse resp = {};
             resp.digest = digest;
-            context.writeResponse(outBuf, resp, requestId);
+            context.writeResponse(comm, resp, requestId);
         }
     }
 
-    context.reader.getHead(req.branch, ResponseCallback(context, outBuf, msg.id));
+    context.reader.getHead(req.branch, ResponseCallback(context, comm, msg.id));
 }
 
-void getFile(Context context, RPCMessage msg, AppendBuffer outBuf) {
+void getFile(Context context, RPCMessage msg, CommHandler comm) {
     GetFileRequest req = {};
     readMessageFromString(req, msg.request);
 
     class ResponseCallback @impl GeneralCallback[String] {
-        @cvars {Context context; AppendBuffer outBuf; int32 requestId;}
+        @cvars {Context context; CommHandler comm; int32 requestId;}
         void oper call(String data, Exception ex) {
             GetFileResponse resp = {};
             resp.data = data;
-            context.writeResponse(outBuf, resp, requestId);
+            context.writeResponse(comm, resp, requestId);
         }
     }
 
     context.reader.getFile(req.filename,
-                           ResponseCallback(context, outBuf, msg.id));
+                           ResponseCallback(context, comm, msg.id));
 }
 
-void getJournalBlock(Context context, RPCMessage msg, AppendBuffer outBuf) {
+void getJournalBlock(Context context, RPCMessage msg, CommHandler comm) {
     GetJournalBlockRequest req = {};
     readMessageFromString(req, msg.request);
 
     class ResponseCallback @impl GeneralCallback[JournalBlock] {
-        @cvars {Context context; AppendBuffer outBuf; int32 requestId;}
+        @cvars {Context context; CommHandler comm; int32 requestId;}
         void oper call(JournalBlock block, Exception ex) {
             GetJournalBlockResponse resp = {};
             resp.firstBlockDigest = block.firstBlockDigest;
             resp.contents = block.contents;
             resp.done = block.done;
-            context.writeResponse(outBuf, resp, requestId);
+            context.writeResponse(comm, resp, requestId);
         }
     }
 
     context.reader.getJournalBlock(req.firstBlockDigest, req.branch, req.pos,
-                                   ResponseCallback(context, outBuf, msg.id)
+                                   ResponseCallback(context, comm, msg.id)
                                    );
+}
+
+void pullBranch(Context context, RPCMessage msg, CommHandler comm) {
+    PullBranchRequest req = {};
+    readMessageFromString(req, msg.request);
+
+    class ResponseCallback @impl GeneralCallback[String] {
+        @cvars {Context context; CommHandler comm; int32 requestId;}
+        void oper call(String localName, Exception ex) {
+            # Pull-branch is handled asynchronously, so we have to check
+            # the 'ex' argument.
+            if (ex) {
+                context.writeError(comm, ex.text, requestId);
+            } else {
+                PullBranchResponse resp = {};
+                resp.localName = localName;
+                context.writeResponse(comm, resp, requestId);
+            }
+        }
+    }
+
+    _inst.pullBranch(req.branch, req.peer,
+                     ResponseCallback(context, comm, msg.id));
 }
 
 class PeerServiceCommFactory @impl CommHandlerFactory {
@@ -468,6 +533,7 @@ class PeerServiceCommFactory @impl CommHandlerFactory {
         __methods['getHead'] = MethodHandler.Wrap(getHead);
         __methods['getJournalBlock'] = MethodHandler.Wrap(getJournalBlock);
         __methods['getFile'] = MethodHandler.Wrap(getFile);
+        __methods['pullBranch'] = MethodHandler.Wrap(pullBranch);
     }
 
     CommHandler makeCommHandler(NewConnection conn) {

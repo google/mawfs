@@ -1,0 +1,188 @@
+# Copyright 2016 Google Inc. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+import crack.fs makePath, Path;
+import crack.hash.sha256 SHA256;
+import crack.io cerr;
+import crack.lang Exception;
+import crack.logger cerrLogger, info, setLogFile, setLogLevel, DEBUG;
+import crack.logger.ctx Log;
+import crack.net InetAddress;
+import crack.net.comm2 Comm;
+import crack.runtime sleep;
+import crack.threads Mutex;
+
+import mawfs.blockstore ChunkStore, Commit, FSInfo, Node, MODE_DIR;
+import mawfs.flows MAWFSInstance;
+import mawfs.peernet PeerNetwork;
+import mawfs.params ParamInfo;
+import mawfs.rpc setInst, PeerProxy;
+import mawfs.testutil FakeEntropySource;
+
+@import crack.ann assert;
+
+String expandPassword(String pw) {
+    hasher := SHA256();
+    hasher.update(pw);
+    return hasher.digest();
+}
+
+const MASTER_PORT := 9130;
+const SLAVE_PORT := 9131;
+const PASSWORD := expandPassword('password');
+
+class TestFailure : Exception {
+    oper init(String text) : Exception(text) {}
+}
+
+class PeerInfo {
+    Path backDir;
+    int port;
+    PeerNetwork peerNet;
+    ChunkStore cs;
+
+    oper init(Path backDir, int port) : backDir = backDir, port = port {}
+
+    void create() {
+        if (backDir.exists())
+            backDir.deleteTree();
+        backDir.makeDirs();
+
+        # Create params and chunk store.
+        params := ParamInfo.getDefault(PASSWORD);
+        params.writeTo((backDir/'params').writer(), FakeEntropySource(10));
+        cs = ChunkStore(backDir, FSInfo(params.cipher));
+
+        # Create the peer network.
+        mutex := Mutex();
+        chunkReader := cs.getRawChunkReader(mutex);
+        peerNet = PeerNetwork(chunkReader);
+
+        peerNet.addServer(InetAddress(127, 0, 0, 1, port));
+    }
+
+    void makeBranch(String branch) {
+        rootNode := Node();
+        rootNode.mode = MODE_DIR;
+        rootDigest := cs.storeNode(rootNode);
+
+        commit := Commit();
+        commit.root = rootDigest;
+        commitDigest := cs.storeCommit(commit);
+        cs.setHead(branch, commitDigest);
+    }
+}
+
+@abstract class TestBed {
+
+    Path root;
+    PeerInfo master, slave;
+
+    bool failed;
+
+    void createMaster() {
+        backDir := root/'back0';
+        master = PeerInfo(backDir, MASTER_PORT);
+        master.create();
+    }
+
+    void createSlave() {
+        backDir := root/'back1';
+        slave = PeerInfo(backDir, SLAVE_PORT);
+        slave.create();
+
+        # The slace gets the MAWFS instance, he's the one we're communicating
+        # to.
+        setInst(MAWFSInstance(backDir, slave.cs, slave.peerNet));
+    }
+
+    void setUp() {
+        root = makePath('tmp');
+        createMaster();
+        createSlave();
+        slave.peerNet.addPeer(InetAddress(127, 0, 0, 1, MASTER_PORT));
+    }
+
+    void tearDown() {
+        setInst(null);
+    }
+
+    @abstract void run();
+
+    void exec() {
+        cerr `$(this.class.name)...`;
+        info `==== begin $(this.class.name) ===`;
+        setUp();
+        try {
+            run();
+            cerr `ok\n`;
+        } catch (TestFailure ex) {
+            cerr `FAILED\n\t$(ex.text)\n`;
+            failed = true;
+        } catch (Exception ex) {
+            sleep(1);
+            cerr `FAILED\n`;
+            cerr `$ex\n`;
+            failed = true;
+        }
+        tearDown();
+        info `---- end $(this.class.name) ----`;
+    }
+}
+
+setLogFile('net_test.log');
+setLogLevel(DEBUG);
+
+class ServerConnectionsTest : TestBed {
+    Comm comm;
+
+    void tearDown() {
+        comm.stop();
+        info `XXX comm ref count = $(comm.refCount)`;
+        comm = null;
+        TestBed.tearDown();
+    }
+
+    void run() {
+        log := Log(cerrLogger, 'client-proxy');
+        comm = Comm(log);
+        comm.start();
+        proxy := PeerProxy(comm, log, InetAddress(127, 0, 0, 1, MASTER_PORT));
+        @assert(proxy.getFile('params') == (master.backDir/'params').readAll());
+    }
+}
+ServerConnectionsTest().exec();
+
+class FetchTest : TestBed {
+    Comm comm;
+
+    void tearDown() {
+        comm.stop();
+        TestBed.tearDown();
+    }
+
+    void run() {
+        master.makeBranch('foo');
+
+        log := Log(cerrLogger, 'client-proxy');
+        comm = Comm(log);
+        comm.start();
+        proxy := PeerProxy(comm, log, InetAddress(127, 0, 0, 1, SLAVE_PORT));
+
+        branchName := proxy.pullBranch('foo', null);
+        @assert(branchName == 'foo');
+    }
+}
+FetchTest().exec();

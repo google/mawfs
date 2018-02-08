@@ -35,17 +35,21 @@ import crack.hash.sha256 SHA256;
 import crack.cont.array Array;
 import crack.io.readers LineReader;
 import crack.lang AppendBuffer, InvalidStateError;
+import crack.logger cerrLogger;
 import crack.logger debug, error, setLogFile, setLogLevel, DEBUG;
+import crack.logger.ctx Log;
+import crack.net.comm2 Comm;
 import crack.protobuf readMessageFromString;
 import crack.threads Mutex;
 
 import mawfs.blockstore hashFile, ChunkStore, FSInfo, Node, BLOCK_SIZE;
 import mawfs.configstore ConfigStore;
 import mawfs.fuse runFuse, UserModule;
+import mawfs.flows MAWFSInstance;
 import mawfs.params DeviceEntropySource, ParamInfo;
 import mawfs.peernet PeerNetwork;
 import mawfs.rawchunk RawChunkReader;
-import mawfs.rpc parseAddr;
+import mawfs.rpc parseAddr, setInst, PeerProxy;
 import mawfs.util traverse;
 
 @import crack.ann impl;
@@ -147,6 +151,32 @@ Reader getReader(String filename) {
     }
 }
 
+class RPCCmd {
+    PeerProxy __proxy;
+    Log __log;
+    Comm __comm;
+
+    oper init(String addr) {
+        __log = Log(cerrLogger, 'client');
+        __comm = Comm(__log);
+        __comm.start();
+        __proxy = PeerProxy(__comm, __log, addr);
+    }
+
+    oper del() {
+        __comm.stop();
+    }
+
+    void pullBranch(String branch, String peer) {
+        localName := __proxy.pullBranch(branch, peer);
+        cerr `Branch loaded into $localName\n`;
+    }
+}
+
+RPCCmd makeRPC(String addr) {
+    return RPCCmd(addr);
+}
+
 String readPassword() {
     String password;
     if (isatty(0)) {
@@ -219,6 +249,7 @@ ChunkStore makeChunkStore(Path backingDir) {
 }
 
 opts := CmdOptions![
+    Option('logfile', 'l', 'logfile name', 'mawfs.log', CMD_STR),
     Option('branch', 'b', 'branch name', 'master', CMD_STR),
 ];
 
@@ -309,10 +340,11 @@ void main() {
             StringArray fuseArgs = [args[0]];
             fuseArgs.extend(args.subarray(3));
 
-            setLogFile('mawfs.log');
+            setLogFile(opts.getString('logfile'));
             setLogLevel(DEBUG);
-            configStore := ConfigStore(makePath(args[2]), 'peers');
-            chunkStore := makeChunkStore(makePath(args[2]));
+            rootDir := makePath(args[2]);
+            configStore := ConfigStore(rootDir, 'peers');
+            chunkStore := makeChunkStore(rootDir);
 
             # Start the peer network.
             mutex := Mutex();
@@ -322,20 +354,28 @@ void main() {
                 PeerNetwork __net;
                 ConfigStore __config;
                 RawChunkReader __chunkReader;
+                ChunkStore __store;
+                Path __root;
 
-                oper init(ConfigStore config, RawChunkReader chunkReader) :
+                oper init(ConfigStore config, RawChunkReader chunkReader,
+                          ChunkStore store,
+                          Path root
+                          ) :
                     __config = config,
-                    __chunkReader = chunkReader {
+                    __chunkReader = chunkReader,
+                    __store = store,
+                    __root = root {
                 }
 
                 void start() {
                     __net = PeerNetwork(__chunkReader);
                     __net.configure(__config);
+                    setInst(MAWFSInstance(__root, __store, __net));
                 }
             }
 
             runFuse(chunkStore, fuseArgs, opts.getString('branch'), mutex,
-                    PeerNetModule(configStore, chunkReader)
+                    PeerNetModule(configStore, chunkReader, chunkStore, rootDir)
                     );
         } else if (cmd == 'pull') {
             if (args.count() != 4) {
@@ -429,6 +469,16 @@ void main() {
             Node node = {};
             readMessageFromString(node, chunk.contents);
             dumpNode(cout, node);
+        } else if (cmd == 'fetch') {
+            if (args.count() < 4 || args.count() > 5) {
+                cerr I`Usage: mawfs fetch <addr> <branch> [peer]\n`;
+                exit(1);
+            }
+
+            setLogLevel(DEBUG);
+            makeRPC(args[2]).pullBranch(args[3],
+                                        (args.count() > 4) ? args[4] : null
+                                        );
         } else {
             cerr `Unknown command: $cmd\n`;
             usage();

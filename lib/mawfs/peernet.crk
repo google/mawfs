@@ -207,7 +207,7 @@ class PeerNetwork {
 
         ## Initialize peeers.
         for (section :in config) {
-            if (section.key.startsWith('peer ')) {
+            if (section.key.startsWith('peer-')) {
                 peerName := section.key.substr(5);
                 peerInfo := section.val;
                 addrStr := peerInfo.get('host');
@@ -220,6 +220,7 @@ class PeerNetwork {
                 if (portStr)
                     addrStr = FStr() `$addrStr:$portStr`;
                 inetAddr := parseAddr(addrStr);
+                __log.info `adding peer $peerName at $inetAddr`;
                 addPeer(inetAddr);
             }
         }
