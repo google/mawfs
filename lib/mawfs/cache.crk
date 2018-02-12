@@ -2168,6 +2168,14 @@ Object _makeOrphanContext(NodeContext context) {
     return OrphanContext(context);
 }
 
+## Thrown when we're unable to load a chunk.
+class MissingChunkError : Exception {
+    ## Constructs the error given a digest and a context (which may be null).
+    oper init(String digest, String context) :
+        Exception(FStr() `Missing chunk $(sig(digest))$(context ? context : '').`) {
+    }
+}
+
 ## Facade for a complete cached filesystem tree representing the head of a
 ## branch.
 @final class Tree {
@@ -2193,6 +2201,8 @@ Object _makeOrphanContext(NodeContext context) {
             commitDigest := __ctx.getHead();
             info `loading commit $(sig(commitDigest))`;
             commit := __ctx.getCommit(commitDigest);
+            if (!commit)
+                throw MissingChunkError(commitDigest, null);
 
             # Store the commit digest now that we've got it.
             __ctx.recordCommit(commitDigest);
