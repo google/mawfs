@@ -9,10 +9,13 @@ import crack.logger cerrLogger, DEBUG, ERROR, INFO, FATAL, WARN;
 import crack.logger.ctx Log;
 import crack.net Address, InetAddress;
 import crack.net.comm2 Comm;
+import mawfs.blockstore RemoteReader;
 import mawfs.configstore ConfigStore;
 import mawfs.rawchunk RawChunkReader;
 import mawfs.rpc parseAddr, Context, PeerProxy, PeerServiceCommFactory;
 import .params ParamInfo;
+
+@import crack.ann impl;
 
 ## Thrown by pullParams() in the case of an invalid password.
 class InvalidPasswordError : Exception {
@@ -224,5 +227,16 @@ class PeerNetwork {
                 addPeer(inetAddr);
             }
         }
+    }
+}
+
+## Adapter between a PeerNetwork and a RemoteReader.
+class RemoteReaderImpl @impl RemoteReader {
+    PeerNetwork __net;
+
+    oper init(PeerNetwork net) : __net = net {}
+
+    String getContents(String digest) {
+        return __net.getObject(digest);
     }
 }

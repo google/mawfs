@@ -47,7 +47,7 @@ import mawfs.configstore ConfigStore;
 import mawfs.fuse runFuse, UserModule;
 import mawfs.flows MAWFSInstance;
 import mawfs.params DeviceEntropySource, ParamInfo;
-import mawfs.peernet PeerNetwork;
+import mawfs.peernet PeerNetwork, RemoteReaderImpl;
 import mawfs.rawchunk RawChunkReader;
 import mawfs.rpc parseAddr, setInst, PeerProxy;
 import mawfs.util traverse;
@@ -399,18 +399,6 @@ void main() {
             # Create the directory if it doesn't exist.
             backingDir := makePath(backingDirName);
             backingDir.makeDirs();
-
-            import mawfs.blockstore RemoteReader;
-
-            class RemoteReaderImpl @impl RemoteReader {
-                PeerNetwork __net;
-
-                oper init(PeerNetwork net) : __net = net {}
-
-                String getContents(String digest) {
-                    return __net.getObject(digest);
-                }
-            }
 
             password := readPassword();
 
