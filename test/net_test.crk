@@ -161,7 +161,6 @@ class ServerConnectionsTest : TestBed {
 
     void tearDown() {
         comm.stop();
-        info `XXX comm ref count = $(comm.refCount)`;
         comm = null;
         TestBed.tearDown();
     }

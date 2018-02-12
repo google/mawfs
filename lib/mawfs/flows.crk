@@ -107,10 +107,8 @@ class MAWFSInstance @impl InstIFace {
                 return name;
             }
             __store.setHead(name, jiter.elem().change.commit);
-            cerr `returning branch name $name\n`;
             return name;
         } else {
-            cerr `not implemented!!!\n`;
             throw Exception('not implemented');
         }
     }
