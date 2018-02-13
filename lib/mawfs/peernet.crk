@@ -47,6 +47,10 @@ class Peer {
     void formatTo(Formatter out) {
         out `peer-$addr`;
     }
+
+    String getName() {
+        return FStr() `$addr`;
+    }
 }
 
 ## Encapsulates the entire peer subsystem.  Starts a server and manages
@@ -116,13 +120,16 @@ class PeerNetwork {
 
     ## Pull the entire journal from a peer.
     ##
+    ## Returns null if no peer was able to supply the branch.
+    ##
     ## TODO: we really need to get the journal and head from the same peer at
     ## the same time.  If the remote peer commits while we're pulling, the
     ## journal will change out from under us.
     ##
     ## root: Root of the backing directory to replicate into.
     ## branch: branch of the journal.
-    void pullJournal(Path root, String branch) {
+    ## qualified: If true, store as a local tracking branch.
+    String pullJournal(Path root, String branch, bool qualified) {
         Writer dst;
         uint pos;
         for (peer :in __peers) {
@@ -133,7 +140,8 @@ class PeerNetwork {
                 # Get the first block.
                 jb := proxy.getJournalBlock(null, branch, 0);
 
-                branchPath := root/'journals'/branch;
+                localName := qualified ? peer.getName() + ':' + branch : branch;
+                branchPath := root/'journals'/localName;
                 if (jb.contents) {
                     branchPath.parent().makeDirs();
                     dst = branchPath.writer();
@@ -154,7 +162,7 @@ class PeerNetwork {
                         # head and start over again.
                         __log.info `Remote journal has changed.`;
                         branchPath.delete();
-                        return;
+                        break;
                     }
 
                     if (jb.done)
@@ -162,8 +170,11 @@ class PeerNetwork {
                 }
 
                 __log.info `Journal of size $pos retrieved.`;
+                return localName;
             }
         }
+
+        return null;
     }
 
     ## Pull the params file from a peer.  Returns null if no peer could be

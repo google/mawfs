@@ -202,6 +202,33 @@ class FetchTest : TestBed {
         branchName = proxy.pullBranch('bar', null);
         @assert(branchName == 'bar');
         @assert((slave.getRoot('bar')/'temp.txt').readAll() == FILE_CONTENTS);
+
+        # Pull from the same branch again after making changes to it.  We
+        # should just get the latest from the new branch, since there are no
+        # changes to the local one.
+        (master.getRoot('bar')/'moar.txt').writeAll(FILE_CONTENTS);
+        branchName = proxy.pullBranch('bar', null);
+        @assert(branchName == 'bar');
+        @assert((slave.getRoot('bar')/'moar.txt').readAll() ==
+                FILE_CONTENTS
+                );
+
+        # Extend the local journal, verify that it doesn't get changed.
+        (slave.getRoot('bar')/'evenmoar.txt').writeAll(FILE_CONTENTS);
+        branchName = proxy.pullBranch('bar', null);
+        @assert(branchName == 'bar');
+        @assert((slave.getRoot('bar')/'evenmoar.txt').readAll() ==
+                FILE_CONTENTS
+                );
+
+        # Extend the remote journal incompatibly.
+        (master.getRoot('bar')/'evilmoar.txt').writeAll(FILE_CONTENTS);
+        branchName = proxy.pullBranch('bar', null);
+        @assert(branchName != 'bar');
+        @assert(!(slave.getRoot('bar')/'evilmoar.txt').exists());
+        @assert((slave.getRoot(branchName)/'evilmoar.txt').readAll() ==
+                FILE_CONTENTS
+                );
     }
 }
 FetchTest().exec();

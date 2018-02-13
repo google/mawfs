@@ -93,23 +93,60 @@ class MAWFSInstance @impl InstIFace {
     ## production of a tracking branch.
     String pullBranch(String name, String peer) {
         branch := __store.getHead(name);
+        String newName;
         if (!branch) {
             # The branch isn't present locally, so we can pull it.
-            __net.pullJournal(__root, name);
-            jiter := __store.makeJournalIter(name);
-            if (!jiter) {
-                # Try pulling the commit.
-                head := __net.getHead(name);
-                if (!head)
-                    throw Exception('Unable to retrieve branch');
+            __net.pullJournal(__root, name, false);
+            newName = name;
+        } else {
+            # Pull the journal to a temporary name.
+            newName = __net.pullJournal(__root, name, true);
+        }
 
-                __store.setHead(name, head);
-                return name;
-            }
-            __store.setHead(name, jiter.elem().change.commit);
+        jiter := __store.makeJournalIter(newName);
+        if (!jiter) {
+            # Try pulling the commit.
+            head := __net.getHead(newName);
+            if (!head)
+                throw Exception('Unable to retrieve branch');
+
+            __store.setHead(newName, head);
+            return newName;
+        }
+        __store.setHead(newName, newHead := jiter.elem().change.commit);
+
+        if (name == newName) {
             return name;
         } else {
-            throw Exception('not implemented');
+            # There was an existing branch, compare it to the new one.
+            localJiter := __store.makeJournalIter(name);
+            if (localJiter.elem().change.commit != newHead)
+                return newName;
+
+            while (jiter && localJiter) {
+                if (jiter.elem().change != localJiter.elem().change)
+                    break;
+                jiter.next();
+                localJiter.next();
+            }
+
+            if (jiter && !localJiter) {
+                # The new journal extends the old one.  We can just accept the
+                # new journal.
+                # TODO: move the "move branch" functionality to the chunk store.
+                (__root/'journals'/newName).moveTo(__root/'journals'/name);
+                (__root/'refs'/newName).moveTo(__root/'refs'/name);
+                return name;
+            } else if ((localJiter && !jiter) || (!jiter && !localJiter)) {
+                # Either the journals are the same or the old journal extends
+                # the new one, we can just discard the new journal.
+                (__root/'journals'/newName).delete();
+                (__root/'refs'/newName).delete();
+                return name;
+            } else {
+                # In any other case, the journals diverge.
+                return newName;
+            }
         }
     }
 
