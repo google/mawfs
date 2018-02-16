@@ -89,12 +89,32 @@ class MAWFSInstance @impl InstIFace {
         __net = net {
     }
 
+    ## Returns true if the commit derives from the ancestor.
+    ##
+    ## TODO: Improve this algorithm.  We're just using a simple recursive
+    ## depth-first search for this, that's bound to be inefficient considering
+    ## the way branching is likely to play out.
+    bool derivesFrom(String commitDigest, String ancestorDigest) {
+        if (commitDigest == ancestorDigest)
+            return true;
+
+        commit := __store.getCommit(commitDigest);
+        bool result;
+        if (commit.parent) {
+            for (parent :in commit.parent) {
+                if (derivesFrom(parent, ancestorDigest))
+                    result = true;
+            }
+        }
+        return result;
+    }
+
     ## Pull a branch from a peer to the local instance.  This can result in the
     ## production of a tracking branch.
     String pullBranch(String name, String peer) {
-        branch := __store.getHead(name);
+        localHead := __store.getHead(name);
         String newName;
-        if (!branch) {
+        if (!localHead) {
             # The branch isn't present locally, so we can pull it.
             __net.pullJournal(__root, name, false);
             newName = name;
@@ -106,9 +126,24 @@ class MAWFSInstance @impl InstIFace {
         jiter := __store.makeJournalIter(newName);
         if (!jiter) {
             # Try pulling the commit.
-            head := __net.getHead(newName);
+            head := __net.getHead(name);
             if (!head)
                 throw Exception('Unable to retrieve branch');
+
+            if (localHead) {
+                # This is a new commit.  See if the current commit is a direct
+                # ancestor.
+                if (derivesFrom(head, localHead))
+                    # If the new head derives from the local head, we're
+                    # going to want to store the new head and we can subsume
+                    # the old branch.
+                    newName = name;
+                else if (derivesFrom(localHead, head))
+                    # If the local head inherits from the new head, then the
+                    # local head extends the new remote head and we can
+                    # ignore the new remote head.
+                    return name;
+            }
 
             __store.setHead(newName, head);
             return newName;
@@ -120,8 +155,16 @@ class MAWFSInstance @impl InstIFace {
         } else {
             # There was an existing branch, compare it to the new one.
             localJiter := __store.makeJournalIter(name);
-            if (localJiter.elem().change.commit != newHead)
+            if (!localJiter) {
+                # No local journal - we're done unless the new commit derives
+                # from the old one.  If that's true, fall through and we'll
+                # enter the logic for "a remote journal extending a local
+                # journal" below.
+                if (!derivesFrom(newHead, localHead))
+                    return newName;
+            } else if (!localJiter || localJiter.elem().change.commit != newHead) {
                 return newName;
+            }
 
             while (jiter && localJiter) {
                 if (jiter.elem().change != localJiter.elem().change)

@@ -3,7 +3,7 @@
 import crack.ascii toLower;
 import crack.cont.array Array;
 import crack.fs Path;
-import crack.io Formatter, FStr, StandardFormatter, StringReader, Writer;
+import crack.io cerr, Formatter, FStr, StandardFormatter, StringReader, Writer;
 import crack.lang Buffer, Exception;
 import crack.logger cerrLogger, DEBUG, ERROR, INFO, FATAL, WARN;
 import crack.logger.ctx Log;
@@ -51,6 +51,12 @@ class Peer {
     String getName() {
         return FStr() `$addr`;
     }
+
+    ## Shutdown the proxy, if active.
+    void shutdown() {
+        if (__proxy)
+            __proxy.shutdown();
+    }
 }
 
 ## Encapsulates the entire peer subsystem.  Starts a server and manages
@@ -85,9 +91,15 @@ class PeerNetwork {
         __peers.append(peer);
     }
 
-    oper del() {
+    void shutdown() {
+        for (peer :in __peers)
+            peer.shutdown();
+        __peers.clear();
+        # Used to be in oper del()
         __comm.stop();
     }
+
+    oper del() {}
 
     String getHead(String branch) {
         for (peer :in __peers) {

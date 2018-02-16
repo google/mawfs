@@ -94,12 +94,24 @@ class PeerInfo {
         tree := Tree(cs, branch);
         return MAWFSPath(tree.getRoot());
     }
+
+    void commit(String branch) {
+        Tree(cs, branch).commit();
+    }
+
+    void shutdown() {
+        # Break the reference cycle that I don't really understand.
+        cs.setRemoteReader(null);
+        peerNet.shutdown();
+    }
 }
 
 @abstract class TestBed {
 
     Path root;
     PeerInfo master, slave;
+    Comm comm;
+    PeerProxy proxy;
 
     bool failed;
 
@@ -119,14 +131,28 @@ class PeerInfo {
         setInst(MAWFSInstance(backDir, slave.cs, slave.peerNet));
     }
 
+    int getPort() { return SLAVE_PORT }
+
     void setUp() {
         root = makePath('tmp');
         createMaster();
         createSlave();
         slave.peerNet.addPeer(InetAddress(127, 0, 0, 1, MASTER_PORT));
+
+        log := Log(cerrLogger, 'client-proxy');
+        comm = Comm(log);
+        comm.start();
+        proxy = PeerProxy(comm, log, InetAddress(127, 0, 0, 1, getPort()));
     }
 
     void tearDown() {
+        master.shutdown();
+        slave.shutdown();
+        proxy.shutdown();
+        comm.stop();
+        comm = null;
+        proxy = null;
+
         setInst(null);
     }
 
@@ -157,46 +183,24 @@ setLogFile('net_test.log');
 setLogLevel(DEBUG);
 
 class ServerConnectionsTest : TestBed {
-    Comm comm;
-
-    void tearDown() {
-        comm.stop();
-        comm = null;
-        TestBed.tearDown();
-    }
-
+    int getPort() { return MASTER_PORT }
     void run() {
-        log := Log(cerrLogger, 'client-proxy');
-        comm = Comm(log);
-        comm.start();
-        proxy := PeerProxy(comm, log, InetAddress(127, 0, 0, 1, MASTER_PORT));
         @assert(proxy.getFile('params') == (master.backDir/'params').readAll());
     }
 }
 ServerConnectionsTest().exec();
 
+const FILE_CONTENTS := 'Test File!';
+
 class FetchTest : TestBed {
-    Comm comm;
-
-    void tearDown() {
-        comm.stop();
-        TestBed.tearDown();
-    }
-
     void run() {
         master.makeBranch('foo');
-
-        log := Log(cerrLogger, 'client-proxy');
-        comm = Comm(log);
-        comm.start();
-        proxy := PeerProxy(comm, log, InetAddress(127, 0, 0, 1, SLAVE_PORT));
 
         branchName := proxy.pullBranch('foo', null);
         @assert(branchName == 'foo');
 
         # Create a branch with a journal.
         master.makeBranch('bar');
-        const FILE_CONTENTS := 'Test File!';
         (master.getRoot('bar')/'temp.txt').writeAll(FILE_CONTENTS);
 
         branchName = proxy.pullBranch('bar', null);
@@ -232,3 +236,101 @@ class FetchTest : TestBed {
     }
 }
 FetchTest().exec();
+
+# Verify that we do the right thing when fetching from branches based on
+# completely different commits.
+class DiffCommitsTest : TestBed {
+    void run() {
+        master.makeBranch('foo');
+        @assert(proxy.pullBranch('foo', null) == 'foo');
+
+        # Verify that a second pull shows up as the same.
+        @assert(proxy.pullBranch('foo', null) == 'foo');
+
+        # Verify that a new descendant commit subsumes the branch when there
+        # is no local journal.
+        (master.getRoot('foo')/'test').writeAll(FILE_CONTENTS);
+        master.commit('foo');
+        @assert(proxy.pullBranch('foo', null) == 'foo')
+        @assert((slave.getRoot('foo')/'test').readAll() == FILE_CONTENTS);
+
+        # Verify that a new local commit is left intact if the remote commit
+        # is older.
+        (slave.getRoot('foo')/'localFile').writeAll(FILE_CONTENTS);
+        slave.commit('foo');
+        @assert(proxy.pullBranch('foo', null) == 'foo');
+        @assert((slave.getRoot('foo')/'localFile').readAll() == FILE_CONTENTS);
+
+        # Verify that we now branch on a new remote commit.
+        (master.getRoot('foo')/'branchFile').writeAll(FILE_CONTENTS);
+        master.commit('foo');
+        newBranch := proxy.pullBranch('foo', null);
+        @assert(newBranch != 'foo');
+        @assert((slave.getRoot(newBranch)/'branchFile').readAll() ==
+                FILE_CONTENTS
+                );
+
+        # Verify that a new journal gets propagated correctly.
+        (master.getRoot('foo')/'branchFile2').writeAll(FILE_CONTENTS);
+        newBranch = proxy.pullBranch('foo', null);
+        @assert(newBranch != 'foo');
+        @assert((slave.getRoot(newBranch)/'branchFile2').readAll() ==
+                FILE_CONTENTS
+                );
+
+        # Verify that all this works if both have journals
+        (slave.getRoot('foo')/'localFile2').writeAll(FILE_CONTENTS);
+        newBranch = proxy.pullBranch('foo', null);
+        @assert(newBranch != 'foo');
+        @assert((slave.getRoot(newBranch)/'branchFile2').readAll() ==
+                FILE_CONTENTS
+                );
+
+        # Verify that we pull correctly on different commits if only the slave
+        # has a journal.
+        master.commit('foo');
+        newBranch = proxy.pullBranch('foo', null);
+        @assert(newBranch != 'foo');
+        @assert((slave.getRoot(newBranch)/'branchFile2').readAll() ==
+                FILE_CONTENTS
+                );
+    }
+}
+DiffCommitsTest().exec();
+
+class JournalledCompatibleCommits : TestBed {
+    void run() {
+        master.makeBranch('foo');
+        @assert(proxy.pullBranch('foo', null) == 'foo');
+
+
+        # Verify that a new commit with a journal on the master works like an
+        # extension if slave doesn't have a journal.
+        (master.getRoot('foo')/'firstFile').writeAll(FILE_CONTENTS);
+        master.commit('foo');
+        (master.getRoot('foo')/'secondFile').writeAll(FILE_CONTENTS);
+        newBranch := proxy.pullBranch('foo', null);
+        @assert(newBranch == 'foo');
+    }
+}
+JournalledCompatibleCommits().exec();
+
+# This can be merged into the test above as soon as we can recognize that a
+# commit is derived from a journal entry.  Then we can resync the two branches
+# in the prior test.
+class JournalledCompatibleCommits2 : TestBed {
+    void run() {
+        master.makeBranch('foo');
+        @assert(proxy.pullBranch('foo', null) == 'foo');
+
+        # Verify that we don't create a tracking branch in cases where there
+        # is a local commit with a journal that extends a remote commit
+        # without a journal.
+        (slave.getRoot('foo')/'firstFile').writeAll(FILE_CONTENTS);
+        slave.commit('foo');
+        (slave.getRoot('foo')/'secondFile').writeAll(FILE_CONTENTS);
+        newBranch := proxy.pullBranch('foo', null);
+        @assert(newBranch == 'foo');
+    }
+}
+JournalledCompatibleCommits2().exec();

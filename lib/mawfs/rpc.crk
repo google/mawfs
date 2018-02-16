@@ -253,6 +253,11 @@ class PeerProxy {
         return resp.response;
     }
 
+    ## Shutdown the proxy connection.
+    void shutdown() {
+        __proxy.close();
+    }
+
     ## Returns the object with the specified digest, null if the peer doesn't
     ## have it.
     String getObject(String digest) {
