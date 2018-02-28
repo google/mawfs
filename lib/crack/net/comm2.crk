@@ -226,7 +226,7 @@ class CommHandler;
             return 0;
         }
 
-        log.debug `got events = $(event.revents)`;
+        log.debug `handler got events = $(event.revents)`;
         if (event.revents & POLLIN) {
             try {
                 data := __sock.read(1024);
