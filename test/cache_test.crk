@@ -13,7 +13,8 @@
 # limitations under the License.
 
 import crack.cmdline CmdOptions, Option, CMD_BOOL;
-import crack.enc.base64 altEncode;  # For debugging hash values.
+# altEncode for debugging hash values.
+import crack.enc.base64 altEncode, altDecode;
 import crack.cont.array Array;
 import crack.hash.sha256 SHA256;
 import crack.io cerr, FStr, StringWriter;
@@ -22,9 +23,10 @@ import crack.cont.hashmap HashMap;
 import crack.lang AppendBuffer, ManagedBuffer;
 import crack.logger debug, setLogLevel, DEBUG;
 import mawfs.blockstore Commit, Entry, Node, NodeStore, MODE_DIR;
+import mawfs.entropy setEntropySource;
 import mawfs.memstore MemNodeStore;
 import mawfs.cache sig, Cache, CachedNode, NodeContext;
-import mawfs.testutil copy, makeRandomData;
+import mawfs.testutil copy, makeRandomData, PseudoRandomEntropySource;
 import mawfs.memtrace Tracer;
 
 @import crack.ann assert, impl;
@@ -65,6 +67,7 @@ AppendBuffer readAll(CachedNode cached) {
 }
 
 setLogLevel(DEBUG);
+setEntropySource(PseudoRandomEntropySource());
 
 node := makeFileNode('contents of foo', 0);
 
@@ -638,6 +641,44 @@ if (true) {
 
     @assert(root.getChild('healthy').getContents() == 'some data, more data');
     @assert(root.getChild('zombie') is null);
+}
+
+cerr `journal session ids.\n`;
+if (true) {
+    nodeStore = MemNodeStore();
+    ctx = NodeContext(nodeStore, 'master', null);
+    root := CachedNode(ctx, null, makeDirNode());
+    root.addChild('foo', makeFileNode('some data', 0));
+    root.commitTree();
+
+    # At this point, we should have a head node containing a single session id.
+    commit := ctx.getCommit(ctx.getHead());
+    @assert(commit.journalInfo);
+    info := ctx.getJournalInfo(commit.journalInfo);
+    @assert(info && info.count() == 1);
+    @assert(sig(info.iter().elem().key) == 'jMs1XBwwGU8');
+
+    # Record a journal with multiple sessions.
+    root.addChild('bar', makeFileNode('other data', 0));
+    ctx.setSessionId('should be present');
+    root.addChild('baz', makeFileNode('still more', 0));
+    ctx.setSessionId('should be absent');
+    root.commitTree();
+    commit = ctx.getCommit(ctx.getHead());
+    @assert(commit.journalInfo);
+    info = ctx.getJournalInfo(commit.journalInfo);
+    @assert(info && info.count() == 2);
+    @assert(info.hasKey('should be present'));
+    @assert(info.hasKey(altDecode('jMs1XBwwGU8')));
+
+    # Verify that only the last session id is preserved after a commit.
+    root.addChild('elmo', makeFileNode('elmo is elmo!', 0));
+    root.commitTree();
+    commit = ctx.getCommit(ctx.getHead());
+    @assert(commit.journalInfo);
+    info = ctx.getJournalInfo(commit.journalInfo);
+    @assert(info && info.count() == 1);
+    @assert(info.hasKey('should be absent'));
 }
 
 # TODO:

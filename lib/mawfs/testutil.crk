@@ -14,11 +14,12 @@
 
 import crack.io Reader, Writer;
 import crack.lang AppendBuffer;
+import crack.random MersenneTwister;
 import crack.runtime random, srandom;
 
-import .params EntropySource;
+import .entropy EntropySource;
 
-@import crack.ann impl;
+@import crack.ann impl, interface;
 
 ## Fill a buffer full of 70K of random data (the same data every time).
 AppendBuffer makeRandomData() {
@@ -51,5 +52,24 @@ class FakeEntropySource @impl EntropySource {
     }
 }
 
+class PseudoRandomEntropySource @impl EntropySource {
+    MersenneTwister twister = {0x58f28595};
+    oper init() {}
 
+    byte getByte() {
+        return byte(twister.get());
+    }
+
+    String getString(uint len) {
+        AppendBuffer result = {len};
+        for (int i; i < (len + 3) / 4; ++i) {
+            word := twister.get();
+            for (int j; result.size < len && j < 4; ++j) {
+                result.append(byte(word));
+                word = word >> 8;
+            }
+        }
+        return String(result, true);
+    }
+}
 

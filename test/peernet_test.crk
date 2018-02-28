@@ -92,7 +92,7 @@ class TestBed {
 
     void testEmptyJournal() {
         getJournalBlockResults.append(JournalBlock(null, null, true));
-        net.pullJournal(root, 'master');
+        net.pullJournal(root, 'master', false);
         __assertNoJournal();
     }
 
@@ -104,21 +104,21 @@ class TestBed {
 
     void testTinyJournal() {
         getJournalBlockResults.append(JournalBlock(null, 'test data', true));
-        net.pullJournal(root, 'master');
+        net.pullJournal(root, 'master', false);
         __assertJournalContents('test data');
     }
 
     void testMultiBlockJournal() {
         getJournalBlockResults.append(JournalBlock('digest', 'block1 ', false));
         getJournalBlockResults.append(JournalBlock('digest', 'block2', true));
-        net.pullJournal(root, 'master');
+        net.pullJournal(root, 'master', false);
         __assertJournalContents('block1 block2');
     }
 
     void testJournalChanged() {
         getJournalBlockResults.append(JournalBlock('digest', 'block1 ', false));
         getJournalBlockResults.append(JournalBlock(null, null, false));
-        net.pullJournal(root, 'master');
+        net.pullJournal(root, 'master', false);
         __assertNoJournal();
     }
 

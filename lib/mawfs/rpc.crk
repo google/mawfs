@@ -1,9 +1,10 @@
 ## MAWFS RPC client.
 
 import crack.ascii parseInt;
+import crack.cont.array Array;
 import crack.cont.hashmap HashMap;
 import crack.functor Functor3;
-import crack.io cerr, FStr, StringWriter, Reader;
+import crack.io cerr, Formatter, FStr, StringWriter, Reader;
 import crack.lang cmp, makeHashVal, AppendBuffer, Exception, WriteBuffer;
 import crack.logger.ctx Log;
 import crack.net resolve, Address, InetAddress;
@@ -26,6 +27,8 @@ class AppError : Exception {
 }
 
 @protobuf {
+    version = 1
+
     ## The general RPC message envelope.  Everything gets sent across the wire
     ## in a serialized string containing one of these.
     message RPCMessage {

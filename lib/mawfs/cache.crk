@@ -18,7 +18,7 @@ module;
 import crack.enc.base64 altEncode;
 import crack.cont.hashmap HashMap;
 import crack.io.fmtutil Indenter;
-import crack.io Formatter, FStr, Writer;
+import crack.io Formatter, FStr, Reader, Writer;
 import crack.cont.array Array;
 import crack.fieldset HashMapFieldSet;
 import crack.functor Functor1;
@@ -26,6 +26,7 @@ import crack.lang cmp, AppendBuffer, AssertionError, Buffer, Exception,
     InvalidArgumentError, InvalidStateError, KeyError, ManagedBuffer,
     WriteBuffer, makeHashVal;
 import crack.logger debug, error, info;
+import crack.serial SerialReader, SerialWriter;
 import crack.strutil StringArray;
 import crack.time Time;
 import mawfs.blockstore Entry, Change, Commit, JournalIter, Node, NodeStore,
@@ -33,7 +34,9 @@ import mawfs.blockstore Entry, Change, Commit, JournalIter, Node, NodeStore,
 import mawfs.chunker RabinChunker, DEFAULT_WINDOW_SIZE;
 import mawfs.dllist DLList;
 
-@import crack.ann assert, impl, struct;
+import .entropy getEntropySource;
+
+@import crack.ann assert, impl, interface, struct;
 
 String snippet(String content) {
     if (content.size > 10)
@@ -212,6 +215,14 @@ class CachedNode;
 class NodeContext;
 Object _makeOrphanContext(NodeContext context);
 
+@interface NodeWriter : Writer {
+    @abstract String commit();
+}
+
+## Creates a file that will be stored in the blockstore as a normal node tree.
+NodeWriter _makeWriteFile(NodeContext ctx);
+Reader _makeReadFile(NodeContext ctx, String digest);
+
 ## Wrapper for the three disjoint elements of a node.  These can vary
 ## independently.
 ## - The NodeStore, which can vary if the FSInfo changes (we probably should
@@ -225,6 +236,16 @@ class NodeContext : HashMapFieldSet {
     NodeStore __store;
     Cache __cache;
     Head __head;
+
+    ## The current session id.
+    String __sessionId = getEntropySource().getString(8);
+
+    ## The set of all session ids in the journal
+    HashMap[String, bool] __sessionIds = {};
+
+    ## This flag allows us to turn off journal writes when creating the
+    ## journal info file during a commit.
+    bool __journalEnabled = true;
 
     void addChange(Change change);
 
@@ -262,16 +283,21 @@ class NodeContext : HashMapFieldSet {
     }
 
     void addChange(Change change) {
+        if (!__journalEnabled)
+            return;
         if (__head.lastChange)
             change.lastChange = __head.lastChange;
         else
             change.commit = __head.baselineCommit;
+        change.sessionId = __sessionId;
+        __sessionIds[__sessionId] = true;
         __head.lastChange = __store.writeToJournal(__head.branch, change);
     }
 
     ## Returns true if the caller should commit.
     bool shouldCommit() {
-        return __store.getJournalSize(__head.branch) >= __cache.maxJournalSize;
+        return __journalEnabled &&
+               __store.getJournalSize(__head.branch) >= __cache.maxJournalSize;
     }
 
     @final String storeNode(Node node) {
@@ -296,6 +322,7 @@ class NodeContext : HashMapFieldSet {
 
     @final void clearJournal() {
         __store.deleteJournal(__head.branch);
+        __sessionIds.clear();
     }
 
     @final uint getJournalSize(String branch) {
@@ -362,6 +389,41 @@ class NodeContext : HashMapFieldSet {
         recordCommit(commitDigest);
         info I`commit: digest = $(altEncode(commitDigest)), \
                new root = $(altEncode(commit.root))`;
+    }
+
+    ## Stores a new session id discovered while replaying the journal.
+    ## Note that this operation is idempotent.
+    @final void storeSessionId(String sessionId) {
+        __sessionIds[sessionId] = true;
+    }
+
+    ## Set the current session id (introduced to support unit tests).
+    @final void setSessionId(String sessionId) {
+        __sessionId = sessionId;
+    }
+
+    @final String makeJournalInfo() {
+        # The journal info file is just a list of serialized proto-strings
+        # containing the session ids.
+        @assert(__journalEnabled);
+        __journalEnabled = false;
+        out := _makeWriteFile(this);
+        for (item :in __sessionIds) {
+            sw := SerialWriter(out);
+            sw.write(item.key);
+        }
+        __journalEnabled = true;
+        return out.commit();
+    }
+
+    ## Returns the journal info (a set of session ids) for a given commit
+    ## digest.
+    @final HashMap[String, bool] getJournalInfo(String digest) {
+        sr := SerialReader(_makeReadFile(this, digest));
+        result := HashMap[String, bool]();
+        while (sessionId := sr.readString(false))
+            result[sessionId] = true;
+        return result;
     }
 
     ## Base class for OrphanContext.  This has to be an abstract base class
@@ -974,7 +1036,9 @@ class CachedNode {
         commit.root = newRootDigest;
         if (head := __ctx.getHead())
             commit.parent_append(__ctx.getHead());
+        commit.journalInfo = __ctx.makeJournalInfo();
         __ctx.storeCommit(commit);
+        __ctx.clearJournal();
         size := getSize();
 
         # After commit is the best time to run garbage collection because
@@ -1841,7 +1905,7 @@ class CachedNode {
             }
         }
 
-        # Commit the node itself and clear the journal.
+        # Commit the node itself.
         orgDigest := digest;
         if (__children) {
             for (child :in __children) {
@@ -1853,7 +1917,6 @@ class CachedNode {
         }
 
         digest = __ctx.storeNode(node);
-        __ctx.clearJournal();
 
         return digest;
     }
@@ -1969,6 +2032,8 @@ class CachedNode {
             @assert(node);
             node.__applyChange(change);
             lastChangeDigest = entry.digest;
+            if (change.sessionId)
+                __ctx.storeSessionId(change.sessionId);
         }
 
         # Store this in the context.
@@ -2146,6 +2211,47 @@ CachedNode _makeCachedNode(CachedNode parent, NodeContext ctx, String digest) {
     result := CachedNode(ctx, digest, node);
     result.parent = parent;
     return result;
+}
+
+NodeWriter _makeWriteFile(NodeContext ctx) {
+    class NodeWriterImpl @impl NodeWriter {
+        CachedNode node;
+        uint64 pos;
+
+        oper init(NodeContext ctx) : node = CachedNode(ctx, null, Node()) {}
+
+        void write(Buffer data) {
+            node.write(pos, data);
+            pos += data.size;
+        }
+
+        String commit() {
+            return node.commit();
+        }
+    }
+
+    return NodeWriterImpl(ctx);
+}
+
+Reader _makeReadFile(NodeContext ctx, String digest) {
+    # TODO: NodeReader and NodeWriter should probably be broken out and used
+    # by both this code and mawfs.path.
+    class NodeReaderImpl @impl Reader {
+        CachedNode node;
+        uint64 pos;
+        oper init(NodeContext ctx, String digest) :
+            node = _makeCachedNode(null, ctx, digest) {
+        }
+
+        uint read(WriteBuffer buffer) {
+            rc := node.read(pos, buffer);
+            if (rc > 0)
+                pos += rc;
+            return rc;
+        }
+    }
+
+    return NodeReaderImpl(ctx, digest);
 }
 
 class OrphanContext : NodeContext._OrphanContextBase {

@@ -23,6 +23,7 @@ import crack.random random, srandom;
 import crack.serial SerialReader, SerialWriter;
 
 import .aes_siv SIVCipher;
+import .entropy EntropySource;
 import .ciphers Cipher, AES256Cipher;
 
 @import crack.ann cvars, impl, interface;
@@ -44,14 +45,6 @@ import .ciphers Cipher, AES256Cipher;
     message PrivateParams {
         optional int32 version = 1;
     }
-}
-
-@interface EntropySource {
-    ## Returns a single random byte.
-    @abstract byte getByte();
-
-    ## Returns a string of random bytes of length 'len'.
-    @abstract String getString(uint len);
 }
 
 const PARAMS_MAGIC_NUMBER := 'MAWFS1.0';
@@ -172,22 +165,5 @@ class ParamInfo {
 
         # Finally encrypt and write the buffer to the destination stream.
         sw.write(cipher.encrypt(buf));
-    }
-}
-
-class DeviceEntropySource @impl EntropySource {
-    Reader __dev;
-
-    oper init(Path urandomDevice) : __dev = urandomDevice.reader() {}
-
-    ## Returns a single random byte.
-    byte getByte() {
-        return __dev.read(1)[0];
-    }
-
-
-    ## Returns a string of random bytes of length 'len'.
-    String getString(uint len) {
-        return __dev.read(len);
     }
 }

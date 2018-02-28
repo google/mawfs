@@ -98,6 +98,10 @@ const int
 
         ## The digest of the root of the filesystem at the point of the commit.
         optional bytes root = 2;
+
+        ## The digest of a node containing the set of journal ids for the
+        ## journal that preceded this commit.
+        optional bytes journalInfo = 3;
     }
 
     ## Change is like a lightweight Commit for purposes of storing changes in
@@ -139,7 +143,12 @@ const int
         ## have 'lastChange' instead.
         optional bytes commit = 9;
 
-        # last tag: 10
+        ## A random nonce values that is applied to a sequence of changes
+        ## emitted by a peer during a single session, during which the
+        ## journal may only be modified by the peer.
+        optional bytes sessionId = 11;
+
+        # last tag: 11
     }
 }
 
