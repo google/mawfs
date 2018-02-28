@@ -588,12 +588,14 @@ class Poller {
 
             if (__callbacks && (cbw := __callbacks.get(pollEvent.pollable))) {
                 rc2 := refCount;
+                # Guard against the callback modifying 'events'.
+                orgEvents := pollEvent.events;
                 events := cbw.callback(this, pollEvent);
                 __checkRC(rc2, cbw);
 
                 # Change the event mask, taking care to ensure that the pollable
                 # wasn't removed by the callback.
-                if (events != pollEvent.events && __iter >= 0 &&
+                if (events != orgEvents && __iter >= 0 &&
                     pollEvent.pollable is __pollables[__iter]
                     )
                     __fds.set(descriptorIndex, pollEvent.pollable.fd, events, 0);
