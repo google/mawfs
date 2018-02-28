@@ -303,7 +303,6 @@ class JournalledCompatibleCommits : TestBed {
         master.makeBranch('foo');
         @assert(proxy.pullBranch('foo', null) == 'foo');
 
-
         # Verify that a new commit with a journal on the master works like an
         # extension if slave doesn't have a journal.
         (master.getRoot('foo')/'firstFile').writeAll(FILE_CONTENTS);
