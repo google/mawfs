@@ -44,9 +44,10 @@ import crack.threads Mutex;
 
 import mawfs.blockstore hashFile, ChunkStore, FSInfo, Node, BLOCK_SIZE;
 import mawfs.configstore ConfigStore;
+import mawfs.entropy DeviceEntropySource;
 import mawfs.fuse runFuse, UserModule;
 import mawfs.flows MAWFSInstance;
-import mawfs.params DeviceEntropySource, ParamInfo;
+import mawfs.params ParamInfo;
 import mawfs.peernet PeerNetwork, RemoteReaderImpl;
 import mawfs.rawchunk RawChunkReader;
 import mawfs.rpc parseAddr, setInst, PeerProxy;
