@@ -30,11 +30,9 @@ import crack.serial SerialReader, SerialWriter;
 import crack.strutil StringArray;
 import crack.time Time;
 import mawfs.blockstore Entry, Change, Commit, JournalIter, Node, NodeStore,
-    MODE_DIR;
+    Session, MODE_DIR;
 import mawfs.chunker RabinChunker, DEFAULT_WINDOW_SIZE;
 import mawfs.dllist DLList;
-
-import .entropy getEntropySource;
 
 @import crack.ann assert, impl, interface, struct;
 
@@ -237,8 +235,8 @@ class NodeContext : HashMapFieldSet {
     Cache __cache;
     Head __head;
 
-    ## The current session id.
-    String __sessionId = getEntropySource().getString(8);
+    ## The current session.
+    Session __session;
 
     ## The set of all session ids in the journal
     HashMap[String, bool] __sessionIds = {};
@@ -262,7 +260,8 @@ class NodeContext : HashMapFieldSet {
     oper init(NodeContext other) :
         __store = other.__store,
         __cache = other.__cache,
-        __head = other.__head {
+        __head = other.__head,
+        __session = other.__session {
     }
 
     ## Convenience constructor to create a context from an existing NodeStore
@@ -271,7 +270,8 @@ class NodeContext : HashMapFieldSet {
     oper init(NodeStore store, Cache cache, String branch) :
         __store = store,
         __cache = cache,
-        __head = Head(branch, null) {
+        __head = Head(branch, null),
+        __session = store.getSession(branch) {
     }
 
     ## Convenience constructor to create a NodeContext complete with a Cache
@@ -279,7 +279,8 @@ class NodeContext : HashMapFieldSet {
     oper init(NodeStore store, String branch, String baselineCommit) :
         __store = store,
         __cache = Cache(),
-        __head = Head(branch, baselineCommit) {
+        __head = Head(branch, baselineCommit),
+        __session = store.getSession(branch) {
     }
 
     void addChange(Change change) {
@@ -289,8 +290,8 @@ class NodeContext : HashMapFieldSet {
             change.lastChange = __head.lastChange;
         else
             change.commit = __head.baselineCommit;
-        change.sessionId = __sessionId;
-        __sessionIds[__sessionId] = true;
+        change.sessionId = __session.getId();
+        __sessionIds[__session.getId()] = true;
         __head.lastChange = __store.writeToJournal(__head.branch, change);
     }
 
@@ -399,7 +400,7 @@ class NodeContext : HashMapFieldSet {
 
     ## Set the current session id (introduced to support unit tests).
     @final void setSessionId(String sessionId) {
-        __sessionId = sessionId;
+        __session.setId(sessionId);
     }
 
     @final String makeJournalInfo() {

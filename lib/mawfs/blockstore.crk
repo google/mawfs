@@ -16,6 +16,7 @@
 
 #import crack.exp.fuse fuseMain = main, LockedFilesystem, NodeImpl;
 import crack.cont.array Array;
+import crack.cont.hashmap HashMap;
 import crack.enc.base64 altDecode, altEncode;
 import crack.hash Hash;
 import crack.hash.sha256 SHA256;
@@ -34,6 +35,7 @@ import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
 
 import .rawchunk GeneralCallback, JournalBlock, RawChunkReader;
 import .ciphers AES256Cipher, Cipher;
+import .entropy getEntropySource;
 
 @import crack.ann interface, impl;
 @import crack.protobuf.ann protobuf;
@@ -102,6 +104,11 @@ const int
         ## The digest of a node containing the set of journal ids for the
         ## journal that preceded this commit.
         optional bytes journalInfo = 3;
+
+        ## The digest of a node containing the complete journal for this
+        ## commit.  The implementation must not rely either on this field
+        ## being present or the referenced journal being accessible.
+        optional bytes journal = 4;
     }
 
     ## Change is like a lightweight Commit for purposes of storing changes in
@@ -261,6 +268,26 @@ class ChangeEntry {
     JournalIter iter() { return this; }
 }
 
+## Manages the session id for a branch.
+class Session {
+    String __id;
+
+    void reset() {
+        __id = getEntropySource().getString(8);
+    }
+
+    oper init() {
+        reset();
+    }
+
+    String getId() {
+        return __id;
+    }
+
+    ## Lets unit tests set the session id.
+    void setId(String id) { __id = id }
+}
+
 ## Interface for a node store.
 @interface NodeStore {
 
@@ -301,6 +328,16 @@ class ChangeEntry {
     ## Returns the size of the journal, or rather, the size of all of the
     ## changes in it.
     @abstract uint getJournalSize(String branch);
+
+    ## Invalidate the session id for a given branch.  This must be called
+    ## whenever the journal is retrieved from a remote peer into a
+    ## non-tracking branch. Invalidating the session id ensures that any
+    ## subsequent changes to the branch will be recorded separately in a
+    ## commit.
+    @abstract void invalidateSession(String branch);
+
+    ## Gets the session object for the branch, creating a new one if necessary.
+    @abstract Session getSession(String branch);
 }
 
 ## Interface for partial chunk stores that can load chunks from remote sources.
@@ -313,8 +350,11 @@ class ChangeEntry {
 class FSRawChunkReader @impl RawChunkReader {
     Path __dir;
     Mutex __mutex;
+    NodeStore __store;
 
-    oper init(Path dir, Mutex mutex) : __dir = dir, __mutex = mutex {}
+    oper init(Path dir, Mutex mutex, NodeStore store) :
+        __dir = dir, __mutex = mutex, __store = store {
+    }
 
     void readRawChunk(String digest, GeneralCallback[String] callback) {
         MutexLock lock = __mutex ? MutexLock(__mutex) : null;
@@ -354,6 +394,7 @@ class FSRawChunkReader @impl RawChunkReader {
         # the block size, just give back the first block.
         journalSize := path.getStat().st_size;
         if (journalSize <= BLOCK_SIZE) {
+            __store.invalidateSession(branch);
             if (pos == 0) {
                 callback(JournalBlock(null, path.readAll(), true), null);
             } else {
@@ -383,9 +424,10 @@ class FSRawChunkReader @impl RawChunkReader {
         # Finally, try to read the block requested by the user.
         src.seek(int32(pos), SEEK_SET);
         data := src.read(BLOCK_SIZE);
-        callback(JournalBlock(firstBlockDigest, data,
-                              journalSize - pos <= BLOCK_SIZE
-                              ),
+        lastBlock := journalSize - pos <= BLOCK_SIZE;
+        if (lastBlock)
+            __store.invalidateSession(branch);
+        callback(JournalBlock(firstBlockDigest, data, lastBlock),
                  null
                  );
     }
@@ -412,6 +454,7 @@ class ChunkStore @impl NodeStore {
     Path __dir;
     FSInfo __fsInfo;
     RemoteReader __remote;
+    HashMap[String, Session] __sessions = {};
 
     oper init(Path dir, FSInfo fsInfo) : __dir = dir, __fsInfo = fsInfo {}
 
@@ -587,6 +630,18 @@ class ChunkStore @impl NodeStore {
             return uint(src.getSize());
     }
 
+    void invalidateSession(String branch) {
+        if (ses := __sessions.get(branch))
+            ses.reset();
+    }
+
+    Session getSession(String branch) {
+        ses := __sessions.get(branch);
+        if (!ses)
+            __sessions[branch] = ses = Session();
+        return ses;
+    }
+
     Array[String] getJournalEntries(String digest) {
         return null;
     }
@@ -609,7 +664,7 @@ class ChunkStore @impl NodeStore {
     ## to doing any reads, allowing us to coordinate reads with the rest of
     ## the system.  It may be null if coordination is not an issue.
     RawChunkReader getRawChunkReader(Mutex mutex) {
-        return FSRawChunkReader(__dir, mutex);
+        return FSRawChunkReader(__dir, mutex, this);
     }
 
     ## Store an entire directory in the blockstore.  Returns its digest.

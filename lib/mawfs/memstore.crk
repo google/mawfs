@@ -22,7 +22,7 @@ import crack.io StringWriter;
 import crack.logger debug;
 import crack.protobuf readMessageFromString, Message, ProtoWriter;
 import mawfs.blockstore Change, ChangeEntry, Chunk, Commit, JournalIter,
-    Node, NodeStore;
+    Node, NodeStore, Session;
 
 @import crack.ann impl;
 
@@ -32,6 +32,7 @@ class MemNodeStore @impl NodeStore {
     HashMap[String, Array[String]] __journal = {};
     HashMap[String, String] __branches = {};
     String __root;
+    HashMap[String, Session] __sessions = {};
 
     Chunk __toChunk(Message message) {
         # Construct a digest from the object contents.
@@ -140,5 +141,17 @@ class MemNodeStore @impl NodeStore {
     void deleteJournal(String digest) {
         if (__journal.hasKey(digest))
             __journal.delete(digest);
+    }
+
+    void invalidateSession(String branch) {
+        if (ses := __sessions.get(branch))
+            ses.reset();
+    }
+
+    Session getSession(String branch) {
+        ses := __sessions.get(branch);
+        if (!ses)
+            __sessions[branch] = ses = Session();
+        return ses;
     }
 }

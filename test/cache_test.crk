@@ -645,6 +645,9 @@ if (true) {
 
 cerr `journal session ids.\n`;
 if (true) {
+    # Resset the entropy source so that changes to earlier tests won't affect
+    # this one.
+    setEntropySource(PseudoRandomEntropySource());
     nodeStore = MemNodeStore();
     ctx = NodeContext(nodeStore, 'master', null);
     root := CachedNode(ctx, null, makeDirNode());
@@ -656,7 +659,8 @@ if (true) {
     @assert(commit.journalInfo);
     info := ctx.getJournalInfo(commit.journalInfo);
     @assert(info && info.count() == 1);
-    @assert(sig(info.iter().elem().key) == 'jMs1XBwwGU8');
+    const SESID := 'p1HCYtqKJQE';
+    @assert(sig(info.iter().elem().key) == SESID);
 
     # Record a journal with multiple sessions.
     root.addChild('bar', makeFileNode('other data', 0));
@@ -669,7 +673,7 @@ if (true) {
     info = ctx.getJournalInfo(commit.journalInfo);
     @assert(info && info.count() == 2);
     @assert(info.hasKey('should be present'));
-    @assert(info.hasKey(altDecode('jMs1XBwwGU8')));
+    @assert(info.hasKey(altDecode(SESID)));
 
     # Verify that only the last session id is preserved after a commit.
     root.addChild('elmo', makeFileNode('elmo is elmo!', 0));
@@ -679,6 +683,20 @@ if (true) {
     info = ctx.getJournalInfo(commit.journalInfo);
     @assert(info && info.count() == 1);
     @assert(info.hasKey('should be absent'));
+
+    # Verify that a new session id shows up after invalidating it in the
+    # NodeStore.
+    root.addChild('telly', makeFileNode('what will we do!?', 0));
+    nodeStore.invalidateSession('master');
+    root.addChild('grover', makeFileNode('super grover!', 0));
+    root.commitTree();
+    commit = ctx.getCommit(ctx.getHead());
+    info = ctx.getJournalInfo(commit.journalInfo);
+    @assert(info && info.count() == 2);
+    iter := info.iter();
+    @assert(iter.elem().key == 'should be absent');
+    iter.next();
+    @assert(sig(iter.elem().key) == 'JdbclZ.bhxw');
 }
 
 # TODO:
