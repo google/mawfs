@@ -1,0 +1,85 @@
+
+import crack.hash.sha256 SHA256;
+import crack.io cerr, SeekableReader, SeekableWriter, StringReader, StringWriter;
+import crack.fs Path, PathIter, PathStat;
+import mawfs.entropy EntropySource;
+import mawfs.params ParamInfo;
+import mawfs.ciphers AES256Cipher;
+import mawfs.aes_siv SIVCipher;
+import mawfs.testutil FakeEntropySource;
+
+@import crack.ann assert, impl;
+
+class FakePath : Path {
+    String contents;
+    StringWriter output;
+
+    oper init(String contents) : contents = contents {}
+
+    SeekableReader reader() {
+        return StringReader(contents);
+    }
+
+    SeekableWriter writer() {
+        output = StringWriter();
+        return output;
+    }
+
+    SeekableWriter appender() { return null }
+    void truncate(uint64 newSize) {}
+    void makeDir(bool errorOnExists) {}
+    Path oper [](String child) { return null }
+    Path _createNode(String path) { return null }
+    Path oper /(String other) { return null }
+    bool exists() { return contents != null }
+    bool isDir() { return false }
+    bool isLink() { return false }
+    void delete() {}
+    String getName() { return null }
+    String getFullName() { return null }
+    PathStat getStat() { return null }
+    void setMode(int mode) {}
+    PathIter children() { return null }
+    Path parent() { return null }
+    void moveTo(Path other) {}
+}
+
+String expandPassword(String password) {
+    hasher := SHA256();
+    hasher.update(password);
+    return hasher.digest();
+}
+
+# Verify that we can create and read back the default params file and that it
+# produces an SIV cipher.
+if (true) {
+    pw := expandPassword('The secret password');
+    info := ParamInfo.getDefault(pw);
+
+    StringWriter tmp = {};
+    info.writeTo(tmp, FakeEntropySource(10));
+
+    info = ParamInfo.read(StringReader(tmp.string()), pw);
+
+    @assert(info);
+    @assert(info.cipher.oper to Object().isa(SIVCipher));
+    @assert(info.params.version == 1);
+}
+
+# Verify that we get the expected failure on a bad password.
+if (true) {
+    pw := expandPassword('The secret password');
+    info := ParamInfo.getDefault(pw);
+
+    StringWriter tmp = {};
+    info.writeTo(tmp, FakeEntropySource(10));
+
+    info = ParamInfo.read(StringReader(tmp.string()),
+                          expandPassword('bad password')
+                          );
+    @assert(!info);
+}
+
+cerr `ok\n`;
+
+
