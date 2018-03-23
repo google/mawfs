@@ -424,7 +424,7 @@ void main() {
 
             store.setRemoteReader(RemoteReaderImpl(net));
 
-            master := net.getHead('master');
+            master := net.getHead('master').head;
             cerr `master is $(altEncode(master))\n`;
             net.pullJournal(backingDir, 'master', false);
 

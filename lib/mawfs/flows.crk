@@ -7,6 +7,7 @@ import crack.logger debug, info;
 import crack.threads Mutex, MutexLock, Queue, Thread;
 
 import .blockstore ChunkStore;
+import .cache Cache, NodeContext;
 import .peernet PeerNetwork;
 import .rawchunk GeneralCallback;
 import .rpc InstIFace;
@@ -119,30 +120,69 @@ class MAWFSInstance @impl InstIFace {
             __net.pullJournal(__root, name, false);
             newName = name;
         } else {
-            # Pull the journal to a temporary name.
+            # Pull the journal to a temporary name. (This returns a temporary
+            # name even if there's no remote journal).
             newName = __net.pullJournal(__root, name, true);
         }
 
         jiter := __store.makeJournalIter(newName);
         if (!jiter) {
-            # Try pulling the commit.
-            head := __net.getHead(name);
-            if (!head)
+            # No journal.  Try pulling the commit.
+            headAndPeer := __net.getHead(name);
+            if (!headAndPeer)
                 throw Exception('Unable to retrieve branch');
+            head := headAndPeer.head;
 
-            if (localHead) {
-                # This is a new commit.  See if the current commit is a direct
-                # ancestor.
-                if (derivesFrom(head, localHead))
-                    # If the new head derives from the local head, we're
-                    # going to want to store the new head and we can subsume
-                    # the old branch.
+            # If our commit is derived from the remote commit, we're done.
+            if (localHead && derivesFrom(localHead, head))
+                return name;
+
+            # If there is a local journal for the branch, check to see if the
+            # new commit includes all changes.
+            # XXX This won't work if there are a few commits in between, need
+            # to get the commit immediately following this one.
+            localJiter := __store.makeJournalIter(name);
+            if (localJiter) {
+                # Note that if we get here, there's a local journal so we're
+                # assuming newName is the name of a tracking branch.
+                commit := __store.getCommit(head);
+                bool incompatible;
+                if (commit.journalInfo) {
+                    nodeCtx := NodeContext(__store, Cache(), name);
+                    sessionIds := nodeCtx.getJournalInfo(commit.journalInfo);
+
+                    # Verify that all sessions that are in the local journal
+                    # are present in the commit.
+                    for (entry :in localJiter) {
+                        if (!sessionIds.get(entry.change.sessionId)) {
+                            # There are changes in the local journal that
+                            # aren't in the commit, so we have to branch.
+                            incompatible = true;
+                            break;
+                        }
+                    }
+                } else {
+                    # No journal info, assume incompatible.
+                    incompatible = true;
+                }
+
+
+                # If the new commit subsumes the local journal, delete the
+                # local journal.
+                if (!incompatible) {
+                    (__root/'journals'/name).delete();
                     newName = name;
-                else if (derivesFrom(localHead, head))
-                    # If the local head inherits from the new head, then the
-                    # local head extends the new remote head and we can
-                    # ignore the new remote head.
-                    return name;
+
+                # Otherwise make sure we've changed the name (even if there's
+                # no local journal).
+                } else if (name == newName) {
+                    newName = headAndPeer.peer + ':' + name;
+                }
+            } else if (localHead && derivesFrom(head, localHead)) {
+                # There's no journals and the new head derives from the local
+                # head. We're going to want to store the new head and we can
+                # subsume the old branch.
+                newName = name;
             }
 
             __store.setHead(newName, head);

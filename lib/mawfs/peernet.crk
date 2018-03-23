@@ -15,7 +15,7 @@ import mawfs.rawchunk RawChunkReader;
 import mawfs.rpc parseAddr, Context, PeerProxy, PeerServiceCommFactory;
 import .params ParamInfo;
 
-@import crack.ann impl;
+@import crack.ann impl, struct;
 
 ## Thrown by pullParams() in the case of an invalid password.
 class InvalidPasswordError : Exception {
@@ -101,14 +101,21 @@ class PeerNetwork {
 
     oper del() {}
 
-    String getHead(String branch) {
+    @struct HeadAndPeer {
+        ## Head commit digest.
+        String head;
+
+        ## Peer name.
+        String peer;
+    }
+    HeadAndPeer getHead(String branch) {
         for (peer :in __peers) {
             proxy := peer.getProxy();
             if (proxy) {
                 __log.debug `got peer proxy for $(peer.addr)`;
                 head := proxy.getHead(branch);
                 if (head)
-                    return head;
+                    return HeadAndPeer(head, peer.getName());
             } else {
                 __log.debug `unable to get proxy for $(peer.addr)\n`;
             }

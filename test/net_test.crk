@@ -333,3 +333,54 @@ class JournalledCompatibleCommits2 : TestBed {
     }
 }
 JournalledCompatibleCommits2().exec();
+
+## Verify that we don't create a new branch for a reote commit derived
+## entirely from a journal that we haven't modified.
+class CommitFromKnownJournal : TestBed {
+    void run() {
+        master.makeBranch('foo');
+        (master.getRoot('foo')/'firstFile').writeAll(FILE_CONTENTS);
+        @assert(proxy.pullBranch('foo', null) == 'foo');
+
+        master.commit('foo');
+        @assert(proxy.pullBranch('foo', null) == 'foo');
+        @assert((slave.getRoot('foo')/'firstFile').readAll() ==
+                FILE_CONTENTS
+                );
+
+        # Pull the branch, then write again to master an commit - since the
+        # all of the sessions in the local branch should still be contained in
+        # the commit, we should not fork.
+        (master.getRoot('foo')/'secondFile').writeAll(FILE_CONTENTS);
+        @assert(proxy.pullBranch('foo', null) == 'foo');
+        (master.getRoot('foo')/'thirdFile').writeAll(FILE_CONTENTS);
+        master.commit('foo');
+        @assert(proxy.pullBranch('foo', null) == 'foo');
+
+        # Write another change, pull and diverge.  At this point, pulling the
+        # commit should result in a fork.
+        (master.getRoot('foo')/'fourthFile').writeAll(FILE_CONTENTS);
+        @assert(proxy.pullBranch('foo', null) == 'foo');
+        (master.getRoot('foo')/'masterFile').writeAll(FILE_CONTENTS);
+        master.commit('foo');
+        (slave.getRoot('foo')/'slaveFile').writeAll(FILE_CONTENTS);
+        newBranch := proxy.pullBranch('foo', null);
+        @assert(newBranch != 'foo')
+        @assert((slave.getRoot('foo')/'slaveFile').readAll() == FILE_CONTENTS);
+        @assert(!(slave.getRoot('foo')/'masterFile').exists());
+        @assert((slave.getRoot(newBranch)/'masterFile').readAll() == FILE_CONTENTS);
+        @assert(!(slave.getRoot(newBranch)/'slaveFile').exists());
+    }
+}
+CommitFromKnownJournal().exec();
+
+/* This test fails.  Double writeAll() breaky-breaky.
+class DoubleWriteAll : TestBed {
+    void run() {
+        master.makeBranch('foo');
+        (master.getRoot('foo')/'file').writeAll(FILE_CONTENTS);
+        (master.getRoot('foo')/'file').writeAll(FILE_CONTENTS);
+    }
+}
+DoubleWriteAll().exec();
+*/
