@@ -374,6 +374,20 @@ class CommitFromKnownJournal : TestBed {
 }
 CommitFromKnownJournal().exec();
 
+class CommitAfterCommitFromKnownJournal : TestBed {
+    void run() {
+        master.makeBranch('foo');
+        (master.getRoot('foo')/'firstFile').writeAll(FILE_CONTENTS);
+        @assert(proxy.pullBranch('foo', null) == 'foo');
+
+        master.commit('foo');
+        (master.getRoot('foo')/'secondFile').writeAll(FILE_CONTENTS);
+        master.commit('foo');
+        @assert(proxy.pullBranch('foo', null) == 'foo');
+    }
+}
+CommitAfterCommitFromKnownJournal().exec();
+
 /* This test fails.  Double writeAll() breaky-breaky.
 class DoubleWriteAll : TestBed {
     void run() {

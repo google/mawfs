@@ -6,7 +6,7 @@ import crack.lang Exception;
 import crack.logger debug, info;
 import crack.threads Mutex, MutexLock, Queue, Thread;
 
-import .blockstore ChunkStore;
+import .blockstore ChunkStore, Commit;
 import .cache Cache, NodeContext;
 import .peernet PeerNetwork;
 import .rawchunk GeneralCallback;
@@ -110,6 +110,22 @@ class MAWFSInstance @impl InstIFace {
         return result;
     }
 
+    ## If 'laterCommitDigest' derives from 'curCommitDigest', returns the
+    ## commit that derives directly from 'curCommitDigest'.  This may be the
+    ## later commit or it may be a commit that the later commit derives from.
+    ##
+    ## If the later commit does not derive from the current one, returns null.
+    Commit getFollowingCommit(String curCommitDigest, String laterCommitDigest) {
+        commit := __store.getCommit(laterCommitDigest);
+        for (parent :in commit.parent) {
+            if (parent == curCommitDigest)
+                return commit;
+            else if (c := getFollowingCommit(curCommitDigest, parent))
+                return c;
+        }
+        return null;
+    }
+
     ## Pull a branch from a peer to the local instance.  This can result in the
     ## production of a tracking branch.
     String pullBranch(String name, String peer) {
@@ -145,7 +161,7 @@ class MAWFSInstance @impl InstIFace {
             if (localJiter) {
                 # Note that if we get here, there's a local journal so we're
                 # assuming newName is the name of a tracking branch.
-                commit := __store.getCommit(head);
+                commit := getFollowingCommit(localHead, head);
                 bool incompatible;
                 if (commit.journalInfo) {
                     nodeCtx := NodeContext(__store, Cache(), name);
