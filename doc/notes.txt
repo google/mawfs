@@ -1,0 +1,308 @@
+
+A Random Collection of Implementation and Design Notes
+======================================================
+
+TODO:
+  - pull a repo from a remote source
+    mindhog.net/mmuller/mawfs
+
+------
+
+when loading a new head:
+
+  - create a new Head object
+
+  gawfs mkfs foo -p <password> -b <backing-dir>
+    - creates a foo directory, mounts it.
+    - GetHead('master') returns a new head object
+    - doesn't create anything in the journal yet.
+    - doesn't create a commit object or a head.
+
+  cd foo; echo hello >file.txt
+    - creates a new journal, ideally starting with a big chunk of random data.
+
+  gawfs commit .
+    - walks the tree, writes all modified nodes.
+    - updates the "master" head file to point to the current root
+    - clears the journal
+
+
+gawfs branch foo
+  - GetHead('foo') returns a new object.
+
+
+Maybe GetHead() should also accept the digest of a commit to base a new branch
+on?  Does it also accept the journal of the existing branch?  Probably not.
+Maybe Head has a method to fork itself, in which case it copies the journal of
+the Head.
+
+GetHead() is likely to be used on either an existing branch
+
+Being Safer with Encryption
+===========================
+
+- In ChunkStore, cache things like the empty directory and empty files in
+  memory so it's not so easy to infer what they are in a new filesystem
+- Begin the journal with a chunk of random.  Maybe also begin smaller chunks
+  with a chunk of random.
+
+The Garbage Collection Model
+============================
+
+MAWFS uses CachedNode as a wrapper around filesytem objects, not just files
+and directories, but also chunks of content within a file and tree nodes
+organizing that content.
+
+The #mawfs.path# module presents a #crack.fs.Path# interface to higher level
+code (including MAWFS' FUSE system).  For every branch,  xxxx finish this
+thought xxxx
+
+When releasing a CachedNode if the external reference count is non-zero, then
+we know that an external object (normally a MAWFSPath) has a reference to the
+object, meaning that it should not be released.  Instead, we move the object
+to a special orphan tree and change its context to the OrphanContext, which
+does not record any changes.
+
+There's currently a problem in that modified orphaned nodes reside forever in
+memory.
+
+Merging
+=======
+
+We merge branches by replicating the alternate filesystem under the .mawfs/alt
+directories.  This is signaled by the presence of an "ALT" file in the backing
+store that contains the name of the alternate branch.
+
+There are only two special features of the alt branch:
+
+- It is only visible in .mawfs/alt
+- A merge operation creates a new commit with two parents.
+- It is read-only.
+
+If there are journaled changes in the alt branch, we need to do a commit on
+it prior to a merge, as a commit must reference other commits as its parents.
+
+Determining Encryption and other Parameters
+===========================================
+
+The "params" file consists of a plaintext header followed by an encrypted
+payload.  Both sections are stored as "proto strings" - a varint length
+followed by content:
+
+  | varint len | serialized PublicParams | varint len | encrypted payload |
+
+- The first section contains a mawfs.params.PublicParams object.  This
+  identifies the main cipher.
+- The second section is a string encrypted by the main password.  It's
+  plaintext contents are:
+  - 1-256 bytes of padding
+  - The "magic number", consisting of a sequence of 8 bytes containing the
+    ascii representation of "MAWFS1.0"
+  - A proto string containing a serialized mawfs.params.PrivateParams object.
+  - 1-256 bytes of end padding.
+
+Padding consists of a single byte length followed by 0-255 bytes of random
+data.
+
+Options Considered
+------------------
+
+0) Just have a plain text params file.
+  - Gives information to an attacker
+1) Make it encrypted, attempt to decrypt given the user's password.
+  a) Need to verify that we've decrypted, SIV does this automatically, for any
+    other system
+    - magic number.  This means that an attacker would know that the first
+      plaintext bytes are the magic number.
+    - random padding could help with this, pad with a 1 byte length and 0-255
+      bytes of random data.
+2) Use a deterministically generated file and just store it in the blockstore.
+  - an attacker can't even distinguish the params file.
+  - our only source of entropy is the password
+  - we wouldn't be able to store any additional params in it, we'd have to
+    have a second params file that was either in a standard location or
+    somewhere in the filesystem (which would limit the parameters we could
+    have on the root of the filesystem)
+
+Currently leaning toward 1.a+padding.  Format is:
+
+  [1 byte length][0-255 bytes random data][8 byte magic number "MAWFS1.0"]
+  [params protobuf][1 byte length][0-255 bytes random data]
+
+In the absence of a "params" file, we assume MAWFS 0 parameters (AES 256
+cipher, classic protos, etc)
+
+Syncing
+=======
+
+By "syncing" we mean the process of pulling a branch from a remote peer.
+
+If the remote branch doesn't have the same name as a local branch,
+If the remote branch has the same name as a local branch:
+
+  pull the remote journal/head into a tracking branch
+  compare the tracking branch/head with the local journal
+  - if the head commits are the same
+    - if the two journals are equivalent, discard the tracking branch
+    - if the remote journal "extends" the local journal, just replace the local
+      journal with the remote journal.  If the branch is active, replay all
+      new mutations against the cache.
+  - if the head commits are different
+    - if the remote commit is derived from the local commit and from the local
+      journal (see \X(Journal Derivation)), the remote branch subsumes the
+      local.
+    - otherwise indicate that a merge is needed, preserve the tracking branch.
+
+Our branch model:
+- Branches are orthogonal to peers, the set of branches floats around the peer
+  group.  They need not be in sync across all peers, when they get out of sync
+  and are pulled we create tracking branches, try to merge them automatically
+  and
+- tracking branches are local, their names are qualified by the peer name,
+  e.g. "localhost:9119/master".  they are exact mirrors of the branch on the
+  given peer.
+  You can not write to a tracking branch.
+
+Journal Derivation
+==================
+
+In order to support pulling of journals, it is necssary for us to be able to
+determine that a commit was derived from the latest journal entry.
+
+For example, if a local branch has a commit A and journal J, and a remote
+branch has commit B which is derived from A, then J can be either:
+
+- A copy of a previous state of the remote journal, whose changes have since
+  been folded into B or
+- A journal created locally that was based on A and is orthogonal to B.
+
+In the first case, we can simply accept the remote commit (as well as any new
+journal based on it).  In the second case, we must create a tracking branch.
+
+Unfortunately, since journals are discarded upon commit, we have no history of
+the contents of the journal that ended up being subsumed by the commit, and
+therefore there is no way to compare it against the local journal to verify
+that it strictly extends it.
+
+We could store the digest of all of the journal entries in the commit record.
+this would allow us to verify that the last entry in the local journal (and,
+therefore, all entries in the local journal since the journal is a Merkle
+tree) is part of the history of the commit.  However, this would require a lot
+of additional storage.
+
+Instead of storing the journal entries in the commit, we could split a
+completed journal into a file node and then reference the file node from the
+commit.  This would save us from having to transport the journal in all cases
+and, in fact, the peer network could prune journals from storage once they are
+unlikely to be needed.
+
+Keeping the journals around also has the additional benefit of allowing us to
+preserve move history, at least up until the point where the journal files are
+pruned.
+
+Rather than store the entire journal, we can take advantage of the fact that
+journal entries are likely to be appended in sequence by the same peer during
+the same process lifetime.  We can then assign a randomly computed nonce to
+the sequence of journal entries produced during that process lifetime and
+store only the unique nonces in the commit (or in an associated file
+referenced by the commit, as described above).
+
+Whenever we load a branch, we generate a random number.  This number is then
+applied to all new journal entries.  When the branch is pulled from the peer,
+the current in-memory representation is discarded, the branch is reloaded and
+a new nonce is generated.
+
+When committing, we record all unique nonces in the journal along with the
+commit.  To deterine if a remote commit is derived from our local journal:
+
+1) Trace the commit history backwards until we find the commit immediately
+   derived from the local commit (the "NextCommit").
+2) Check to see if the nonce stored with the last journal entries is
+   associated with the NextCommit.
+
+If the nonce is associated with the NextCommit, then we know that the
+NextCommit (and hence, the remote commit derived from it) is derived from
+that journal entry.  If it is not, then we know that the local journal has
+diverged from the history of that commit.
+
+
+what if:
+  B pulls the journal from A, last session id is 1
+  A extends the journal, continuing to use session id 1
+  B extends the journal, with session id 2, then commits
+  the new commit now has session ids 1 and 2
+  A pulls the new commit, discovers that it includes its session id 1 and decides
+  that the commit includes its latest entries.
+
+  fixes:
+    1) A could change its session id on a pull.  This requires that A be aware
+      of a live pull (pulling from an inert journal is ok because A will
+      generate a new session id anyway when it reloads the journal.
+
+      The real bummer here is that if we're live-streaming changes to another
+      peer, we would have to update the session id for every change.  In this
+      case, we probably want to retain the session id until we drop our
+      connection, but there's a problem in that the last change that we may
+      fail to submit the last change.  To make this work, we have to wait for
+      a response from all peers receiving the live stream before we can commit
+      the change with the existing session id.
+    2) Just reference the entire freakin journal from the commit.
+      Everything basically gets stored twice, but we end up with complete
+      history of the branch and we can merge very granularly.
+
+[some more notes from yet another notes.txt file]
+
+todo:
+=====
+
+-   We need to get the "root kit" from the source the user has specified
+-   once we pull the root kit, it's just a matter of pullinb objects which we
+    should already be able to do.
+-   how does the root kit get pushed to a passive node?  Isn't it just another
+    object?  We can set a label on it like "master/root" or something.
+-   Can we do this without a rootkit for starters?  Like:
+    master = getHead('master')
+    masterNode = getNode(master)
+
+Pruning the Cache
+=================
+
+Latest thoughts:
+    I think touch only needs to happen in __markDirty and in all interfaces
+    and recursive functions that are invoked from the Path code.  So I'm
+    pretty much back to where I was before.
+
+
+The easy way: traverse the tree, delete all non-dirty nodes
+
+The slightly harder, but still easy, way: keep a "touched" timestamp for every
+    node, traverse the tree and delete the oldest non-dirty children!
+
+    Except that traversing the tree and deleting the oldest non-dirty children
+    basically amounts to computing the LRU (or, at least, as much of the LRU
+    as we want to remove)
+
+Here's how a GC cycle should work:
+
+    for node in lru_to_mru
+        if !node.has_cached_children
+            node.release(release_from_parent=true)
+        cache_size -= node.cache_size
+        if cache_size < low_water_mark
+            break
+
+I think we can release a node with children, turning the algo into:
+
+    for node in lru_to_mru
+        node.release
+        cache_size -= node.cache_size
+        if cache_size < low_water_mark
+            break
+
+node.release gets simplified because we no longer care if the node is
+referenced from its children, and it's less important for us to touch() in the
+correct order (we otherwise want to touch so that children end up less recently
+used than the parent)  But node.release now also needs to release() all
+descendents, and we have to get the recursive cache size.
+
+
