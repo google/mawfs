@@ -1,1 +1,7 @@
 mawfs.log
+net_test.log
+mawfs-puller.log
+mawfs.bin
+mawfs.bin.o
+tmp/
+
