@@ -1,0 +1,52 @@
+
+[this is really just the beginnings of a design document, it's very incomplete]
+
+Introduction
+============
+
+MAWFS is an encrypted, distributed, branching filesystem intended for personal
+use, either stand-alone or integrated with other storage systems.
+
+MAWFS represents a filesystem as a set of content-addressable blocks arranged
+in a Merkle tree.  The history of the filesystem is stored as a DAG of
+"commit" objects, each of which points to the root of the filesystem at a
+given point in time.
+
+To obtain reasonable performance, MAWFS supplements the commit history with
+journals, which allow changes to be quickly and compactly applied to the
+latest commit.  Journals are transient entities, when a commit is generated
+(either as a result of explicit user action or due to the journal exceeding
+some size threshold) the latest journal is discarded.
+
+Blocks
+======
+
+Most of the data in MAWFS is stored in "blocks".  A block is a an encrypted
+sequence of data which can be of any size.  A block is indexed by the
+multihash of its ciphertext, referred to as the "digest" of the block.
+
+Known Issues
+============
+
+Small Objects
+'''''''''''''
+
+MAWFS blocks tend to be fairly small.  The Rabin-chunking algorithm used to
+break continuous data into chunks chooses a minimal chunk size of 2K (max of
+16K), and intermediate nodes (directory nodes, file inner nodes) have no fixed
+lower bound.
+
+These small object sizes may be problematic for deterministic encryption.
+
+Possible remediation strategies:
+
+-   Store multiple objects in a block. Reference objects using both a digest
+    and an offset, where the digest is that of a larger object that bundles
+    together a group of smaller objects.
+-   Certain very common objects (i.e. the empty file node and the empty
+    directory node) need not be persisted at all. They can be generated in
+    memory and cached as soon as the password is obtained.
+
+
+
+
