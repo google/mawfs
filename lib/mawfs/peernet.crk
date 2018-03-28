@@ -79,7 +79,11 @@ class PeerNetwork {
         context := Context(__chunkReader);
         factory := PeerServiceCommFactory(context);
         __log.info `starting server on $addr`;
-        __comm.startServer(addr, factory, true);
+        try {
+            __comm.startServer(addr, factory, true);
+        } catch (Exception ex) {
+            __log.error `Error starting server: $ex\n`;
+        }
     }
 
     void addPeer(Address addr) {
