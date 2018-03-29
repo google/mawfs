@@ -141,6 +141,9 @@ class MAWFSInstance @impl InstIFace {
             newName = __net.pullJournal(__root, name, true);
         }
 
+        if (!newName)
+            throw Exception('No peer was able to supply the branch.');
+
         jiter := __store.makeJournalIter(newName);
         if (!jiter) {
             # No journal.  Try pulling the commit.
