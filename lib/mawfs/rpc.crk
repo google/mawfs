@@ -177,9 +177,26 @@ class RemoteError : Exception {
     oper init(String message) : Exception(message) {}
 }
 
+## An InetAddress extended that retains its hostname (or IP address, if
+## created that way).
+class ExtendedAddress : InetAddress {
+    String __hostname;
+    oper init(String hostname, byte a, byte b, byte c, byte d, int port) :
+        InetAddress(a, b, c, d, port),
+        __hostname = hostname {
+    }
+
+    oper init(String hostname, uint32 addr, int port) :
+        InetAddress(addr, port),
+        __hostname = hostname {
+    }
+
+    String getHostname() { return __hostname }
+}
+
 ## Parse an address of the form host:port.  "host" may be either a hostname or
 ## an ip address.
-InetAddress parseAddr(String addr) {
+ExtendedAddress parseAddr(String addr) {
     int port;
     String host;
     if ((colon := addr.lfind(b':')) != -1) {
@@ -191,17 +208,17 @@ InetAddress parseAddr(String addr) {
     }
 
     # Now check for an ipv4 address.
-    InetAddress a;
+    ExtendedAddress a;
     if (m := IPV4_ADDR.match(host)) {
-        a = InetAddress(byte(parseInt(m.group(1))),
-                        byte(parseInt(m.group(2))),
-                        byte(parseInt(m.group(3))),
-                        byte(parseInt(m.group(4))),
-                        port
-                        );
+        a = ExtendedAddress(host, byte(parseInt(m.group(1))),
+                            byte(parseInt(m.group(2))),
+                            byte(parseInt(m.group(3))),
+                            byte(parseInt(m.group(4))),
+                            port
+                            );
     } else {
         addrs := resolve(host);
-        a = InetAddress(InetAddress.cast(addrs[0]).getAddr(), port);
+        a = ExtendedAddress(host, InetAddress.cast(addrs[0]).getAddr(), port);
     }
     return a;
 }

@@ -14,13 +14,12 @@
 # limitations under the License.
 
 import crack.ascii hex, radix;
-import crack.cmdline CmdOptions, Option, CMD_STR;
+import crack.cmdline CmdOptions, Option, CMD_INT, CMD_STR;
 import crack.enc.base64 altDecode, altEncode;
 #import crack.exp.fuse fuseMain = main, LockedFilesystem, NodeImpl;
 import crack.lang Exception, InvalidArgumentError, SystemError;
 
 import crack.fs cwd, makePath, Path;
-import crack.net Address;
 import crack.process Process, CRK_PIPE_STDERR, CRK_PIPE_STDOUT;
 import crack.runtime abort, backtrace, close, free, getLocation, isatty,
     memcmp, open, sigaction, strlen, SigAction, SigInfo, O_RDONLY,
@@ -50,7 +49,7 @@ import mawfs.flows MAWFSInstance;
 import mawfs.params ParamInfo;
 import mawfs.peernet PeerNetwork, RemoteReaderImpl;
 import mawfs.rawchunk RawChunkReader;
-import mawfs.rpc parseAddr, setInst, PeerProxy;
+import mawfs.rpc parseAddr, setInst, ExtendedAddress, PeerProxy;
 import mawfs.util traverse;
 
 @import crack.ann impl;
@@ -128,6 +127,16 @@ void usage() {
         Usage:
             mawfs run <backing> <mountpoint>
                 Mount a mawfs filesystem.
+            mawfs create <backing> [options]
+                Create a new MAWFS instance.
+            mawfs clone <peer-address> <backing-store>
+                Clone the remote peer into the give backing directory.
+                The remote peer is in the form address:port.  The backing
+                directory must not already exist.
+            mawfs pull <addr> <branch> [peer]
+                Pull the branch.  'addr' is the mawfs instance address. You
+                may optionally specify a peer to pull the branch from a
+                specific peer, otherwise the instance will just select one.
             mawfs hash <filename> ...
                 Show file hashes.
                 the correct way to do this.
@@ -249,10 +258,152 @@ ChunkStore makeChunkStore(Path backingDir) {
     return ChunkStore(backingDir, FSInfo(params.cipher));
 }
 
+## Parse a peer adress or exit with an error message.
+ExtendedAddress parsePeerAddr(String arg) {
+    try {
+        return parseAddr(arg);
+    } catch (Exception ex) {
+        cerr I`Invalid address specification for peer address: \
+               $arg\n`;
+        exit(1);
+        return null;
+    }
+}
+
 opts := CmdOptions![
     Option('logfile', 'l', 'logfile name', 'mawfs.log', CMD_STR),
     Option('branch', 'b', 'branch name', 'master', CMD_STR),
+    Option('port', 'p', 'port number', '9119', CMD_INT),
 ];
+
+class CommandManager {
+
+    # Root of the backing store.
+    Path rootDir;
+    StringArray args;
+
+    oper init(StringArray args) : args = args {}
+
+    void checkArgs(int count, String message) {
+        args = opts.parse();
+        if (args.count() != count) {
+            cerr `$message\n`;
+            exit(1);
+        }
+    }
+
+    void checkArgsAtLeast(int minCount, String message) {
+        args = opts.parse();
+        if (args.count() < minCount) {
+            cerr `$message\n`;
+            exit(1);
+        }
+    }
+
+    void initLogs() {
+        setLogFile(opts.getString('logfile'));
+        setLogLevel(DEBUG);
+    }
+
+    ## Initialize the backing store and its config, giving an error if it
+    ## doesn't exist.
+    void initBackingStore(String arg) {
+        rootDir = makePath(arg);
+        if (rootDir.exists()) {
+            cerr `Directory $rootDir already exists\n`;
+            exit(1);
+        }
+
+        # Create a peer config if "port" is specified.
+        if (port := opts.getString('port')) {
+            (rootDir/'config').makeDirs();
+            StandardFormatter((rootDir/'config'/'peers').writer()) I`\
+                [server]
+                port = $port
+                `;
+        }
+    }
+
+    ## Create the chunk store, also initializing the params file in the
+    ## backing store if it doesn't exist.
+    void makeChunkStore() {
+        makeChunkStore(rootDir);
+    }
+
+    ## Write instructions for running the command.
+    void showRunInstructions() {
+        cerr `"mawfs run $rootDir <mount-point>" to begin using it.\n`;
+    }
+
+    ## The "clone" command.
+    void clone() {
+        checkArgs(4, 'Usage: mawfs clone <peer-address> <backing-dir>\n');
+        initLogs();
+        initBackingStore(args[3]);
+
+        # Need to share all of this code with 'pull'.
+        peerAddr := parsePeerAddr(args[2]);
+        password := readPassword();
+
+        # Only need a raw chunk reader if we're running a server, so we
+        # can give it a null.
+        net := PeerNetwork(null);
+        net.addPeer(peerAddr);
+
+        # If there's no params file, get one.
+        paramInfo := net.pullParams(rootDir, password);
+        if (!paramInfo) {
+            cerr `No peers found.\n`;
+            exit(1);
+        }
+        store := ChunkStore(rootDir, FSInfo(paramInfo.cipher));
+
+        store.setRemoteReader(RemoteReaderImpl(net));
+
+        master := net.getHead('master').head;
+        cerr `master is $(altEncode(master))\n`;
+        net.pullJournal(rootDir, 'master', false);
+
+        cerr `getting head\n`;
+        head := store.getCommit(master);
+        traverse(store, head);
+
+        cerr `writing master...\n`;
+        refsDir := rootDir/'refs';
+        refsDir.makeDirs();
+        (refsDir/'master').writeAll(altEncode(master));
+
+        # Update the peers file with the new peer.
+        peers := (rootDir/'config/peers').readAll();
+        peersOut :=
+            StandardFormatter((rootDir/'config/peers').writer());
+        peersOut.write(peers);
+        peersOut I`
+            [peer-origin]
+            host = $(peerAddr.getHostname())
+            port = $(peerAddr.getPort())
+            `;
+        showRunInstructions();
+    }
+
+    ## The "create" command.
+    void create() {
+        initLogs();
+        initBackingStore(args[2]);
+        makeChunkStore();
+        cerr I`MAWFS Cell created\n`;
+        showRunInstructions();
+    }
+
+    ## The "pull" command.
+    void pull() {
+        checkArgs(4, "Usage: mawfs pull <addr> <branch> [peer]\n");
+        setLogLevel(DEBUG);
+        makeRPC(args[2]).pullBranch(args[3],
+                                    (args.count() > 4) ? args[4] : null
+                                    );
+    }
+}
 
 # The main function, which is a command dispatcher.
 void main() {
@@ -261,30 +412,16 @@ void main() {
         usage();
         exit(1);
     }
+    cm := CommandManager(args);
 
     try {
         cmd := args[1];
         if (cmd == 'hash') {
-            if (args.count() < 3) {
-                cerr `No files specified\n`;
-                exit(1);
-            }
+            cm.checkArgsAtLeast(3, "Usage: mawfs hash <filename> ...\n");
             for (file :in args.subarray(2))
                 cout `$(hex(hashFile(makePath(file)))) $file\n`;
-        } else if (cmd == 'mount') {
-            cerr `"mount" doesn't work, use "run"]\n`;
-            exit(1);
-#            if (args.count() != 4) {
-#                cerr `Usage: mawfs mount <backing-store> <mount-point>\n`;
-#                exit(1);
-#            }
-#
-#            mount(args[2], args[3]);
         } else if (cmd == 'storechunk') {
-            if (args.count() != 3) {
-                cerr `Usage: mawfs storechunk <src-file>`;
-                exit(1);
-            }
+            cm.checkArgs(3, "Usage: mawfs storechunk <src-file>\n");
 
             # Read the file contents.
             src := getReader(args[2]);
@@ -296,10 +433,7 @@ void main() {
             digest := store.store(contents);
             cout `$(hex(digest))\n`;
         } else if (cmd == 'loadchunk') {
-            if (args.count() != 3) {
-                cerr `Usage: mawfs loadchunk <hash>\n`;
-                exit(1);
-            }
+            cm.checkArgs(3, "Usage: mawfs loadchunk <hash>\n");
 
             store := makeChunkStore(cwd);
             chunk := store.load(altDecode(args[2]));
@@ -308,10 +442,7 @@ void main() {
             else
                 cout `$(chunk.contents)`;
         } else if (cmd == 'commit') {
-            if (args.count() < 3) {
-                cerr I`Usage: commit <mount-point>\n`;
-                exit(1);
-            }
+            cm.checkArgsAtLeast(3, "Usage: commit <mount-point> ...\n");
 
             fd := open(args[2].buffer, O_RDONLY, 0);
             if (fd == -1) {
@@ -322,12 +453,16 @@ void main() {
                 close(fd);
                 cerr `Synced.\n`;
             }
+        } else if (cmd == 'create') {
+            cm.create();
+        } else if (cmd == 'clone') {
+            cm.clone();
         } else if (cmd == 'run') {
-            if (args.count() < 4) {
-                cerr I`Usage: mawfs run [-b branch] <backing-dir> [fuse-options] \
-                       <mount-point>\n`;
-                exit(1);
-            }
+            cm.checkArgsAtLeast(
+                4,
+                I"Usage: mawfs run [-b branch] <backing-dir> [fuse-options] \
+                  <mount-point>\n"
+            );
 
             sa := SigAction();
             sa.sa_sigaction = trapHandler;
@@ -375,72 +510,12 @@ void main() {
                 }
             }
 
+            cerr `XXXX fuse args = $fuseArgs\n`;
             runFuse(chunkStore, fuseArgs, opts.getString('branch'), mutex,
                     PeerNetModule(configStore, chunkReader, chunkStore, rootDir)
                     );
-        } else if (cmd == 'pull') {
-            if (args.count() != 4) {
-                cerr `Usage: mawfs pull <peer-address> <backing-dir>\n`;
-                exit(1);
-            }
-
-            Address peerAddr;
-            try {
-                peerAddr = parseAddr(args[2]);
-            } catch (Exception ex) {
-                cerr I`Invalid address specification for peer address: \
-                       $(args[2])\n`;
-                exit(1);
-            }
-            backingDirName := args[3];
-
-            setLogFile('mawfs-puller.log');
-            setLogLevel(DEBUG);
-
-            # Create the directory if it doesn't exist.
-            backingDir := makePath(backingDirName);
-            backingDir.makeDirs();
-
-            password := readPassword();
-
-            # Only need a raw chunk reader if we're running a server, so we
-            # can give it a null.
-            net := PeerNetwork(null);
-            net.addPeer(peerAddr);
-
-            # If there's no params file, get one.
-            ChunkStore store;
-            if (!(backingDir/'params').exists()) {
-                paramInfo := net.pullParams(backingDir, password);
-                if (!paramInfo) {
-                    cerr `No peers found.\n`;
-                    exit(1);
-                }
-                store = ChunkStore(backingDir, FSInfo(paramInfo.cipher));
-            } else {
-                store = ChunkStore(backingDir, FSInfo(password));
-                # TODO: verify that the params are the same.
-            }
-
-            store.setRemoteReader(RemoteReaderImpl(net));
-
-            master := net.getHead('master').head;
-            cerr `master is $(altEncode(master))\n`;
-            net.pullJournal(backingDir, 'master', false);
-
-            cerr `getting head\n`;
-            head := store.getCommit(master);
-            traverse(store, head);
-
-            cerr `writing master...\n`;
-            refsDir := backingDir/'refs';
-            refsDir.makeDirs();
-            (refsDir/'master').writeAll(altEncode(master));
         } else if (cmd == 'dump') {
-            if (args.count() != 3) {
-                cerr I`Usage: mawfs dump <path>`;
-                exit(1);
-            }
+            cm.checkArgs(3, "Usage: mawfs dump <path>");
 
             password := readPassword();
 
@@ -458,16 +533,8 @@ void main() {
             Node node = {};
             readMessageFromString(node, chunk.contents);
             dumpNode(cout, node);
-        } else if (cmd == 'fetch') {
-            if (args.count() < 4 || args.count() > 5) {
-                cerr I`Usage: mawfs fetch <addr> <branch> [peer]\n`;
-                exit(1);
-            }
-
-            setLogLevel(DEBUG);
-            makeRPC(args[2]).pullBranch(args[3],
-                                        (args.count() > 4) ? args[4] : null
-                                        );
+        } else if (cmd == 'pull') {
+            cm.pull();
         } else {
             cerr `Unknown command: $cmd\n`;
             usage();
