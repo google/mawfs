@@ -332,7 +332,7 @@ class ParamsTest : TestCase {
  }
 ParamsTest().exec();
 
-class PullTest : TestCase {
+class CloneTest : TestCase {
     Path backing2, fs2;
 
     void setUp() {
@@ -350,7 +350,7 @@ class PullTest : TestCase {
         (makePath('backing')/'config/peers').writeAll('[server]\nport = 12543\n');
         (makePath('fs')/'foo').writeAll('test file contents');
         restartFS('master');
-        runMawfs(StringArray!['pull', 'localhost:12543', 'backing2']);
+        runMawfs(StringArray!['clone', 'localhost:12543', 'backing2']);
         @assert((backing2/'params').exists());
         fs2.makeDir();
         runMawfs(StringArray!['run', 'backing2', 'fs2']);
@@ -367,7 +367,7 @@ class PullTest : TestCase {
         TestCase.tearDown();
     }
 }
-PullTest().exec();
+CloneTest().exec();
 
 if (gotFailures)
     exit(1);
