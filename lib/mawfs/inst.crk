@@ -1,0 +1,213 @@
+# Copyright 2018 Google Inc. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import crack.cont.hashmap HashMap;
+import crack.fs Path;
+import crack.io SeekableReader, SeekableWriter;
+import crack.lang InvalidStateError;
+import crack.logger info;
+import crack.threads Mutex, MutexLock;
+
+import .alt ResidentBranches;
+import .blockstore Commit, Node, NodeStore, MODE_DIR;
+import .cache Tree;
+import .path MAWFSPath;
+
+@import crack.ann define, interface;
+
+class FileInfo {
+
+    ## File Handle.
+    uint64 fh;
+
+    SeekableReader reader;
+    SeekableWriter writer;
+
+    oper init(uint64 fh, SeekableReader reader, SeekableWriter writer) :
+        fh = fh,
+        reader = reader,
+        writer = writer {
+    }
+}
+
+## Object that can be atteched to the filesystem, allowing the creating
+## process to inject functionality to be executed in the forked process.
+@interface UserModule {
+
+    ## Start the module.  Called during filesystem initialization.
+    @abstract void start();
+}
+
+## Manages the mutable state of the entire MAWFS instance.
+##
+## Before using any methods in this class, a client must acquire a MutexLock by
+## calling the lock() method.  The client must retain this lock for the
+## duration of its sesion with the InstanceManager.  The methods of this class
+## will throw an InvalidStateError if a lock is not active.
+class InstanceState {
+
+    # Keeps track of whether the instance is currently locked (via the mutex).
+    bool __locked;
+    Mutex __mutex;
+
+    NodeStore __store;
+    Tree __tree;
+    HashMap[int, FileInfo] __files = {};
+
+    String __branch;
+    UserModule __userModule;
+
+    # Current root path of the instance.
+    Path __root;
+
+    class __Lock : MutexLock {
+        InstanceState __state;
+
+        oper init(Mutex mutex, InstanceState state) :
+            MutexLock(mutex),
+            __state = state {
+            __state.__locked = true;
+        }
+
+        oper del() {
+            __state.__locked = false;
+        }
+    }
+
+    ## userModule may be null.
+    oper init(NodeStore store, String branch, Mutex mutex,
+              UserModule userModule
+              ) :
+        __mutex = mutex,
+        __store = store,
+        __tree(store, branch),
+        __branch = branch,
+        __userModule = userModule {
+
+        cachedRoot := __tree.getRoot();
+
+        # Create the set of resident branches and attach it to the root node
+        # context.
+        ctx := cachedRoot.getContext();
+        branches := ResidentBranches(store, ctx.getCache());
+        branches.putIn(ctx);
+
+        __root = MAWFSPath(cachedRoot);
+    }
+
+    ## Returns a lock on the instance state.  Clients must retain this lock
+    ## object for the duration of their session with InstanceState or any
+    ## objects managed by it.  Attempting to call
+    MutexLock lock() {
+        return __Lock(__mutex, this);
+    }
+
+    @define checkLock() {
+        if (!__locked)
+            throw InvalidStateError('Inatance not locked.');
+    }
+
+    ## Returns the latest commit digest on the current branch.
+    String getHead() {
+        @checkLock();
+        return __store.getHead(__branch);
+    }
+
+    void setHead(String commitDigest) {
+        @checkLock();
+        __store.setHead(__branch, commitDigest);
+    }
+
+    ## Calls the start() method of the UserModule, if there is one.
+    void start() {
+        @checkLock();
+        if (__userModule)
+            __userModule.start();
+    }
+
+    ## Does a full commit on the tree (see Tree.commit()).
+    void commit() {
+        @checkLock();
+        __tree.commit();
+    }
+
+    ## Returns the root path.
+    Path getRoot() {
+        @checkLock();
+        return __root;
+    }
+
+    void setRoot(Path root) {
+        @checkLock();
+        __root = root;
+    }
+
+    ## Store a new FileInfo object for the given reader and writer.
+    FileInfo makeFileInfo(SeekableReader reader, SeekableWriter writer) {
+        @checkLock();
+
+        # Find the first unused handle
+        uint64 fh = 0;
+        while (__files.hasKey(fh))
+            ++fh;
+
+        # Create, store and return it.
+        fi := FileInfo(fh, reader, writer);
+        __files[fh] = fi;
+        return fi;
+    }
+
+    ## Gets the fileinfo object, returns null if not defined.
+    FileInfo getFileInfo(int fh) {
+        @checkLock();
+        return __files.get(fh);
+    }
+
+    ## Delete the fileinfo for the filehandle.
+    void deleteFileInfo(int fh) {
+        @checkLock();
+        __files.delete(fh);
+    }
+
+    ## Gets the root directory of the filesystem.
+    Path getRoot() {
+        @checkLock();
+        return __root;
+    }
+
+    ## Create a new state object, creating a new commit node and root node if
+    ## necessary.
+    @static InstanceState create(NodeStore store, String branch, Mutex mutex,
+                                 UserModule userModule
+                                 ) {
+        # Get the existing root node or create one if this is an empty filesystem.
+        commitDigest := store.getHead(branch);
+        if (!commitDigest) {
+            info `creating new filesystem`;
+
+            # Create an empty root node.
+            rootNode := Node();
+            rootNode.mode = MODE_DIR;
+            rootDigest := store.storeNode(rootNode);
+
+            # Store the first commit under "master".
+            commit := Commit();
+            commit.root = rootDigest;
+            commitDigest := store.storeCommit(commit);
+            store.setHead(branch, commitDigest);
+        }
+
+        return InstanceState(store, branch, mutex, userModule);
+    }
+}

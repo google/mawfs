@@ -30,102 +30,25 @@ import crack.threads Mutex, MutexLock;
 import mawfs.path MAWFSPath;
 import mawfs.cache CachedNode, NodeContext, Tree;
 
-import .alt ResidentBranches;
+import .inst FileInfo, InstanceState, UserModule;
 
 @import crack.ann interface;
 
 const int ENOSYS = 38, ENOTEMPTY = 39, EISDIR = 21;
 
-## Stores information on an open file.
-class FileInfo {
-
-    ## File Handle.
-    uint64 fh;
-
-    SeekableReader reader;
-    SeekableWriter writer;
-
-    oper init(uint64 fh, SeekableReader reader, SeekableWriter writer) :
-        fh = fh,
-        reader = reader,
-        writer = writer {
-    }
-}
-
-## Object that can be atteched to the filesystem, allowing the creating
-## process to inject functionality to be executed in the forked process.
-@interface UserModule {
-
-    ## Start the module.  Called during filesystem initialization.
-    @abstract void start();
-}
-
-## A globally-locked filesystem.  A filesystem is "pointed at" a backing store
-## and a branch.
-class LockedFilesystem {
-    Mutex mutex = {};
-    NodeStore store;
-    Tree __tree;
-    Path root;
-    HashMap[int, FileInfo] files = {};
-    String __branch;
-    UserModule __userModule;
-
-    ## Returns the latest commit digest on the current branch.
-    String getHead() {
-        return store.getHead(__branch);
-    }
-
-    ## userModule may be null.
-    oper init(NodeStore store, String branch, Mutex mutex,
-              UserModule userModule
-              ) :
-        mutex = mutex,
-        store = store,
-        __tree(store, branch),
-        __branch = branch,
-        __userModule = userModule {
-
-        cachedRoot := __tree.getRoot();
-
-        # Create the set of resident branches and attach it to the root node
-        # context.
-        ctx := cachedRoot.getContext();
-        branches := ResidentBranches(store, ctx.getCache());
-        branches.putIn(ctx);
-
-        root = MAWFSPath(cachedRoot);
-    }
-
-    void setHead(String commitDigest) {
-        store.setHead(__branch, commitDigest);
-    }
-
-    ## Calls the start() method of the UserModule, if there is one.
-    void start() {
-        if (__userModule)
-            __userModule.start();
-    }
-
-    ## Does a full commit on the tree (see Tree.commit()).
-    void commit() {
-        __tree.commit();
-    }
-}
-
 ## A filesystem context.  This is created when we come into a fuse entrypoint
 ## and must be destroyed when the operation is complete.
 class Context {
-    LockedFilesystem __fs;
+    InstanceState __fs;
     MutexLock __lock;
 
-    oper init(LockedFilesystem fs) :
+    oper init(InstanceState fs) :
         __fs = fs,
-        __lock = MutexLock(__fs.mutex) {
+        __lock = __fs.lock() {
     }
 
     @static Context get() {
-        fs := LockedFilesystem.unsafeCast(get_context().private_data);
+        fs := InstanceState.unsafeCast(get_context().private_data);
         context := Context(fs);
         return context;
     }
@@ -137,11 +60,11 @@ class Context {
 
         # Special case the root directory.
         if (pathStr == '/')
-            return __fs.root;
+            return __fs.getRoot();
 
         # Look up the Path object, return null if we get to a non-directory.
         components := split(pathStr, b'/');
-        cur := __fs.root;
+        cur := __fs.getRoot();
         for (int i = 1; i < components.count(); ++i) {
             if (cur && cur.isDir())
                 cur = cur[components[i]];
@@ -153,18 +76,15 @@ class Context {
     }
 
     FileInfo makeFileInfo(SeekableReader reader, SeekableWriter writer) {
-        fh := __fs.files.count() + 1;
-        fi := FileInfo(fh, reader, writer);
-        __fs.files[fh] = fi;
-        return fi;
+        return __fs.makeFileInfo(reader, writer);
     }
 
     FileInfo getFileInfo(uint64 fh) {
-        return __fs.files.get(fh);
+        return __fs.getFileInfo(fh);
     }
 
     void deleteFileInfo(uint64 fh) {
-        __fs.files.delete(fh);
+        __fs.deleteFileInfo(fh);
     }
 
     void commit() {
@@ -173,7 +93,8 @@ class Context {
 }
 
 voidptr _init(FuseConnInfo connInfo) {
-    fs := LockedFilesystem.unsafeCast(get_context().private_data);
+    fs := InstanceState.unsafeCast(get_context().private_data);
+    lock := fs.lock();
     fs.start();
     return fs;
 }
@@ -498,7 +419,7 @@ int _unlink(byteptr path) {
 
 ## Does fuse_main().  Do this if you're implementing a simple
 ## filesystem-per-process.
-int main(StringArray argv, LockedFilesystem fs) {
+int main(StringArray argv, InstanceState fs) {
     ops := FuseOperations();
     ops.init = _init;
     ops.getattr = _getattr;
@@ -523,31 +444,14 @@ int main(StringArray argv, LockedFilesystem fs) {
     ops.unlink = _unlink;
 
     # Create another link to the root object so we can safely exit.
-    fs.root.oper bind();
+    # "if" is just sorcery for the lack of "with"
+    if (lock := fs.lock()) {
+        fs.getRoot().oper bind();
+    }
     return fuse_main(argv.count(), argv.makePrimArray(), ops, fs);
 }
 
 ## mutex: the mutex that locks the entire filesystem
-void runFuse(NodeStore store, StringArray argv, String branch, Mutex mutex,
-             UserModule userModule
-             ) {
-
-    # Get the existing root node or create one if this is an empty filesystem.
-    commitDigest := store.getHead(branch);
-    if (!commitDigest) {
-        info `creating new filesystem`;
-
-        # Create an empty root node.
-        rootNode := Node();
-        rootNode.mode = MODE_DIR;
-        rootDigest := store.storeNode(rootNode);
-
-        # Store the first commit under "master".
-        commit := Commit();
-        commit.root = rootDigest;
-        commitDigest := store.storeCommit(commit);
-        store.setHead(branch, commitDigest);
-    }
-
-    main(argv, LockedFilesystem(store, branch, mutex, userModule));
+void runFuse(InstanceState instState, StringArray argv) {
+    main(argv, instState);
 }

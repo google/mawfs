@@ -44,8 +44,9 @@ import crack.threads Mutex;
 import mawfs.blockstore hashFile, ChunkStore, FSInfo, Node, BLOCK_SIZE;
 import mawfs.configstore ConfigStore;
 import mawfs.entropy DeviceEntropySource;
-import mawfs.fuse runFuse, UserModule;
+import mawfs.fuse runFuse;
 import mawfs.flows MAWFSInstance;
+import mawfs.inst InstanceState, UserModule;
 import mawfs.params ParamInfo;
 import mawfs.peernet PeerNetwork, RemoteReaderImpl;
 import mawfs.rawchunk RawChunkReader;
@@ -510,10 +511,12 @@ void main() {
                 }
             }
 
-            cerr `XXXX fuse args = $fuseArgs\n`;
-            runFuse(chunkStore, fuseArgs, opts.getString('branch'), mutex,
-                    PeerNetModule(configStore, chunkReader, chunkStore, rootDir)
-                    );
+            instState := InstanceState.create(
+                chunkStore, opts.getString('branch'),
+                mutex,
+                PeerNetModule(configStore, chunkReader, chunkStore, rootDir)
+            );
+            runFuse(instState, fuseArgs);
         } else if (cmd == 'dump') {
             cm.checkArgs(3, "Usage: mawfs dump <path>");
 
