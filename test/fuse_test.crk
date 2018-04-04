@@ -355,10 +355,15 @@ class CloneTest : TestCase {
         fs2.makeDir();
         runMawfs(StringArray!['run', 'backing2', 'fs2']);
         @assert((fs2/'foo').readAll() == 'test file contents');
+
+        # Now try doing a "pull" and verify that we see the update in the
+        # new filesystem.
+        (makePath('fs')/'bar').writeAll('more file contents');
+        runMawfs(StringArray!['pull', 'localhost:9119', 'master']);
+        @assert((fs2/'bar').readAll() == 'more file contents');
     }
 
     void tearDown() {
-        cerr `tearing down\n`;
         stopFS('fs2');
         if (backing2.exists())
             backing2.deleteTree();

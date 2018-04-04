@@ -3,11 +3,12 @@
 import crack.fs Path;
 import crack.functor Functor0;
 import crack.lang Exception;
-import crack.logger debug, info;
+import crack.logger debug, error, info;
 import crack.threads Mutex, MutexLock, Queue, Thread;
 
 import .blockstore ChunkStore, Commit;
 import .cache Cache, NodeContext;
+import .inst InstanceState;
 import .peernet PeerNetwork;
 import .rawchunk GeneralCallback;
 import .rpc InstIFace;
@@ -71,6 +72,8 @@ ThreadPool __pool = {};
             try {
                 result = (action);
             } catch (Exception ex) {
+                actionName := $action;
+                error `Got exception in task $actionName: $ex`;
                 exception = ex;
             }
             callback(result, exception);
@@ -80,13 +83,11 @@ ThreadPool __pool = {};
 
 import crack.io cerr;
 class MAWFSInstance @impl InstIFace {
-    Path __root;
-    ChunkStore __store;
+    InstanceState __state;
     PeerNetwork __net;
 
-    oper init(Path root, ChunkStore store, PeerNetwork net) :
-        __root = root,
-        __store = store,
+    oper init(InstanceState state, PeerNetwork net) :
+        __state = state,
         __net = net {
     }
 
@@ -95,15 +96,17 @@ class MAWFSInstance @impl InstIFace {
     ## TODO: Improve this algorithm.  We're just using a simple recursive
     ## depth-first search for this, that's bound to be inefficient considering
     ## the way branching is likely to play out.
-    bool derivesFrom(String commitDigest, String ancestorDigest) {
+    ##
+    ## Requires a lock on the instance state.
+    bool __derivesFrom(String commitDigest, String ancestorDigest) {
         if (commitDigest == ancestorDigest)
             return true;
 
-        commit := __store.getCommit(commitDigest);
+        commit := __state.getStore().getCommit(commitDigest);
         bool result;
         if (commit.parent) {
             for (parent :in commit.parent) {
-                if (derivesFrom(parent, ancestorDigest))
+                if (__derivesFrom(parent, ancestorDigest))
                     result = true;
             }
         }
@@ -115,36 +118,42 @@ class MAWFSInstance @impl InstIFace {
     ## later commit or it may be a commit that the later commit derives from.
     ##
     ## If the later commit does not derive from the current one, returns null.
-    Commit getFollowingCommit(String curCommitDigest, String laterCommitDigest) {
-        commit := __store.getCommit(laterCommitDigest);
+    ##
+    ## Requires a lock on the instance state.
+    Commit __getFollowingCommit(String curCommitDigest, String laterCommitDigest) {
+        commit := __state.getStore().getCommit(laterCommitDigest);
         for (parent :in commit.parent) {
             if (parent == curCommitDigest)
                 return commit;
-            else if (c := getFollowingCommit(curCommitDigest, parent))
+            else if (c := __getFollowingCommit(curCommitDigest, parent))
                 return c;
         }
         return null;
     }
 
-    ## Pull a branch from a peer to the local instance.  This can result in the
-    ## production of a tracking branch.
-    String pullBranch(String name, String peer) {
-        localHead := __store.getHead(name);
+    ## Helper function for __pullBranch, does everything but update the local
+    ## tree.
+    ##
+    ## Requires a lock on the instance state.
+    String __pullBranch(String name, String peer) {
+        backing := __state.getBacking();
+        store := __state.getStore();
+        localHead := store.getHead(name);
         String newName;
         if (!localHead) {
             # The branch isn't present locally, so we can pull it.
-            __net.pullJournal(__root, name, false);
+            __net.pullJournal(backing, name, false);
             newName = name;
         } else {
             # Pull the journal to a temporary name. (This returns a temporary
             # name even if there's no remote journal).
-            newName = __net.pullJournal(__root, name, true);
+            newName = __net.pullJournal(backing, name, true);
         }
 
         if (!newName)
             throw Exception('No peer was able to supply the branch.');
 
-        jiter := __store.makeJournalIter(newName);
+        jiter := store.makeJournalIter(newName);
         if (!jiter) {
             # No journal.  Try pulling the commit.
             headAndPeer := __net.getHead(name);
@@ -153,21 +162,21 @@ class MAWFSInstance @impl InstIFace {
             head := headAndPeer.head;
 
             # If our commit is derived from the remote commit, we're done.
-            if (localHead && derivesFrom(localHead, head))
+            if (localHead && __derivesFrom(localHead, head))
                 return name;
 
             # If there is a local journal for the branch, check to see if the
             # new commit includes all changes.
             # XXX This won't work if there are a few commits in between, need
             # to get the commit immediately following this one.
-            localJiter := __store.makeJournalIter(name);
+            localJiter := store.makeJournalIter(name);
             if (localJiter) {
                 # Note that if we get here, there's a local journal so we're
                 # assuming newName is the name of a tracking branch.
-                commit := getFollowingCommit(localHead, head);
+                commit := __getFollowingCommit(localHead, head);
                 bool incompatible;
                 if (commit.journalInfo) {
-                    nodeCtx := NodeContext(__store, Cache(), name);
+                    nodeCtx := NodeContext(store, Cache(), name);
                     sessionIds := nodeCtx.getJournalInfo(commit.journalInfo);
 
                     # Verify that all sessions that are in the local journal
@@ -189,7 +198,7 @@ class MAWFSInstance @impl InstIFace {
                 # If the new commit subsumes the local journal, delete the
                 # local journal.
                 if (!incompatible) {
-                    (__root/'journals'/name).delete();
+                    (backing/'journals'/name).delete();
                     newName = name;
 
                 # Otherwise make sure we've changed the name (even if there's
@@ -197,29 +206,29 @@ class MAWFSInstance @impl InstIFace {
                 } else if (name == newName) {
                     newName = headAndPeer.peer + ':' + name;
                 }
-            } else if (localHead && derivesFrom(head, localHead)) {
+            } else if (localHead && __derivesFrom(head, localHead)) {
                 # There's no journals and the new head derives from the local
                 # head. We're going to want to store the new head and we can
                 # subsume the old branch.
                 newName = name;
             }
 
-            __store.setHead(newName, head);
+            store.setHead(newName, head);
             return newName;
         }
-        __store.setHead(newName, newHead := jiter.elem().change.commit);
+        store.setHead(newName, newHead := jiter.elem().change.commit);
 
         if (name == newName) {
             return name;
         } else {
             # There was an existing branch, compare it to the new one.
-            localJiter := __store.makeJournalIter(name);
+            localJiter := store.makeJournalIter(name);
             if (!localJiter) {
                 # No local journal - we're done unless the new commit derives
                 # from the old one.  If that's true, fall through and we'll
                 # enter the logic for "a remote journal extending a local
                 # journal" below.
-                if (!derivesFrom(newHead, localHead))
+                if (!__derivesFrom(newHead, localHead))
                     return newName;
             } else if (!localJiter || localJiter.elem().change.commit != newHead) {
                 return newName;
@@ -236,20 +245,36 @@ class MAWFSInstance @impl InstIFace {
                 # The new journal extends the old one.  We can just accept the
                 # new journal.
                 # TODO: move the "move branch" functionality to the chunk store.
-                (__root/'journals'/newName).moveTo(__root/'journals'/name);
-                (__root/'refs'/newName).moveTo(__root/'refs'/name);
+                (backing/'journals'/newName).moveTo(backing/'journals'/name);
+                (backing/'refs'/newName).moveTo(backing/'refs'/name);
                 return name;
             } else if ((localJiter && !jiter) || (!jiter && !localJiter)) {
                 # Either the journals are the same or the old journal extends
                 # the new one, we can just discard the new journal.
-                (__root/'journals'/newName).delete();
-                (__root/'refs'/newName).delete();
+                (backing/'journals'/newName).delete();
+                (backing/'refs'/newName).delete();
                 return name;
             } else {
                 # In any other case, the journals diverge.
                 return newName;
             }
         }
+    }
+
+    ## Pull a branch from a peer to the local instance.  This can result in the
+    ## production of a tracking branch.   Returns the name of the new branch,
+    ## which is the same as 'branch' unless a tracking branch is created.
+    ## If the branch is the current branch for the instance, the instance is
+    ## updated.
+    ##
+    ## 'peer' is the peer to try to pull from.  It can be null, in which case
+    ## we attempt to pull from any peer.
+    String pullBranch(String branch, String peer) {
+        lock := __state.lock();
+        result := __pullBranch(branch, peer);
+        if (result == __state.getBranch())
+            __state.resetTree();
+        return result;
     }
 
     ## RPC service for pullBranch.  Starts the call off in a new thread.

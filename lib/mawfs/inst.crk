@@ -61,6 +61,9 @@ class InstanceState {
     bool __locked;
     Mutex __mutex;
 
+    # Current backing directory.
+    Path __backing;
+
     NodeStore __store;
     Tree __tree;
     HashMap[int, FileInfo] __files = {};
@@ -85,25 +88,41 @@ class InstanceState {
         }
     }
 
-    ## userModule may be null.
-    oper init(NodeStore store, String branch, Mutex mutex,
-              UserModule userModule
-              ) :
-        __mutex = mutex,
-        __store = store,
-        __tree(store, branch),
-        __branch = branch,
-        __userModule = userModule {
-
+    ## Reset the tree and the root node to the latest commit and journal on
+    ## the branch.
+    ## Do this when the journal changes from an external source (like a branch
+    ## pull).
+    void resetTree() {
+        __tree = Tree(__store, __branch);
         cachedRoot := __tree.getRoot();
 
         # Create the set of resident branches and attach it to the root node
         # context.
         ctx := cachedRoot.getContext();
-        branches := ResidentBranches(store, ctx.getCache());
+        branches := ResidentBranches(__store, ctx.getCache());
         branches.putIn(ctx);
 
         __root = MAWFSPath(cachedRoot);
+    }
+
+    ## Constructor.
+    ##
+    ## backing: the root of the backing directory.
+    ## store: the node store
+    ## branch: the active branch name
+    ## mutex: the filesystem mutex
+    ## userModule: a user module to be started when the fuse system is
+    ##     initialized.  May be null.
+    oper init(Path backing, NodeStore store, String branch, Mutex mutex,
+              UserModule userModule
+              ) :
+        __mutex = mutex,
+        __backing = backing,
+        __store = store,
+        __branch = branch,
+        __userModule = userModule {
+
+        resetTree();
     }
 
     ## Returns a lock on the instance state.  Clients must retain this lock
@@ -118,6 +137,12 @@ class InstanceState {
             throw InvalidStateError('Inatance not locked.');
     }
 
+    ## Returns the backing directory.
+    Path getBacking() {
+        @checkLock();
+        return __backing;
+    }
+
     ## Returns the latest commit digest on the current branch.
     String getHead() {
         @checkLock();
@@ -127,6 +152,12 @@ class InstanceState {
     void setHead(String commitDigest) {
         @checkLock();
         __store.setHead(__branch, commitDigest);
+    }
+
+    ## Returns the current branch name.
+    String getBranch() {
+        @checkLock();
+        return __branch;
     }
 
     ## Calls the start() method of the UserModule, if there is one.
@@ -186,9 +217,16 @@ class InstanceState {
         return __root;
     }
 
+    ## Returns the node store.
+    NodeStore getStore() {
+        @checkLock();
+        return __store;
+    }
+
     ## Create a new state object, creating a new commit node and root node if
     ## necessary.
-    @static InstanceState create(NodeStore store, String branch, Mutex mutex,
+    @static InstanceState create(Path backing, NodeStore store, String branch,
+                                 Mutex mutex,
                                  UserModule userModule
                                  ) {
         # Get the existing root node or create one if this is an empty filesystem.
@@ -208,6 +246,6 @@ class InstanceState {
             store.setHead(branch, commitDigest);
         }
 
-        return InstanceState(store, branch, mutex, userModule);
+        return InstanceState(backing, store, branch, mutex, userModule);
     }
 }

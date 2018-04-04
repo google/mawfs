@@ -491,31 +491,33 @@ void main() {
                 PeerNetwork __net;
                 ConfigStore __config;
                 RawChunkReader __chunkReader;
-                ChunkStore __store;
-                Path __root;
+                InstanceState instState;
 
-                oper init(ConfigStore config, RawChunkReader chunkReader,
-                          ChunkStore store,
-                          Path root
-                          ) :
+                oper init(ConfigStore config, RawChunkReader chunkReader) :
                     __config = config,
-                    __chunkReader = chunkReader,
-                    __store = store,
-                    __root = root {
+                    __chunkReader = chunkReader {
                 }
 
                 void start() {
                     __net = PeerNetwork(__chunkReader);
                     __net.configure(__config);
-                    setInst(MAWFSInstance(__root, __store, __net));
+                    setInst(MAWFSInstance(instState, __net));
+
+                    # Break the cycle with the instance state.
+                    instState = null;
                 }
             }
 
-            instState := InstanceState.create(
-                chunkStore, opts.getString('branch'),
-                mutex,
-                PeerNetModule(configStore, chunkReader, chunkStore, rootDir)
-            );
+            peerModule := PeerNetModule(configStore, chunkReader);
+            instState := InstanceState.create(rootDir, chunkStore,
+                                              opts.getString('branch'),
+                                              mutex,
+                                              peerModule
+                                              );
+
+            # Create a temporary reference cycle, this will be resolved in
+            # PeerNetModule.start().
+            peerModule.instState = instState;
             runFuse(instState, fuseArgs);
         } else if (cmd == 'dump') {
             cm.checkArgs(3, "Usage: mawfs dump <path>");

@@ -27,6 +27,7 @@ import crack.threads Mutex;
 import mawfs.blockstore ChunkStore, Commit, FSInfo, Node, MODE_DIR;
 import mawfs.cache Tree;
 import mawfs.flows MAWFSInstance;
+import mawfs.inst InstanceState;
 import mawfs.path MAWFSPath;
 import mawfs.peernet PeerNetwork, RemoteReaderImpl;
 import mawfs.params ParamInfo;
@@ -54,6 +55,7 @@ class PeerInfo {
     int port;
     PeerNetwork peerNet;
     ChunkStore cs;
+    Mutex mutex = {};
 
     oper init(Path backDir, int port) : backDir = backDir, port = port {}
 
@@ -68,7 +70,6 @@ class PeerInfo {
         cs = ChunkStore(backDir, FSInfo(params.cipher));
 
         # Create the peer network.
-        mutex := Mutex();
         chunkReader := cs.getRawChunkReader(mutex);
         peerNet = PeerNetwork(chunkReader);
 
@@ -128,7 +129,11 @@ class PeerInfo {
 
         # The slace gets the MAWFS instance, he's the one we're communicating
         # to.
-        setInst(MAWFSInstance(backDir, slave.cs, slave.peerNet));
+        instState := InstanceState.create(backDir, slave.cs, 'master',
+                                          slave.mutex,
+                                          null
+                                          );
+        setInst(MAWFSInstance(instState, slave.peerNet));
     }
 
     int getPort() { return SLAVE_PORT }
