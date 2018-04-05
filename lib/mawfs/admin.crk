@@ -213,27 +213,18 @@ class AdminPath : Path {
     Path _createNode(String  path) { return null }
 }
 
-## Readme file with basic info on the filesystem.
-class READMEFile : AdminPath {
-    String _getContents() {
-        return I'\
-            MAWFS Filesystem.
-            Copyright 2016 Google Inc. All Rights Reserved.
+## An admin file containing a simple chunk of static data.
+class DataFile : AdminPath {
+    String __contents;
 
-            Licensed under the Apache License, Version 2.0 (the "License");
-            you may not use this file except in compliance with the License.
-            You may obtain a copy of the License at
-
-                http://www.apache.org/licenses/LICENSE-2.0
-
-            Unless required by applicable law or agreed to in writing, software
-            distributed under the License is distributed on an "AS IS" BASIS,
-            WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-            See the License for the specific language governing permissions and
-            limitations under the License.
-            ';
+    oper init(String name, String contents) :
+        AdminPath(name, true),
+        __contents = contents {
     }
-    oper init(String name) : AdminPath(name, true) {}
+
+    String _getContents() {
+        return __contents;
+    }
 }
 
 ## .mawfs/branch file.  Contents is the current branch name.
@@ -312,13 +303,80 @@ class AltDir : AdminPath {
     }
 }
 
+## A dictionary of strings containing the contents of information files to be
+## placed directly in the .mawfs directory.
+class InfoFiles : TreeMap[String, String] {
+    @fieldset_accessors(InfoFiles);
+}
+
+## Directory object containing the "inst" dir which contains static info files.
+class InstInfoDir : AdminPath {
+    InfoFiles __infoFiles;
+
+    oper init(String name, InfoFiles infoFiles) :
+        AdminPath(name, true),
+        __infoFiles = infoFiles {
+    }
+
+    bool isDir() { return true }
+    int getMode() { return 0755 }
+
+    PathIter children() {
+        class Iter : PathIter {
+            InfoFiles.Iter __rep;
+            oper init(InfoFiles.Iter rep) : __rep = rep {}
+            Path elem() {
+                return __rep ? DataFile(__rep.elem().key, __rep.elem().val) : null;
+            }
+            bool next() { return __rep.next() }
+            bool isTrue() { return __rep }
+        }
+
+        return Iter(__infoFiles.iter());
+    }
+
+    Path oper [](String child) {
+        contents := __infoFiles.get(child);
+        if (!(contents is null))
+            return DataFile(child, contents);
+
+        # Non-existant child.
+        return AdminPath(child, false);
+    }
+
+    void makeDir(bool errorOnExists) {
+        throw SystemError('Can not create anything in an info dir.');
+    }
+}
+
+const README_CONTENTS :=
+    I'\
+    MAWFS Filesystem.
+    Copyright 2016 Google Inc. All Rights Reserved.
+
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+    ';
+
+
 ## File object for the root of the admin tree (the '.mawfs' directory).
 class AdminRoot : AdminPath {
     oper init(CachedNode root, String name) : AdminPath(name, true) {
         _children = PathMap();
-        _children['README'] = READMEFile('README');
+        _children['README'] = DataFile('README', README_CONTENTS);
         _children['branch'] = BranchFile(root, 'branch');
         if (altSourceDir := AltSourceDir.get(root.getContext()))
             _children['alt'] = AltDir('alt', altSourceDir);
+        _children['inst'] =
+            InstInfoDir('inst', InfoFiles.get(root.getContext()));
     }
 }

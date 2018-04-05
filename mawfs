@@ -24,7 +24,7 @@ import crack.process Process, CRK_PIPE_STDERR, CRK_PIPE_STDOUT;
 import crack.runtime abort, backtrace, close, free, getLocation, isatty,
     memcmp, open, sigaction, strlen, SigAction, SigInfo, O_RDONLY,
     SA_SIGINFO, SIGFPE, SIGILL, SIGSEGV;
-import crack.strutil StringArray;
+import crack.strutil split, StringArray;
 import crack.sys argv, exit;
 import crack.io cin, cout, cerr, Formatter, FStr, Reader, StandardFormatter,
     StringFormatter, StringReader;
@@ -275,6 +275,7 @@ opts := CmdOptions![
     Option('logfile', 'l', 'logfile name', 'mawfs.log', CMD_STR),
     Option('branch', 'b', 'branch name', 'master', CMD_STR),
     Option('port', 'p', 'port number', '9119', CMD_INT),
+    Option('instance', 'i', 'instance directory or address', null, CMD_STR),
 ];
 
 class CommandManager {
@@ -396,13 +397,72 @@ class CommandManager {
         showRunInstructions();
     }
 
+    ## Get the instance server address. The rules are:
+    ##    if there is a -i (or --instance) argument:
+    ##        if it is a directory, and contains a non-empty
+    ##              .mawfs/inst/servers file:
+    ##           return the first address in the file
+    ##        return the value of the argument itself (it should be an address)
+    ##    else if there is a .mawfs/inst/servers file in the current directory:
+    ##        return the first address in the file.
+    ##    else:
+    ##        return null
+    String getServer() {
+        String server;
+
+        String getServerFromDir(Path path) {
+            serversFile := path/'.mawfs/inst/servers';
+            if (!serversFile.exists())
+                return null;
+            contents := serversFile.readAll();
+            if (contents) {
+                addr := split(contents, b'\n')[0];
+
+                # Translate 0.0.0.0 (INADDR_ANY) into localhost.
+                if (addr.startsWith('0.0.0.0'))
+                    addr = '127.0.0.1' + addr.substr(7);
+
+                return addr;
+            }
+            return null;
+        }
+
+        # Now we need to find the address of the instances we're connecting to.
+        # First check for an instance flag.
+        inst := opts.getString('instance');
+        if (inst) {
+            # Got one.  Is it a directory?
+            if ((path := makePath(inst)).isDir()) {
+                server = getServerFromDir(path);
+            }
+
+            # If it wasn't a directory or didn't contain a server address, try
+            # treating it as an address.
+            if (!server)
+                server = inst;
+        } else {
+            server = getServerFromDir(cwd);
+        }
+
+        if (!server) {
+            cerr I`You must either call this from a MAWFS filesystem directory
+                   or specify an instance directory or address using the -i flag.
+                   `;
+            exit(1);
+        }
+        return server;
+    }
+
     ## The "pull" command.
     void pull() {
-        checkArgs(4, "Usage: mawfs pull <addr> <branch> [peer]\n");
+        checkArgs(3, "Usage: mawfs pull <branch> [peer]\n");
         setLogLevel(DEBUG);
-        makeRPC(args[2]).pullBranch(args[3],
-                                    (args.count() > 4) ? args[4] : null
-                                    );
+
+        server := getServer();
+
+        makeRPC(server).pullBranch(args[2],
+                                   (args.count() > 3) ? args[3] : null
+                                   );
     }
 }
 
@@ -502,6 +562,7 @@ void main() {
                     __net = PeerNetwork(__chunkReader);
                     __net.configure(__config);
                     setInst(MAWFSInstance(instState, __net));
+                    __net.storeServersIn(instState);
 
                     # Break the cycle with the instance state.
                     instState = null;

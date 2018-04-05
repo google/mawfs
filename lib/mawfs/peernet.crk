@@ -3,7 +3,8 @@
 import crack.ascii toLower;
 import crack.cont.array Array;
 import crack.fs Path;
-import crack.io cerr, Formatter, FStr, StandardFormatter, StringReader, Writer;
+import crack.io cerr, Formatter, FStr, StandardFormatter, StringFormatter,
+    StringReader, Writer;
 import crack.lang Buffer, Exception;
 import crack.logger cerrLogger, DEBUG, ERROR, INFO, FATAL, WARN;
 import crack.logger.ctx Log;
@@ -13,6 +14,8 @@ import mawfs.blockstore RemoteReader;
 import mawfs.configstore ConfigStore;
 import mawfs.rawchunk RawChunkReader;
 import mawfs.rpc parseAddr, Context, PeerProxy, PeerServiceCommFactory;
+
+import .inst InstanceState;
 import .params ParamInfo;
 
 @import crack.ann impl, struct;
@@ -66,6 +69,7 @@ class PeerNetwork {
     Log __log;
     RawChunkReader __chunkReader;
     Array[Peer] __peers = {};
+    Array[String] __serverAddrs = {};
 
     oper init(RawChunkReader chunkReader) :
         __chunkReader = chunkReader {
@@ -81,6 +85,7 @@ class PeerNetwork {
         __log.info `starting server on $addr`;
         try {
             __comm.startServer(addr, factory, true);
+            __serverAddrs.append(FStr() `$addr`);
         } catch (Exception ex) {
             __log.error `Error starting server: $ex\n`;
         }
@@ -261,6 +266,16 @@ class PeerNetwork {
                 addPeer(inetAddr);
             }
         }
+    }
+
+    ## Store the list of servers we're exposing in the instance state file.
+    ##
+    ## The caller must hold the lock on 'state'.
+    void storeServersIn(InstanceState state) {
+        StringFormatter tmp = {};
+        for (addr :in __serverAddrs)
+            tmp `$addr\n`;
+        state.setInfoFile('servers', tmp.string());
     }
 }
 

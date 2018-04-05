@@ -19,6 +19,7 @@ import crack.lang InvalidStateError;
 import crack.logger info;
 import crack.threads Mutex, MutexLock;
 
+import .admin InfoFiles;
 import .alt ResidentBranches;
 import .blockstore Commit, Node, NodeStore, MODE_DIR;
 import .cache Tree;
@@ -71,6 +72,9 @@ class InstanceState {
     String __branch;
     UserModule __userModule;
 
+    # Instance wide information files.  See setInfoFile() below.
+    InfoFiles __infoFiles = {};
+
     # Current root path of the instance.
     Path __root;
 
@@ -101,6 +105,9 @@ class InstanceState {
         ctx := cachedRoot.getContext();
         branches := ResidentBranches(__store, ctx.getCache());
         branches.putIn(ctx);
+
+        # Store the instance information for the same reason.
+        __infoFiles.putIn(ctx);
 
         __root = MAWFSPath(cachedRoot);
     }
@@ -221,6 +228,13 @@ class InstanceState {
     NodeStore getStore() {
         @checkLock();
         return __store;
+    }
+
+    ## Set the value of an "info file" to be stored in the .mawfs
+    ## administrative directory.
+    void setInfoFile(String filename, String contents) {
+        @checkLock();
+        __infoFiles[filename] = contents;
     }
 
     ## Create a new state object, creating a new commit node and root node if

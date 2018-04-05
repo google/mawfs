@@ -303,8 +303,10 @@ class AdminFSTest : TestCase {
         admin := makePath('fs')/'.mawfs';
         assertEqual((admin/'branch').readAll(), 'master');
         @assert((admin/'README').readAll().lfind('Copyright') >= 0);
+        @assert((admin/'inst/servers').readAll() == '');
     }
 }
+AdminFSTest().exec();
 
 class BranchTest : TestCase {
     void run() {
@@ -359,7 +361,7 @@ class CloneTest : TestCase {
         # Now try doing a "pull" and verify that we see the update in the
         # new filesystem.
         (makePath('fs')/'bar').writeAll('more file contents');
-        runMawfs(StringArray!['pull', 'localhost:9119', 'master']);
+        runMawfs(StringArray!['pull', '-i', 'localhost:9119', 'master']);
         @assert((fs2/'bar').readAll() == 'more file contents');
     }
 
