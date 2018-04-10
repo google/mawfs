@@ -14,8 +14,8 @@
 
 import crack.cont.hashmap HashMap;
 import crack.fs Path;
-import crack.io SeekableReader, SeekableWriter;
-import crack.lang InvalidStateError;
+import crack.io FStr, SeekableReader, SeekableWriter;
+import crack.lang InvalidArgumentError, InvalidStateError;
 import crack.logger info;
 import crack.threads Mutex, MutexLock;
 
@@ -75,6 +75,11 @@ class InstanceState {
     # Instance wide information files.  See setInfoFile() below.
     InfoFiles __infoFiles = {};
 
+    # Resident branches.  These are the branches that are accessible through
+    # the .mawfs/alt directory.  They can be created by the user with a
+    # "mkdir" or internally from other parts of the system, like RPCs.
+    ResidentBranches __branches;
+
     # Current root path of the instance.
     Path __root;
 
@@ -103,8 +108,8 @@ class InstanceState {
         # Create the set of resident branches and attach it to the root node
         # context.
         ctx := cachedRoot.getContext();
-        branches := ResidentBranches(__store, ctx.getCache());
-        branches.putIn(ctx);
+        __branches = ResidentBranches(__store, ctx.getCache());
+        __branches.putIn(ctx);
 
         # Store the instance information for the same reason.
         __infoFiles.putIn(ctx);
@@ -216,6 +221,15 @@ class InstanceState {
     void deleteFileInfo(int fh) {
         @checkLock();
         __files.delete(fh);
+    }
+
+    ## Add a resident branch.  Throws an InvalidArgumentError if the branch
+    ## does not exist.  Succeeds silently if the branch is already resident.
+    void makeResidentBranch(String branchName) {
+        @checkLock();
+        if (!__branches.hasBranch(branchName) &&
+            !__branches.makeBranchDir(branchName))
+            throw InvalidArgumentError(FStr() `Invalid branch $branchName`);
     }
 
     ## Gets the root directory of the filesystem.

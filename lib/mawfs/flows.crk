@@ -11,7 +11,7 @@ import .cache Cache, NodeContext;
 import .inst InstanceState;
 import .peernet PeerNetwork;
 import .rawchunk GeneralCallback;
-import .rpc InstIFace;
+import .rpc InstIFace, MergeResult;
 
 @import crack.ann cvars, define, impl;
 
@@ -59,15 +59,15 @@ class ThreadPool {
 
 ThreadPool __pool = {};
 
-@define task(vars, action) {
+@define task(vars, resultType, action) {
     class MyTask @impl Task {
         @cvars {
             vars
-            GeneralCallback[String] callback;
+            GeneralCallback[resultType] callback;
         }
 
         void oper call() {
-            String result;
+            resultType result;
             Exception exception;
             try {
                 result = (action);
@@ -277,12 +277,28 @@ class MAWFSInstance @impl InstIFace {
         return result;
     }
 
+    MergeResult merge(String branch) {
+        lock := __state.lock();
+
+        # Get the local branch.
+
+        # Get the merge branch.
+        __state.makeResidentBranch(branch);
+        return MergeResult(branch, null);
+    }
+
     ## RPC service for pullBranch.  Starts the call off in a new thread.
     void pullBranch(String name, String peer,
                     GeneralCallback[String] callback
                     ) {
-        @task(MAWFSInstance inst; String name; String peer;,
+        @task(MAWFSInstance inst; String name; String peer;, String,
               inst.pullBranch(name, peer));
         __pool.submit(MyTask(this, name, peer, callback));
+    }
+
+    void merge(String branch, GeneralCallback[MergeResult] callback) {
+        @task(MAWFSInstance inst; String branch;, MergeResult,
+              inst.merge(branch));
+        __pool.submit(MyTask(this, branch, callback));
     }
 }

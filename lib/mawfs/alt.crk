@@ -66,4 +66,10 @@ class ResidentBranches @impl AltSourceDir {
         __branchPaths[name] = MAWFSPath(tree.getRoot(), null, name);
         return MAWFSPath(root, false);
     }
+
+
+    ## Returns true if the branch exists in the set of resident branches.
+    bool hasBranch(String name) {
+        return __branches.hasKey(name);
+    }
 }

@@ -15,7 +15,7 @@ import crack.regex Regex;
 import crack.serial SerialReader, SerialWriter;
 import mawfs.rawchunk GeneralCallback, JournalBlock, RawChunkReader;
 
-@import crack.ann cvars, impl, interface;
+@import crack.ann cvars, impl, interface, struct;
 @import crack.protobuf.ann  protobuf;
 
 const DEFAULT_PORT := 9119
@@ -100,12 +100,31 @@ class AppError : Exception {
     message PullBranchResponse {
         optional string localName = 1;
     }
+
+    message MergeRequest {
+        optional string branch = 1;
+    }
+
+    message MergeResponse {
+        ## If we were able to merge clean, commit is set to the digest of the
+        ## new commit and mergeBranch is null.  Otherwise, mergeBranch is the
+        ## name of the temporary merge branch.
+        optional string mergeBranch = 1;
+        optional string commit = 2;
+    }
+}
+
+@struct MergeResult {
+    String mergeBranch;
+    String commit;
 }
 
 @interface InstIFace {
     @abstract void pullBranch(String branch, String peer,
                               GeneralCallback[String] callback
                               );
+
+    @abstract void merge(String branch, GeneralCallback[MergeResult] callback);
 }
 
 InstIFace _inst;
@@ -338,6 +357,16 @@ class PeerProxy {
         readMessageFromString(resp, respData);
         return resp.localName;
     }
+
+    ## Initiates a merge of the active branch with the specified merge branch.
+    MergeResult merge(String branch) {
+        MergeRequest req = {};
+        MergeResponse resp = {};
+        req.branch = branch;
+        respData := __invoke('merge', req.toString());
+        readMessageFromString(resp, respData);
+        return MergeResult(resp.mergeBranch, resp.commit);
+    }
 }
 
 ## Server-side RPC message context.
@@ -549,6 +578,29 @@ void pullBranch(Context context, RPCMessage msg, CommHandler comm) {
                      ResponseCallback(context, comm, msg.id));
 }
 
+void merge(Context context, RPCMessage msg, CommHandler comm) {
+    MergeRequest req = {};
+    readMessageFromString(req, msg.request);
+
+    class ResponseCallback @impl GeneralCallback[MergeResult] {
+        @cvars {Context context; CommHandler comm; int32 requestId;}
+        void oper call(MergeResult mergeResult, Exception ex) {
+            # merge is handled asynchronously, so we have to check
+            # the 'ex' argument.
+            if (ex) {
+                context.writeError(comm, ex.text, requestId);
+            } else {
+                MergeResponse resp = {};
+                resp.mergeBranch = mergeResult.mergeBranch;
+                resp.commit = mergeResult.commit;
+                context.writeResponse(comm, resp, requestId);
+            }
+        }
+    }
+
+    _inst.merge(req.branch, ResponseCallback(context, comm, msg.id));
+}
+
 class PeerServiceCommFactory @impl CommHandlerFactory {
     MethodMap __methods = {};
     Context __context;
@@ -559,6 +611,7 @@ class PeerServiceCommFactory @impl CommHandlerFactory {
         __methods['getJournalBlock'] = MethodHandler.Wrap(getJournalBlock);
         __methods['getFile'] = MethodHandler.Wrap(getFile);
         __methods['pullBranch'] = MethodHandler.Wrap(pullBranch);
+        __methods['merge'] = MethodHandler.Wrap(merge);
     }
 
     CommHandler makeCommHandler(NewConnection conn) {

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import crack.cont.hashmap HashMap;
 import crack.fs makePath, Path;
 import crack.hash.sha256 SHA256;
 import crack.io cerr;
@@ -22,6 +23,7 @@ import crack.logger.ctx Log;
 import crack.net InetAddress;
 import crack.net.comm2 Comm;
 import crack.runtime sleep;
+import crack.sys argv;
 import crack.threads Mutex;
 
 import mawfs.blockstore ChunkStore, Commit, FSInfo, Node, MODE_DIR;
@@ -50,12 +52,17 @@ class TestFailure : Exception {
     oper init(String text) : Exception(text) {}
 }
 
+HashMap[String, bool] tests = {};
+for (arg :in argv.subarray(1))
+    tests[arg] = true;
+
 class PeerInfo {
     Path backDir;
     int port;
     PeerNetwork peerNet;
     ChunkStore cs;
     Mutex mutex = {};
+    InstanceState instState;
 
     oper init(Path backDir, int port) : backDir = backDir, port = port {}
 
@@ -92,8 +99,17 @@ class PeerInfo {
 
     ## Returns a Path object for the root of the head of 'branch'.
     Path getRoot(String branch) {
+        # Otherwise just construct one from the chunk store.
         tree := Tree(cs, branch);
         return MAWFSPath(tree.getRoot());
+    }
+
+    ## Returns the root from the instance state (you must have set the
+    ## instance state to be able to use this)
+    Path getRoot() {
+        @assert(instState);
+        lock := instState.lock();
+        return instState.getRoot();
     }
 
     void commit(String branch) {
@@ -129,11 +145,11 @@ class PeerInfo {
 
         # The slace gets the MAWFS instance, he's the one we're communicating
         # to.
-        instState := InstanceState.create(backDir, slave.cs, 'master',
-                                          slave.mutex,
-                                          null
-                                          );
-        setInst(MAWFSInstance(instState, slave.peerNet));
+        slave.instState = InstanceState.create(backDir, slave.cs, 'master',
+                                               slave.mutex,
+                                               null
+                                               );
+        setInst(MAWFSInstance(slave.instState, slave.peerNet));
     }
 
     int getPort() { return SLAVE_PORT }
@@ -164,6 +180,8 @@ class PeerInfo {
     @abstract void run();
 
     void exec() {
+        if (tests && !tests.hasKey(StaticString(this.class.name)))
+            return;
         cerr `$(this.class.name)...`;
         info `==== begin $(this.class.name) ===`;
         setUp();
@@ -392,6 +410,18 @@ class CommitAfterCommitFromKnownJournal : TestBed {
     }
 }
 CommitAfterCommitFromKnownJournal().exec();
+
+class MergeTest : TestBed {
+    void run() {
+        master.makeBranch('foo');
+        proxy.pullBranch('foo', null);
+        (master.getRoot('foo')/'masterFile').writeAll(FILE_CONTENTS);
+        result := proxy.merge('foo');
+        @assert(result.mergeBranch == 'foo');
+        @assert((slave.getRoot()/'.mawfs'/'alt'/'foo').exists());
+    }
+}
+MergeTest().exec();
 
 /* This test fails.  Double writeAll() breaky-breaky.
 class DoubleWriteAll : TestBed {
