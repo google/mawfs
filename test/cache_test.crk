@@ -699,6 +699,44 @@ if (true) {
     @assert(sig(iter.elem().key) == 'JdbclZ.bhxw');
 }
 
+cerr `Node comparison\n`;
+if (true) {
+    nodeStore = MemNodeStore();
+    ctx = NodeContext(nodeStore, 'master', null);
+    a := CachedNode(ctx, null, makeDirNode());
+    b := CachedNode(ctx, null, makeFileNode('some data', 0));
+    @assert(a < b);
+
+    a = CachedNode(ctx, null, makeFileNode('this is foo', 0));
+    b = CachedNode(ctx, null, makeFileNode('this is foo', 0));
+    @assert(a == b);
+
+    b = CachedNode(ctx, null, makeFileNode('this is not foo', 0));
+    @assert(a < b);
+
+    a = CachedNode(ctx, null, makeDirNode());
+    a.addChild('foo', makeFileNode('foo contents', 0));
+    b = CachedNode(ctx, null, makeDirNode());
+    b.addChild('foo', makeFileNode('foo contents', 0));
+    @assert(a == b);
+
+    a.addChild('goo', makeFileNode('goo contents', 0));
+    @assert(a > b);
+
+    b.addChild('goo', makeFileNode('goo contents', 0));
+    @assert(a == b);
+
+    b.addChild('hoo', makeFileNode('hoo contents', 0));
+    @assert(a < b);
+
+    a = CachedNode(ctx, null, makeFileNode('this is foo', 0));
+    a.commitTree();
+    b = CachedNode(ctx, null, makeFileNode('this is foo', 0));
+    b.commitTree();
+    @assert(a == b)
+    @assert(a.digest == b.digest);
+}
+
 # TODO:
 #   - create a directory and then a child node to verify that when we do
 #     addChild() on a node without a digest the change propagates back to the

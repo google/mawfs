@@ -2202,6 +2202,52 @@ class CachedNode {
             }
         }
     }
+
+    ## The rules for ordinality are:
+    ## 1) a node with children is always greater than a node without.
+    ## 2) for nodes with children, the rules of normal sequences apply.
+    ## 3) nodes without children are ordered by their content.
+    int cmp(CachedNode other) {
+        if (!isDirty() && !other.isDirty() && digest == other.digest)
+            return 0;
+
+        if (__populateChildren(false)) {
+            if (!other.__populateChildren(false))
+                # This is an inner node, other is not.
+                return 1;
+
+            # Both nodes are inner nodes.  Compare children.
+            for (int i = 0; i < __children.count(); ++i) {
+                if (i >= other.__children.count())
+                    return 1;
+
+                # Compare to the other's child.
+                diff := __children[i].getNode().cmp(other.__children[i].getNode());
+                if (diff)
+                    return diff;
+            }
+
+            return (other.__children.count() > __children.count()) ? -1 : 0;
+        } else {
+            # This is a content node.
+            # If the other node is an inner node, it is greater.
+            if (other.__populateChildren(false))
+                return -1;
+
+            # Compare contents.
+            if (node.contents > other.node.contents)
+                return 1;
+            else
+                return (node.contents < other.node.contents) ? -1 : 0;
+        }
+    }
+
+    int cmp(Object other) {
+        if (o := CachedNode.cast(other, null))
+            return cmp(o);
+        else
+            return Object.cmp(other);
+    }
 }
 
 CachedNode _makeCachedNode(CachedNode parent, NodeContext ctx, String digest) {
