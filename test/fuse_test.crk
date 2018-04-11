@@ -24,6 +24,7 @@ import crack.sys argv, exit;
 import crack.runtime open, close, sleep, O_RDONLY;
 
 import mawfs.params ParamInfo;
+import test.unittest register, runAllTests, Test, TestFailure;
 
 import 'libc.so.6' fsync, chown;
 int fsync(int fd);
@@ -41,15 +42,6 @@ opts := CmdOptions![
 otherArgs := opts.parse().subarray(1);
 crackPath := opts.getString('crack-path');
 
-# The rest of the command line arguments are test names.
-HashMap[String, bool] tests = {};
-for (test :in otherArgs)
-    tests[test] = true;
-
-class TestFailure : Exception {
-    oper init(String text) : Exception(text) {}
-}
-
 const TEST_PASSWORD := 'TestPasswordDudeBestAsstwordFood';
 String _expandPw(String pw) {
     hasher := SHA256();
@@ -60,9 +52,7 @@ const EXPANDED_TEST_PASSWORD := _expandPw(TEST_PASSWORD);
 
 bool gotFailures;
 
-@abstract class TestCase {
-
-    bool failed;
+@abstract class TestCase : Test {
 
     ## Deletes the backing directory and returns it.
     Path deleteBacking() {
@@ -116,34 +106,9 @@ bool gotFailures;
         startFS('master');
     }
 
-    @abstract void run();
-
     void tearDown() {
         stopFS('fs');
         deleteBacking();
-    }
-
-    void exec() {
-        if (tests && !tests.get(String(this.class.name)))
-            return;
-
-        cerr `$(this.class.name)...`;
-        try {
-            setUp();
-            run();
-            cerr `ok\n`;
-        } catch (TestFailure ex) {
-            cerr `FAILED\n\t$(ex.text)\n`;
-            failed = true;
-        } catch (Exception ex) {
-            sleep(1);
-            cerr `FAILED\n`;
-            cerr `$ex\n`;
-            failed = true;
-        }
-        tearDown();
-        if (failed)
-            gotFailures = true;
     }
 
     ## Get the names of all files in 'dir', if 'dir' is null, get all files
@@ -157,11 +122,6 @@ bool gotFailures;
 
         return result;
     }
-
-    void assertEqual(Object a, Object b) {
-        if (a != b)
-            throw TestFailure(FStr() `[$a] != [$b]`);
-    }
 }
 
 class EmptyDirTest : TestCase {
@@ -170,7 +130,7 @@ class EmptyDirTest : TestCase {
             throw TestFailure(FStr() `got files in empty dir: $files`);
     }
 }
-EmptyDirTest().exec();
+register(EmptyDirTest());
 
 class FileTest : TestCase {
 
@@ -188,7 +148,7 @@ class FileTest : TestCase {
         assertEqual(String(buf, true), ' is ');
     }
 }
-FileTest().exec();
+register(FileTest());
 
 class MkDirTest : TestCase {
     void run() {
@@ -199,7 +159,7 @@ class MkDirTest : TestCase {
             throw TestFailure(FStr() `did not create a directory`);
     }
 }
-MkDirTest().exec();
+register(MkDirTest());
 
 class MoveTest : TestCase {
     void run() {
@@ -218,7 +178,7 @@ class MoveTest : TestCase {
         assertEqual(b.readAll(), 'this is data');
     }
 }
-MoveTest().exec();
+register(MoveTest());
 
 class SubDirFileTest : TestCase {
     void run() {
@@ -238,7 +198,7 @@ class SubDirFileTest : TestCase {
         assertEqual(foo.readAll(), 'test data');
     }
 }
-SubDirFileTest().exec();
+register(SubDirFileTest());
 
 class TruncateTest : TestCase {
     void run() {
@@ -253,7 +213,7 @@ class TruncateTest : TestCase {
         assertEqual(b.readAll(), 'more data\0');
     }
 }
-TruncateTest().exec();
+register(TruncateTest());
 
 ## Tests the "no-op" functions (chmod and chown).
 class NopTest : TestCase {
@@ -268,7 +228,7 @@ class NopTest : TestCase {
         @assert(a.readAll() == 'funky file');
     }
 }
-NopTest().exec();
+register(NopTest());
 
 class UnlinkTest : TestCase {
     void run() {
@@ -286,7 +246,7 @@ class UnlinkTest : TestCase {
         @assert(!b.exists());
     }
 }
-UnlinkTest().exec();
+register(UnlinkTest());
 
 class RmDirTest : TestCase {
     void run() {
@@ -296,7 +256,7 @@ class RmDirTest : TestCase {
         @assert(!dir.exists());
     }
 }
-RmDirTest().exec();
+register(RmDirTest());
 
 class AdminFSTest : TestCase {
     void run() {
@@ -306,7 +266,7 @@ class AdminFSTest : TestCase {
         @assert((admin/'inst/servers').readAll() == '');
     }
 }
-AdminFSTest().exec();
+register(AdminFSTest());
 
 class BranchTest : TestCase {
     void run() {
@@ -322,7 +282,7 @@ class BranchTest : TestCase {
         assertEqual((branchDir/'test.file').readAll(), 'file data');
     }
 }
-BranchTest().exec();
+register(BranchTest());
 
 ## Verify that a params file exists and is readable.
 class ParamsTest : TestCase {
@@ -332,7 +292,7 @@ class ParamsTest : TestCase {
         @assert(ParamInfo.read(params, EXPANDED_TEST_PASSWORD));
      }
  }
-ParamsTest().exec();
+register(ParamsTest());
 
 class CloneTest : TestCase {
     Path backing2, fs2;
@@ -374,10 +334,9 @@ class CloneTest : TestCase {
         TestCase.tearDown();
     }
 }
-CloneTest().exec();
+register(CloneTest());
 
-if (gotFailures)
-    exit(1);
+runAllTests();
 
 /*
 String readNode(Node node, int pos, int size) {

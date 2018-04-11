@@ -1,0 +1,117 @@
+# Copyright 2018 Google Inc. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import crack.cont.array Array;
+import crack.cont.hashmap HashMap;
+import crack.io cerr, FStr;
+import crack.lang Exception;
+import crack.runtime sleep;
+import crack.sys argv, exit;
+
+class TestFailure : Exception {
+    oper init(String text) : Exception(text) {}
+}
+
+## Test housing.  Created this so we can expand this later withough breaking
+## compatibility.
+@final class TestHousing {}
+
+## Standard, junit-style, test housing.
+@abstract class Test {
+
+    ## Set to true if the test failed (allows tests to check for failure in
+    ## tearDown().
+    bool failed;
+
+    ## Called prior to the run of a test.
+    void setUp() {}
+
+    ## Called after the run of a test or an exception thrown from setUp(),
+    ## regardless of success or failure of the run() method.
+    void tearDown() {}
+
+    ## The main body of the test.
+    @abstract void run();
+
+    ## Executes the test, returns true if successful.
+    bool exec(TestHousing h) {
+        cerr `$(this.class.name)...`;
+#        h.info `==== begin $(this.class.name) ===`;
+        setUp();
+        try {
+            run();
+            cerr `ok\n`;
+        } catch (TestFailure ex) {
+            cerr `FAILED\n\t$(ex.text)\n`;
+#            error `FAILED\n\t$(ex.text)`;
+            failed = true;
+        } catch (Exception ex) {
+            sleep(1);
+            cerr `FAILED\n`;
+            cerr `$ex\n`;
+#            error `FAILED: $ex`;
+            failed = true;
+        }
+        try {
+            tearDown();
+        } catch (Exception ex) {
+            cerr `Error in $(this.class.name).tearDown: $ex\n`;
+        }
+        return !failed;
+#        h.info `---- end $(this.class.name) ----`;
+    }
+
+    void assertEqual(Object a, Object b) {
+        if (a != b)
+            throw TestFailure(FStr() `[$a] != [$b]`);
+    }
+}
+
+Array[Test] _tests = {};
+
+void register(Test test) {
+    _tests.append(test);
+}
+
+## Run the named tests.  If no tests are specified, runs all tests that have
+## been registered.  Exits with an error code if there were failures.
+void runTests(Array[String] testNames) {
+
+    # Convert the names to a map.
+    testNameMap := HashMap[String, bool]();
+    for (name :in testNames)
+        testNameMap[name] = true;
+
+    bool gotFailures;
+    for (test :in _tests) {
+        className := StaticString(test.class.name);
+        if (!testNameMap || testNameMap.hasKey(className)) {
+            if (!test.exec(null))
+                gotFailures = true;
+        }
+    }
+
+    if (gotFailures) {
+        cerr `Some tests failed\n`;
+        exit(1);
+    } else {
+        cerr `All tests passed.\n`;
+    }
+
+}
+
+## Run all tests specified in argv (excluding the executable name).
+void runAllTests() {
+    runTests(argv.subarray(1));
+}

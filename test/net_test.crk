@@ -35,6 +35,7 @@ import mawfs.peernet PeerNetwork, RemoteReaderImpl;
 import mawfs.params ParamInfo;
 import mawfs.rpc setInst, PeerProxy;
 import mawfs.testutil FakeEntropySource;
+import test.unittest register, runAllTests, Test;
 
 @import crack.ann assert;
 
@@ -47,14 +48,6 @@ String expandPassword(String pw) {
 const MASTER_PORT := 9130;
 const SLAVE_PORT := 9131;
 const PASSWORD := expandPassword('password');
-
-class TestFailure : Exception {
-    oper init(String text) : Exception(text) {}
-}
-
-HashMap[String, bool] tests = {};
-for (arg :in argv.subarray(1))
-    tests[arg] = true;
 
 class PeerInfo {
     Path backDir;
@@ -123,14 +116,12 @@ class PeerInfo {
     }
 }
 
-@abstract class TestBed {
+@abstract class TestBed : Test {
 
     Path root;
     PeerInfo master, slave;
     Comm comm;
     PeerProxy proxy;
-
-    bool failed;
 
     void createMaster() {
         backDir := root/'back0';
@@ -176,30 +167,6 @@ class PeerInfo {
 
         setInst(null);
     }
-
-    @abstract void run();
-
-    void exec() {
-        if (tests && !tests.hasKey(StaticString(this.class.name)))
-            return;
-        cerr `$(this.class.name)...`;
-        info `==== begin $(this.class.name) ===`;
-        setUp();
-        try {
-            run();
-            cerr `ok\n`;
-        } catch (TestFailure ex) {
-            cerr `FAILED\n\t$(ex.text)\n`;
-            failed = true;
-        } catch (Exception ex) {
-            sleep(1);
-            cerr `FAILED\n`;
-            cerr `$ex\n`;
-            failed = true;
-        }
-        tearDown();
-        info `---- end $(this.class.name) ----`;
-    }
 }
 
 setLogFile('net_test.log');
@@ -211,7 +178,7 @@ class ServerConnectionsTest : TestBed {
         @assert(proxy.getFile('params') == (master.backDir/'params').readAll());
     }
 }
-ServerConnectionsTest().exec();
+register(ServerConnectionsTest());
 
 const FILE_CONTENTS := 'Test File!';
 
@@ -258,7 +225,7 @@ class FetchTest : TestBed {
                 );
     }
 }
-FetchTest().exec();
+register(FetchTest());
 
 # Verify that we do the right thing when fetching from branches based on
 # completely different commits.
@@ -319,7 +286,7 @@ class DiffCommitsTest : TestBed {
                 );
     }
 }
-DiffCommitsTest().exec();
+register(DiffCommitsTest());
 
 class JournalledCompatibleCommits : TestBed {
     void run() {
@@ -335,7 +302,7 @@ class JournalledCompatibleCommits : TestBed {
         @assert(newBranch == 'foo');
     }
 }
-JournalledCompatibleCommits().exec();
+register(JournalledCompatibleCommits());
 
 # This can be merged into the test above as soon as we can recognize that a
 # commit is derived from a journal entry.  Then we can resync the two branches
@@ -355,7 +322,7 @@ class JournalledCompatibleCommits2 : TestBed {
         @assert(newBranch == 'foo');
     }
 }
-JournalledCompatibleCommits2().exec();
+register(JournalledCompatibleCommits2());
 
 ## Verify that we don't create a new branch for a reote commit derived
 ## entirely from a journal that we haven't modified.
@@ -395,7 +362,7 @@ class CommitFromKnownJournal : TestBed {
         @assert(!(slave.getRoot(newBranch)/'slaveFile').exists());
     }
 }
-CommitFromKnownJournal().exec();
+register(CommitFromKnownJournal());
 
 class CommitAfterCommitFromKnownJournal : TestBed {
     void run() {
@@ -409,7 +376,7 @@ class CommitAfterCommitFromKnownJournal : TestBed {
         @assert(proxy.pullBranch('foo', null) == 'foo');
     }
 }
-CommitAfterCommitFromKnownJournal().exec();
+register(CommitAfterCommitFromKnownJournal());
 
 class MergeTest : TestBed {
     void run() {
@@ -421,7 +388,7 @@ class MergeTest : TestBed {
         @assert((slave.getRoot()/'.mawfs'/'alt'/'foo').exists());
     }
 }
-MergeTest().exec();
+register(MergeTest());
 
 /* This test fails.  Double writeAll() breaky-breaky.
 class DoubleWriteAll : TestBed {
@@ -433,3 +400,5 @@ class DoubleWriteAll : TestBed {
 }
 DoubleWriteAll().exec();
 */
+
+runAllTests();
