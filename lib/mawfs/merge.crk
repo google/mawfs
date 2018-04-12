@@ -1,0 +1,249 @@
+# Copyright 2018 Google Inc. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+## The merge tool.
+
+import crack.cont.array Array;
+import crack.cont.treemap TreeMap;
+import crack.lang cmp;
+import crack.strutil StringArray;
+import mawfs.cache CachedNode;
+
+@import crack.ann assert, struct;
+
+int _cmp(CachedNode a, CachedNode b) {
+    return cmp(uintz(a), uintz(b));
+}
+
+class Conflict;
+
+## The outcome of a merge operation.
+@abstract class Outcome {
+
+    ## Apply the outcome to the parent node.
+    ## parent:
+    ## name: Name that the node is known to the parent as.
+    ## parentConflicts: a conflict object being constructed by the parent.
+    @abstract void apply(CachedNode parent, String name,
+                         Conflict parentConflicts
+                         );
+}
+
+## Indicates a conflict.
+class Conflict : Outcome {
+
+    ## Represents a tree of conflicting file names.
+    ## VisibleForTesting.
+    class NameTree {
+        alias __Map = TreeMap[String, NameTree];
+        __Map __children = {};
+
+        class Iter {
+            alias __Seq = Array[TreeMap[String, NameTree].Iter];
+            __Seq __cur;
+
+            void __extendCursor() {
+                # I don't think this can happen in the fixit case.
+                @assert(__cur[-1]);
+
+                while (true) {
+                    item := __cur[-1].elem();
+                    if (!item.val)
+                        break;
+                    __cur.append(item.val.__children.iter());
+                }
+            }
+
+            oper init(__Map map) : __cur = __Seq![map.iter()] {
+                # Initialize the cursor by descending into the tree.
+                __extendCursor();
+            }
+
+            bool isTrue() { return __cur }
+
+            # THe elem of an iterator is a full path name.
+            String elem() {
+                StringArray result = {__cur.count()};
+                for (iter :in __cur)
+                    result.append(iter.elem().key);
+                return result.join('/');
+            }
+
+            bool next() {
+                if (!__cur)
+                    return false;
+
+                # Just try incrementing the last iterator.
+                if (__cur[-1].next()) {
+                    __extendCursor();
+                    return true;
+                }
+
+                # Otherwise, pop it and try the next one.
+                while (true) {
+                    __cur.pop();
+                    if (__cur) {
+                        __cur[-1].next();
+                        if (!__cur[-1])
+                            continue;
+                        __extendCursor();
+                        return true;
+                    } else {
+                        return false;
+                    }
+                }
+                return false;  # Should be unreachable.
+            }
+        }
+
+
+        @final Iter iter() {
+            return Iter(__children);
+        }
+
+        @struct Entry {
+            String key;
+            NameTree val;
+        }
+
+        @final void append(Entry entry) {
+            __children[entry.key] = entry.val;
+        }
+
+        ## Add a simple name (a "leaf node") to the tree at this level.
+        @final void addName(String name) {
+            __children[name] = null;
+        }
+    }
+
+    NameTree __names = {};
+
+    oper init() {}
+
+    ## Add a new name to the list of conflicts.
+    ## XXX I think we need an add(name, conflict), too, in order to deal with
+    ## nested conflicts.
+    void add(String name) {
+        __names.addName(name);
+    }
+
+    void apply(CachedNode parent, String name, Conflict parentConflicts) {
+        parentConflicts.add(name);
+    }
+
+    int cmp(Conflict other) {
+        return 0;
+    }
+
+    int cmp(Object other) {
+        if (o := Conflict.cast(other, null))
+            return cmp(o);
+        else
+            return Object.cmp(other);
+    }
+}
+
+## A mutation is when we can simply replace an existing object with the new
+## object.
+class Mutation : Outcome {
+    CachedNode replacement;
+    oper init(CachedNode replacement) : replacement = replacement {}
+
+    int cmp(Mutation mut) {
+        return _cmp(replacement, mut.replacement);
+    }
+
+    int cmp(Object other) {
+        if (o := Mutation.cast(other, null))
+            return cmp(o);
+        else
+            return Object.cmp(other);
+    }
+
+    void apply(CachedNode parent, String name, Conflict parentConflicts) {
+        @assert(false &&
+                 'need a way to be able to clone a node into a new '
+                 "node's context"
+                );
+        parent.addChild(name, null);
+    }
+}
+
+## As the name implies, this is returned when both result trees are identical.
+##
+## Since this needs no parameters, it is a singleton.
+class Unchanged : Outcome {
+    void apply(CachedNode parent, String name, Conflict parentConflicts) {}
+}
+const UNCHANGED := Unchanged();
+
+## Do a 3-way merge of 'other' into 'target'.
+Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
+    # If they're the same, we're done.
+    if (other == target)
+        return UNCHANGED;
+
+    # If the target is the same as the parent, we can accept the change in
+    # 'other'.
+    if (target == org)
+        return Mutation(other);
+
+    # If 'other' is the same as the parent, we accept target's change.
+    else if (other == org)
+        return UNCHANGED;
+
+    # From here on in, we deal with the case where the node has "forked" in
+    # two different directions from the parent.
+
+    if (target.isDir()) {
+        # target is a directory.
+
+        # If other isn't, we're done.
+        if (!other.isDir())
+            return Conflict();
+
+        # Compare all children.
+        Array[Mutation] mutations = {};
+        Conflict conflicts = {};
+        for (int i = 0; i < target.getChildCount(); ++i) {
+            name := target.getChildName(i);
+            child := target.getChild(i);
+            orgChild := org ? org.getChild(name) : null;
+            otherChild := other ? other.getChild(name) : null;
+
+            # If this child was added in target, we're good.
+            # XXX I think this is just a optimization for the next step.
+            if (!orgChild && !otherChild)
+                continue;
+
+            # Merge the child.
+            childOutcome := merge3(child, orgChild, otherChild);
+            childOutcome.apply(target, name, conflicts);
+
+#            # XXX either
+#            if (childConflicts) {
+#                # XXX so here's where we ended up
+#                conflicts = conflicts.maybeCreate(target);
+#                conflicts
+        }
+
+        # Now go through all children in other that aren't in target.
+#        xxx
+    } else {
+        # target is a file.  Regardless of what 'other' is, merging is now out
+        # of scope.
+        return Conflict()
+    }
+    return null;
+}
