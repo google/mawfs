@@ -76,6 +76,8 @@ class TestFailure : Exception {
         if (a != b)
             throw TestFailure(FStr() `[$a] != [$b]`);
     }
+
+    void fail(String message) { throw TestFailure(message); }
 }
 
 Array[Test] _tests = {};
