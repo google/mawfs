@@ -2221,8 +2221,14 @@ class CachedNode {
                 if (i >= other.__children.count())
                     return 1;
 
+                # Compare names of the children.
+                diff :=
+                    __children[i].getName().cmp(other.__children[i].getName());
+                if (diff)
+                    return diff;
+
                 # Compare to the other's child.
-                diff := __children[i].getNode().cmp(other.__children[i].getNode());
+                diff = __children[i].getNode().cmp(other.__children[i].getNode());
                 if (diff)
                     return diff;
             }
@@ -2247,6 +2253,14 @@ class CachedNode {
             return cmp(o);
         else
             return Object.cmp(other);
+    }
+
+    ## Returns a copy of the node the node to the new context.
+    ##
+    ## This is primarily intended to facilitate a merge operation, not to move
+    ## a node -- it's not certain how well this will work in that case.
+    CachedNode copy(NodeContext ctx) {
+        return CachedNode(ctx, digest, node.clone());
     }
 }
 

@@ -16,6 +16,8 @@
 
 import crack.cont.array Array;
 import crack.cont.treemap TreeMap;
+import crack.io cerr, Formatter;
+import crack.io.fmtutil Indenter;
 import crack.lang cmp;
 import crack.strutil StringArray;
 import mawfs.cache CachedNode;
@@ -38,6 +40,9 @@ class Conflict;
     @abstract void apply(CachedNode parent, String name,
                          Conflict parentConflicts
                          );
+
+    ## Get the revised node for the specified target node.
+    @abstract CachedNode get(CachedNode target);
 }
 
 ## Indicates a conflict.
@@ -58,6 +63,7 @@ class Conflict : Outcome {
                 @assert(__cur[-1]);
 
                 while (true) {
+                    @assert(__cur[-1]);
                     item := __cur[-1].elem();
                     if (!item.val)
                         break;
@@ -105,25 +111,32 @@ class Conflict : Outcome {
                 }
                 return false;  # Should be unreachable.
             }
+
+            Iter iter() { return this }
         }
 
+        bool isTrue() { return __children }
 
-        @final Iter iter() {
-            return Iter(__children);
-        }
+        @final Iter iter() { return Iter(__children) }
 
         @struct Entry {
             String key;
             NameTree val;
         }
 
-        @final void append(Entry entry) {
-            __children[entry.key] = entry.val;
-        }
+        @final void append(Entry entry) { __children[entry.key] = entry.val }
 
         ## Add a simple name (a "leaf node") to the tree at this level.
-        @final void addName(String name) {
-            __children[name] = null;
+        @final void addName(String name) { __children[name] = null }
+
+        ## Add a child tree.
+        @final void add(String name, NameTree child) {
+            __children[name] = child;
+        }
+
+        void formatTo(Formatter out) {
+            for (item :in __children)
+                out `$(item.key):\n  $(item.val)\n`;
         }
     }
 
@@ -132,15 +145,18 @@ class Conflict : Outcome {
     oper init() {}
 
     ## Add a new name to the list of conflicts.
-    ## XXX I think we need an add(name, conflict), too, in order to deal with
-    ## nested conflicts.
-    void add(String name) {
-        __names.addName(name);
-    }
+    void add(String name) { __names.addName(name) }
+
+    void add(String name, Conflict child) { __names.add(name, child.__names) }
 
     void apply(CachedNode parent, String name, Conflict parentConflicts) {
-        parentConflicts.add(name);
+        if (__names)
+            parentConflicts.add(name, this);
+        else
+            parentConflicts.add(name);
     }
+
+    CachedNode get(CachedNode target) { return target }
 
     int cmp(Conflict other) {
         return 0;
@@ -151,6 +167,14 @@ class Conflict : Outcome {
             return cmp(o);
         else
             return Object.cmp(other);
+    }
+
+    @final bool isTrue() { return __names }
+    @final NameTree.Iter iter() { return __names.iter() }
+    void formatTo(Formatter out) {
+        out `Conflict{\n`;
+        __names.formatTo(out);
+        out `}\n`;
     }
 }
 
@@ -171,13 +195,21 @@ class Mutation : Outcome {
             return Object.cmp(other);
     }
 
-    void apply(CachedNode parent, String name, Conflict parentConflicts) {
-        @assert(false &&
-                 'need a way to be able to clone a node into a new '
-                 "node's context"
-                );
-        parent.addChild(name, null);
+    void formatTo(Formatter out) {
+        indent := Indenter.wrap(out);
+        indent `Mutation{\n`;
+        ++indent;
+        indent `$replacement\n`;
+        --indent;
+        indent `}\n`;
     }
+
+    void apply(CachedNode parent, String name, Conflict parentConflicts) {
+        clone := replacement.copy(parent.getContext());
+        parent.addChild(name, clone);
+    }
+
+    CachedNode get(CachedNode target) { return replacement }
 }
 
 ## As the name implies, this is returned when both result trees are identical.
@@ -185,6 +217,9 @@ class Mutation : Outcome {
 ## Since this needs no parameters, it is a singleton.
 class Unchanged : Outcome {
     void apply(CachedNode parent, String name, Conflict parentConflicts) {}
+    CachedNode get(CachedNode target) { return target }
+    void formatTo(Formatter out) { out `Unchanged\n` }
+
 }
 const UNCHANGED := Unchanged();
 
@@ -206,15 +241,14 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
     # From here on in, we deal with the case where the node has "forked" in
     # two different directions from the parent.
 
-    if (target.isDir()) {
+    if (target && target.isDir()) {
         # target is a directory.
 
         # If other isn't, we're done.
-        if (!other.isDir())
+        if (!other || !other.isDir())
             return Conflict();
 
         # Compare all children.
-        Array[Mutation] mutations = {};
         Conflict conflicts = {};
         for (int i = 0; i < target.getChildCount(); ++i) {
             name := target.getChildName(i);
@@ -230,20 +264,33 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
             # Merge the child.
             childOutcome := merge3(child, orgChild, otherChild);
             childOutcome.apply(target, name, conflicts);
-
-#            # XXX either
-#            if (childConflicts) {
-#                # XXX so here's where we ended up
-#                conflicts = conflicts.maybeCreate(target);
-#                conflicts
         }
 
         # Now go through all children in other that aren't in target.
-#        xxx
+        for (int i = 0; i < other.getChildCount(); ++i) {
+            name := other.getChildName(i);
+            if (target.getChild(name))
+                # We covered this in the last loop.
+                continue;
+
+            orgChild := org ? org.getChild(name) : null;
+            otherChild := other.getChild(i);
+            childOutcome := merge3(null, orgChild, otherChild);
+            childOutcome.apply(target, name, conflicts);
+        }
+
+        # If we accumulated conflicts, return those.  Otherwise return
+        # unchanged. (these seems counter-intuitive, since we have have
+        # actually applied changes to target, but the fact is that no changes
+        # need to be applied to any of the ancestors)
+        if (conflicts)
+            return conflicts;
+        else
+            return UNCHANGED;
+
     } else {
         # target is a file.  Regardless of what 'other' is, merging is now out
         # of scope.
         return Conflict()
     }
-    return null;
 }

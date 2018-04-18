@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import crack.io cerr;
+import crack.io cerr, FStr;
 import crack.strutil StringArray;
 
 import mawfs.blockstore Entry, Node, MODE_DIR;
@@ -23,6 +23,14 @@ import mawfs.merge merge3, Conflict, Mutation, UNCHANGED;
 import test.unittest register, runAllTests, Test;
 
 @import crack.ann assert;
+
+## Flatten the tree into a list of strings.
+StringArray flatten(Conflict.NameTree.Iter iter) {
+    result := StringArray();
+    for (name :in iter)
+        result.append(name);
+    return result;
+}
 
 @abstract class MergeTest : Test {
     MemNodeStore store = {};
@@ -37,7 +45,13 @@ import test.unittest register, runAllTests, Test;
         ctx = NodeContext(store, 'master', rootDigest);
     }
 
+    ## Create a directory node using the "default" context.
     CachedNode makeDirNode() {
+        return CachedNode(ctx, rootDigest, rootNode.clone());
+    }
+
+    ## Create a directory node using the specified context.
+    CachedNode makeDirNode(NodeContext ctx) {
         return CachedNode(ctx, rootDigest, rootNode.clone());
     }
 
@@ -68,10 +82,7 @@ class NameTreeTest : Test {
             E('c', T![E('z', null)]),
         ];
 
-        flattened := StringArray();
-        for (name :in tree)
-            flattened.append(name);
-
+        flattened := flatten(tree.iter());
         @assert(flattened ==
                  StringArray!['a', 'b/x/h', 'b/x/i', 'b/y/j', 'c/z']
                 );
@@ -100,7 +111,6 @@ class SimpleMerge : MergeTest {
 }
 register(SimpleMerge());
 
-
 class FileMerge : MergeTest {
     void run() {
         org := makeFileNode('org');
@@ -110,6 +120,130 @@ class FileMerge : MergeTest {
     }
 }
 register(FileMerge());
+
+class CommonChangeTest : MergeTest {
+    void run() {
+        org := makeDirNode();
+        a := makeDirNode();
+        a.addChild('new', makeFileNode('new contents'));
+        b := makeDirNode();
+        b.addChild('new', makeFileNode('new contents'));
+        @assert(merge3(a, org, b) == UNCHANGED);
+        @assert(a.getChild('new').getContents() == 'new contents');
+    }
+}
+register(CommonChangeTest());
+
+class DirMergeTest : MergeTest {
+    void run() {
+        org := makeDirNode();
+        target := makeDirNode();
+        other := makeDirNode();
+
+        org.addChild('unchanged', makeFileNode('unchanged'));
+        target.addChild('unchanged', makeFileNode('unchanged'));
+        other.addChild('unchanged', makeFileNode('unchanged'));
+
+        target.addChild('targetAdd', makeFileNode('targetAdd'));
+        other.addChild('otherAdd', makeFileNode('otherAdd'));
+
+        target.addChild('conflicted', makeFileNode('conflicted'));
+        other.addChild('conflicted', makeFileNode('how you doing!'));
+
+        targetSub := makeDirNode();
+        target.addChild('sub', targetSub);
+        otherSub := makeDirNode();
+        other.addChild('sub', otherSub);
+
+        targetSub.addChild('conflicted', makeFileNode('conflicted'));
+        otherSub.addChild('conflicted', makeFileNode('hehheh! Hippo party!'));
+
+        result := merge3(target, org, other);
+        assertEqual(target.getChild('unchanged').getContents(), 'unchanged');
+        assertEqual(target.getChild('otherAdd').getContents(), 'otherAdd');
+        assertEqual(target.getChild('targetAdd').getContents(), 'targetAdd');
+        if (conflict := Conflict.cast(result, null))
+            assertEqual(flatten(conflict.iter()),
+                        StringArray!['conflicted', 'sub/conflicted']);
+        else
+            fail(FStr() `Expected conflicts, got: $result`);
+    }
+}
+register(DirMergeTest());
+
+class FileDeletedTest : MergeTest {
+    void run() {
+        org := makeDirNode();
+        org.addChild('deleted', makeFileNode('deleted'));
+        org.addChild('dir', subdir := makeDirNode());
+        subdir.addChild('deletd', makeFileNode('deleted'));
+
+        a := makeDirNode();
+        a.addChild('deleted', makeFileNode('deleted'));
+        a.addChild('dir', subdir = makeDirNode());
+        subdir.addChild('deletd', makeFileNode('deleted'));
+
+        b := makeDirNode();
+        b.addChild('dir', subdir = makeDirNode());
+
+        result := merge3(a, org, b);
+        a = result.get(a);
+        assertEqual(result, Mutation(b));
+        assertEqual(a.getChild('deleted'), null);
+        assertEqual(a.getChild('dir').getChild('deleted'), null);
+    }
+}
+register(FileDeletedTest());
+
+class DeleteVersusModifiedTest : MergeTest {
+    void run() {
+        org := makeDirNode();
+        org.addChild('deleted', makeFileNode('deleted'));
+        org.addChild('modified', makeFileNode('modified'));
+
+        a := makeDirNode();
+        a.addChild('modified', makeFileNode('new stuff!!'));
+
+        b := makeDirNode();
+        b.addChild('deleted', makeFileNode('new stuff!!'));
+
+        result := merge3(a, org, b);
+        if (conflict := Conflict.cast(result, null)) {
+            a = result.get(a);
+            assertEqual(a.getChild('deleted'), null);
+            assertEqual(a.getChild('modified'), makeFileNode('new stuff!!'));
+            assertEqual(flatten(conflict.iter()),
+                        StringArray!['deleted', 'modified']
+                        );
+        } else {
+            fail(FStr() `Expected conflicts, got: $result`);
+        }
+    }
+}
+register(DeleteVersusModifiedTest());
+
+## Verify that a file added in a subdirectory of "other" ends up being
+## correctly added to target.
+class FileAddedInOther : MergeTest {
+    void run() {
+        org := makeDirNode();
+        org.addChild('dir', makeDirNode());
+
+        a := makeDirNode();
+        a.addChild('dir', makeDirNode());
+
+        b := makeDirNode();
+        b.addChild('dir', sub := makeDirNode());
+        sub.addChild('foo', makeFileNode('this is foo'));
+        result := merge3(a, org, b);
+        a = result.get(a);
+        @assert(a.getChild('dir').getChild('foo').getContents() ==
+                 'this is foo'
+                );
+        @assert(result == Mutation(b));
+    }
+}
+register(FileAddedInOther());
 
 runAllTests();
 

@@ -735,6 +735,12 @@ if (true) {
     b.commitTree();
     @assert(a == b)
     @assert(a.digest == b.digest);
+
+    a = CachedNode(ctx, null, makeDirNode());
+    a.addChild('foo', makeFileNode('this is foo', 0));
+    b = CachedNode(ctx, null, makeDirNode());
+    b.addChild('bar', makeFileNode('this is foo', 0));
+    @assert(a > b);
 }
 
 # TODO:
