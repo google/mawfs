@@ -13,16 +13,20 @@
 # limitations under the License.
 
 import crack.io cerr, FStr;
+import crack.logger info, setLogFile, setLogLevel, DEBUG;
 import crack.strutil StringArray;
 
-import mawfs.blockstore Entry, Node, MODE_DIR;
+import mawfs.blockstore Commit, Entry, Node, MODE_DIR;
 import mawfs.memstore MemNodeStore;
-import mawfs.cache CachedNode, NodeContext;
-import mawfs.merge merge3, Conflict, Mutation, UNCHANGED;
+import mawfs.cache sig, CachedNode, NodeContext, Tree;
+import mawfs.merge merge3, Conflict, MergeResult, Mutation, UNCHANGED;
 
 import test.unittest register, runAllTests, Test;
 
 @import crack.ann assert;
+
+setLogFile('merge_test.log');
+setLogLevel(DEBUG);
 
 ## Flatten the tree into a list of strings.
 StringArray flatten(Conflict.NameTree.Iter iter) {
@@ -34,7 +38,7 @@ StringArray flatten(Conflict.NameTree.Iter iter) {
 
 @abstract class MergeTest : Test {
     MemNodeStore store = {};
-    NodeContext ctx;
+    NodeContext ctx, ctx2;
     String rootDigest;
     Node rootNode;
 
@@ -42,7 +46,12 @@ StringArray flatten(Conflict.NameTree.Iter iter) {
         rootNode = Node();
         rootNode.mode = MODE_DIR;
         rootDigest = store.storeNode(rootNode);
-        ctx = NodeContext(store, 'master', rootDigest);
+
+        commit := Commit();
+        commit.root = rootDigest;
+        commitDigest := store.storeCommit(commit);
+        ctx = NodeContext(store, 'master', commitDigest);
+        ctx2 = NodeContext(store, 'other', commitDigest);
     }
 
     ## Create a directory node using the "default" context.
@@ -55,12 +64,16 @@ StringArray flatten(Conflict.NameTree.Iter iter) {
         return CachedNode(ctx, rootDigest, rootNode.clone());
     }
 
-    CachedNode makeFileNode(String contents) {
+    CachedNode makeFileNode(NodeContext ctx, String contents) {
         node := Node();
         node.contents = contents;
         node.size = contents ? contents.count() : 0;
         digest := store.storeNode(node);
         return CachedNode(ctx, digest, node);
+    }
+
+    CachedNode makeFileNode(String contents) {
+        return makeFileNode(ctx, contents);
     }
 }
 
@@ -116,7 +129,7 @@ class FileMerge : MergeTest {
         org := makeFileNode('org');
         a := makeFileNode('first');
         b := makeFileNode('second');
-        @assert(merge3(a, org, b) == Conflict());
+        assertEqual(merge3(a, org, b), Conflict());
     }
 }
 register(FileMerge());
@@ -237,13 +250,70 @@ class FileAddedInOther : MergeTest {
         sub.addChild('foo', makeFileNode('this is foo'));
         result := merge3(a, org, b);
         a = result.get(a);
-        @assert(a.getChild('dir').getChild('foo').getContents() ==
-                 'this is foo'
-                );
-        @assert(result == Mutation(b));
+        assertEqual(a.getChild('dir').getChild('foo').getContents(),
+                    'this is foo'
+                    );
+        assertEqual(result, Mutation(b));
     }
 }
 register(FileAddedInOther());
+
+@abstract class FooBarTest : MergeTest {
+    CachedNode org, a, b;
+
+    void setUp() {
+        MergeTest.setUp();
+        org = makeDirNode();
+        a = makeDirNode();
+        a.addChild('foo', makeFileNode('this is foo'));
+        b = makeDirNode(ctx2);
+        b.addChild('bar', makeFileNode(ctx2, 'this is bar'));
+    }
+
+    void checkTree(CachedNode root) {
+        assertEqual(root.getChild('foo').getContents(), 'this is foo');
+        assertEqual(root.getChild('bar').getContents(), 'this is bar');
+    }
+}
+
+class CommitOnSuccessfulMerge : FooBarTest {
+    void run() {
+        a = MergeResult(a, org, b).merge().newRoot;
+        @assert(a);
+        checkTree(a);
+        a = Tree(store, 'master').getRoot();
+        checkTree(a);
+        @assert(!a.isDirty());
+    }
+}
+register(CommitOnSuccessfulMerge());
+
+## Verify that a merge branch is created in the case of a conflict and that it
+## reflects the mergeable contents of the two child trees.
+class MergeBranchAfterConflicts : FooBarTest {
+    void run() {
+        a.addChild('conflict', makeFileNode('version for a'));
+        b.addChild('conflict', makeFileNode(ctx2, 'version for b'));
+
+        merge := MergeResult(a, org, b).merge();
+        a = merge.newRoot;
+        @assert(a);
+        @assert(merge.conflict);
+        assertEqual(flatten(merge.conflict.iter()), StringArray!['conflict']);
+        checkTree(a);
+
+        # Reload the tree to verify that the node and branches have been
+        # stored correctly.
+        a = Tree(store, merge.branch).getRoot();
+        @assert(a.isDirty());
+        checkTree(a);
+        assertEqual(a.getChild('conflict').getContents(), 'version for a');
+    }
+}
+register(MergeBranchAfterConflicts());
+
+# XXX need to return the conflict information and merge branch name as well
+# as the new root node.
 
 runAllTests();
 

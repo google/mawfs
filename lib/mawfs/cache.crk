@@ -305,11 +305,13 @@ class NodeContext : HashMapFieldSet {
         return __store.storeNode(node);
     }
 
+    ## Gets the node for the given digest, returns null if undefined.
     @final Node getNode(String digest) {
         node := __cache.getNode(digest);
         if (!node) {
             node = __store.getNode(digest);
-            __cache.storeNode(digest, node.clone());
+            if (node)
+                __cache.storeNode(digest, node.clone());
         } else {
             node = node.clone();
         }
@@ -332,6 +334,21 @@ class NodeContext : HashMapFieldSet {
 
     @final JournalIter makeJournalIter() {
         return __store.makeJournalIter(__head.branch);
+    }
+
+    ## Set the head of the current branch to the digest.
+    @final void setHead(String digest) {
+        __store.setHead(__head.branch, digest);
+    }
+
+    ## Set the branch of the node context.
+    ## I'm not sure that this is a very good idea.  It is only used when
+    ## creating a merge branch, where it is used to set an antire tree to the
+    ## new merge branch.  Since the current tree is disposable at this point,
+    ## this should be safe.  An alternate approach would be to copy the target
+    ## node into a new context created for the branch.
+    @final void setBranch(String branch) {
+        __head.branch = branch;
     }
 
     @final String makeDigest(Node node) { return __store.makeDigest(node) }
@@ -382,7 +399,21 @@ class NodeContext : HashMapFieldSet {
     @final String getBranch() { return __head.branch }
 
     ## Get the head revision of the current branch.
-    @final String getHead() { return __store.getHead(__head.branch) }
+    @final String getHead() {
+        # TODO: it looks like we can get into a situation where
+        # __head.baselineCommit is undefined but the branch head file _is_,
+        # which seems odd.  Figure out how best to improve upon this.
+        if (__head && __head.baselineCommit)
+            return __head.baselineCommit;
+        else
+            return __store.getHead(__head.branch)
+    }
+
+    ## Returns the "branch digest" - this is the digest of the last change if
+    ## there is one, otherwise it is the digest of the commit.
+    @final String getBranchDigest() {
+        return __head.lastChange ? __head.lastChange : __head.baselineCommit;
+    }
 
     ## Stores a new commit and updates the branch head.
     @final void storeCommit(Commit commit) {
@@ -1030,13 +1061,20 @@ class CachedNode {
     void garbageCollect();
 
     ## Commit the entire tree and record a commit object.
-    void commitTree() {
+    ## altDigest: nullable, if present this is the digest of a commit of an
+    ## alternate branch that is being merged.
+    void commitTree(String altDigest) {
         info `committing on branch $(__ctx.getBranch()).`;
         newRootDigest := getRoot().commit();
         Commit commit = {};
         commit.root = newRootDigest;
+
+        # Add the parent commits.
         if (head := __ctx.getHead())
             commit.parent_append(__ctx.getHead());
+        if (altDigest)
+            commit.parent_append(altDigest);
+
         commit.journalInfo = __ctx.makeJournalInfo();
         __ctx.storeCommit(commit);
         __ctx.clearJournal();
@@ -1046,6 +1084,9 @@ class CachedNode {
         # there are no dirty nodes.
         garbageCollect();
     }
+
+    ## Commit the entire tree and record a commit object.
+    void commitTree() { commitTree(null) }
 
     ## Record a change in the journal for this node or for the appropriate
     ## parent node if this node doesn't have a digest yet.
@@ -2376,6 +2417,11 @@ class MissingChunkError : Exception {
 
             info `loading root $(sig(commit.root))`;
             rootNode := __ctx.getNode(commit.root);
+            if (!rootNode)
+                throw MissingChunkError(
+                    commit.root,
+                    FStr() ` obtaining tree root`
+                );
             __root = CachedNode(__ctx, commit.root, rootNode);
             __root.replayJournal();
         }

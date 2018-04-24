@@ -16,11 +16,13 @@
 
 import crack.cont.array Array;
 import crack.cont.treemap TreeMap;
+import crack.enc.base64 altEncode;
 import crack.io cerr, Formatter;
 import crack.io.fmtutil Indenter;
-import crack.lang cmp;
+import crack.lang cmp, AppendBuffer;
+import crack.logger info;
 import crack.strutil StringArray;
-import mawfs.cache CachedNode;
+import mawfs.cache sig, CachedNode, Head;
 
 @import crack.ann assert, struct;
 
@@ -163,13 +165,13 @@ class Conflict : Outcome {
     }
 
     int cmp(Object other) {
-        if (o := Conflict.cast(other, null))
+        if ((o := Conflict.cast(other, null)) != null)
             return cmp(o);
         else
             return Object.cmp(other);
     }
 
-    @final bool isTrue() { return __names }
+    bool isTrue() { return __names }
     @final NameTree.Iter iter() { return __names.iter() }
     void formatTo(Formatter out) {
         out `Conflict{\n`;
@@ -291,6 +293,82 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
     } else {
         # target is a file.  Regardless of what 'other' is, merging is now out
         # of scope.
-        return Conflict()
+        return Conflict();
+    }
+}
+
+@final class MergeResult {
+    CachedNode target, org, other;
+
+    ## The original branch of the target.
+    String orgBranch;
+
+    CachedNode newRoot;
+
+    ## nullable, if present this contains the conflict information.
+    Conflict conflict;
+
+    ## nullable, if present this contains the merge branch name.  If null,
+    ## there were no conflicts and the merge was fully committed.
+    String branch;
+
+    oper init(CachedNode target, CachedNode org, CachedNode other ) :
+        target = target,
+        org = org,
+        other = other {
+
+        orgBranch = org.getContext().getBranch();
+    }
+
+    ## Creates a new merge branch and converts "target" to it.
+    ##
+    ## This must be called before merge().  After it's completed, changes in
+    ## the merge are expected to be applied directly to the new branch.
+    void createMergeBranch() {
+        @assert(!branch && !newRoot);
+        # The new branch name is a hash constructed from the digests of the hashes
+        # of the target branch and the other branch.
+        String getBranchHash(Head head) {
+            return head.lastChange ? head.lastChange : head.baselineCommit;
+        }
+        targetDigest := target.getContext().getBranchDigest();
+        otherDigest := other.getContext().getBranchDigest();
+
+        # Just xor the two digests together and alt-encode them.
+        name := AppendBuffer(targetDigest.count());
+        @assert(otherDigest.count() >= targetDigest.count());
+        for (int i = 0; i < targetDigest.count(); ++i)
+            name.append(targetDigest[i] ^ otherDigest[i]);
+
+        # Get the journal iterators for both of the branches being merged.
+        ctx := target.getContext();
+        targetJiter := ctx.makeJournalIter();
+        otherJiter := other.getContext().makeJournalIter();
+
+        # Set the branch to the new merge branch and set the head to the base
+        # digest.
+        branch = 'merge:' + altEncode(name);
+        ctx.setBranch(branch);
+        ctx.setHead(ctx.getBaselineCommit());
+
+        # Copy the journal from the target to the new branch.
+        for (changeEntry :in targetJiter)
+            ctx.addChange(changeEntry.change);
+    }
+
+    ## Must be called after createMergeBranch()
+    MergeResult merge() {
+        if (!branch)
+            createMergeBranch();
+        outcome := merge3(target, org, other);
+        newRoot = outcome.get(target);
+        if (!outcome.isa(Conflict)) {
+            # There were no conflicts.  We can commit on the current branch.
+            newRoot.getContext().setBranch(orgBranch);
+            newRoot.commitTree(other.getContext().getHead());
+            return this;
+        }
+        conflict = Conflict.cast(outcome);
+        return this;
     }
 }
