@@ -25,7 +25,7 @@ import crack.logger debug, setLogLevel, DEBUG;
 import mawfs.blockstore Commit, Entry, Node, NodeStore, MODE_DIR;
 import mawfs.entropy setEntropySource;
 import mawfs.memstore MemNodeStore;
-import mawfs.cache sig, Cache, CachedNode, NodeContext;
+import mawfs.cache sig, Cache, CachedNode, NodeContext, Tree;
 import mawfs.testutil copy, makeRandomData, PseudoRandomEntropySource;
 import mawfs.memtrace Tracer;
 
@@ -742,6 +742,60 @@ if (true) {
     b.addChild('bar', makeFileNode('this is foo', 0));
     @assert(a > b);
 }
+
+cerr `Deep node copies\n`;
+if (true) {
+    nodeStore = MemNodeStore();
+    ctx = NodeContext(nodeStore, 'master', null);
+    ctx2 := NodeContext(nodeStore, 'slave', null);
+
+    # Make a little tree.
+    src := CachedNode(ctx, null, makeDirNode());
+    subdir := CachedNode(ctx, null, makeDirNode());
+    src.addChild('dir', subdir);
+    subdir.addChild('unchanged', makeFileNode('unchanged after commit', 0));
+    fileNode := CachedNode(ctx, null, Node());
+    subdir.addChild('changed', fileNode);
+    fileNode.write(0, makeRandomData());
+    subdir.addChild('deleted', makeFileNode('deleted', 0));
+
+    # Commit it.
+    src.commitTree();
+
+    # Change it up.
+    subdir = src.getChild('dir');
+    fileNode = subdir.getChild('changed');
+    fileNode.write(0, 'blah blah blah');
+    changedNodeContents := fileNode.getContents();
+    @assert(changedNodeContents.startsWith('blah blah blah'));
+    added := CachedNode(ctx, null, makeFileNode('added file', 0));
+    subdir.addChild('added', added);
+    subdir.deleteChild('deleted');
+
+    # Copy into a new tree.
+    dst := CachedNode(ctx2, null, makeDirNode());
+    # Reproducing the functionality of "InstanceState.create()" here, maybe
+    # this belongs in NodeContext or Tree?
+    rootDigest := nodeStore.storeNode(dst.node);
+    commit := Commit();
+    commit.root = rootDigest;
+    ctx2.storeCommit(commit);
+    dst.addChild('dir', src.getChild('dir').copy(ctx2));
+
+    # Verify that we can replay it.
+    newRoot := Tree(nodeStore, 'slave').getRoot();
+    subdir = newRoot.getChild('dir');
+    @assert(subdir.getChild('unchanged').getContents() ==
+             'unchanged after commit'
+            );
+    @assert(subdir.getChild('added').getContents() == 'added file');
+    @assert(subdir.getChild('changed').getContents() == changedNodeContents);
+    @assert(subdir.getChild('deleted') is null);
+}
+
+# XXX test when a commit is forced while journalling a new child.  Once we
+# do that, it should no longer be necessary to journal the rest of the
+# child!
 
 # TODO:
 #   - create a directory and then a child node to verify that when we do

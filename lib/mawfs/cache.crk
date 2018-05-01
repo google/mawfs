@@ -53,7 +53,10 @@ const DEFAULT_GC_THRESHOLD := 128 * MEG;
 const DEFAULT_GC_BOTTOM := 16 * MEG;
 
 const int32
-    ## Add child (contains a Node and a name)
+    ## Add child.
+    ## contains;
+    ## -   node or digest
+    ## -   name (add_child is only applied to a directory)
     CHANGE_ADD_CHILD = 1,
 
     ## Delete a child (contains a name).
@@ -64,7 +67,13 @@ const int32
     CHANGE_WRITE = 3,
 
     ## Resize node contents.  Contains newSize.
-    CHANGE_RESIZE = 4;
+    CHANGE_RESIZE = 4,
+
+    ## Replace a child.
+    ## -    path is the path to the parent.
+    ## -    index is the index of the child within the parent.
+    ## -    node or digest.
+    CHANGE_REPLACE_CHILD = 5;
 
 
 ## Return the size of a node.
@@ -336,7 +345,7 @@ class NodeContext : HashMapFieldSet {
         return __store.makeJournalIter(__head.branch);
     }
 
-    ## Set the head of the current branch to the digest.
+    ## Set the head of the current branch to the commit digest.
     @final void setHead(String digest) {
         __store.setHead(__head.branch, digest);
     }
@@ -1007,6 +1016,7 @@ class CachedNode {
 
     ## Returns the CachedEntry for the child wrapping the node.  Returns
     ## 'null' if undefined.
+    ## __populateChildren() must have been called before this.
     @final CachedEntry __getChildEntry(CachedNode node) {
         for (child :in __children) {
             if (child.node is node)
@@ -1118,9 +1128,50 @@ class CachedNode {
         return child;
     }
 
+    @final void __deepRecord() {
+        if (!isDirty())
+            # We should never actually do this because we're checking for a
+            # null node in the layer above.
+            return;
+
+        if (__populateChildren(false)) {
+            for (childIter :on __children) {
+                child := childIter.elem();
+                if (!child.node)
+                    continue;
+
+                change := Change();
+                change.node = child.node.node;
+                @assert(change.node);
+
+                # Record the change to the child.  Since this is called from
+                # immediately after storing a parent with a broken slot for
+                # this child, we always want to simply do a replace_child,
+                # which will just change the value of the slot.
+                change.type = CHANGE_REPLACE_CHILD;
+                @assert(change.node || change.digest);
+                change.index = int32(childIter.index);
+                __recordChange(change);
+            }
+
+            # Do a "deep record" on each of the dirty children.  This has to
+            # happen _after_ the child nodes themselves are recorded.
+            for (child :in __children) {
+                if (child.node)
+                    child.node.__deepRecord();
+            }
+        }
+    }
+
     ## Add a new child which is a CachedNode.
     ## You should use this for adding children with cached descendants.
     void addChild(String name, CachedNode child) {
+        # If the child is dirty and has children, we have to go through and
+        # replay each of the dirty children against the journal (this can
+        # happen if a node is copied from another context).
+        bool needsChildRecord =
+            child.isDirty() && child.__populateChildren(false);
+
         __addChild(name, child);
 
         # Record the change in the journal.
@@ -1129,6 +1180,10 @@ class CachedNode {
         change.name = name;
         change.node = child.node;
         __recordChange(change);
+
+        # Record the children against the journal.
+        if (needsChildRecord)
+            child.__deepRecord();
     }
 
     ## Add a new child node with the specified name.
@@ -2007,9 +2062,24 @@ class CachedNode {
         }
     }
 
+    void __replaceChild(int index, CachedNode node) {
+        @assert(__populateChildren(false));
+        __children[index].node = node;
+    }
+
+    ## Applies a change to the cached node.
+    ##
+    ## Note that this assumes that the  Node object within 'change' can be
+    ## taken for use by a new CachedNode without cloning.
     void __applyChange(Change change) {
         if (change.type == CHANGE_ADD_CHILD) {
             __addChild(change.name, CachedNode(__ctx, null, change.node));
+        } else if (change.type == CHANGE_REPLACE_CHILD) {
+            node := change.node ? change.node :
+                                  __ctx.getNode(change.digest).clone();
+            __replaceChild(change.index,
+                           CachedNode(__ctx, change.digest, node)
+                           );
         } else if (change.type == CHANGE_DELETE_CHILD) {
             if (!__populateChildren(false) || !__children.delete(change.name))
                 throw InvalidStateError(
@@ -2298,10 +2368,27 @@ class CachedNode {
 
     ## Returns a copy of the node the node to the new context.
     ##
+    ## It is the responsibility of the caller to set 'parent' on the new node.
+    ##
     ## This is primarily intended to facilitate a merge operation, not to move
     ## a node -- it's not certain how well this will work in that case.
     CachedNode copy(NodeContext ctx) {
-        return CachedNode(ctx, digest, node.clone());
+        result := CachedNode(ctx, digest, node.clone());
+
+        # If we're dirty and have a cached child array, we need to copy all
+        # dirty children.
+        if (isDirty() && __children) {
+            @assert(result.__populateChildren(true));
+            for (int i; i < __children.count(); ++i) {
+                child := __children[i];
+                if (child.node && child.node.isDirty()) {
+                    cachedNode := child.node.copy(ctx);
+                    result.__children[i].node = cachedNode;
+                    cachedNode.parent = result;
+                }
+            }
+        }
+        return result;
     }
 }
 

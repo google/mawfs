@@ -121,6 +121,11 @@ const int
         ## modified.
         repeated int32 path = 10;
 
+        ## Specified for CHANGE_REPLACE_CHILD to indicate the index of the
+        ## child to replace (would be the last element of 'path', but it's
+        ## just easier to work with as a separate attribute).
+        optional int32 index = 13;
+
         ## Child name.
         optional string name = 2;
 
@@ -155,7 +160,11 @@ const int
         ## journal may only be modified by the peer.
         optional bytes sessionId = 11;
 
-        # last tag: 11
+        ## The node digest (this may be specified instead of "node" for cases
+        ## where a committed node is being added).
+        optional bytes digest = 12;
+
+        # last tag: 13
     }
 }
 
