@@ -793,9 +793,30 @@ if (true) {
     @assert(subdir.getChild('deleted') is null);
 }
 
-# XXX test when a commit is forced while journalling a new child.  Once we
-# do that, it should no longer be necessary to journal the rest of the
-# child!
+cerr `Commits during a child copy.\n`;
+if (true) {
+    nodeStore = MemNodeStore();
+    ctx = NodeContext(nodeStore, 'master', null);
+    ctx2 := NodeContext(nodeStore, 'slave', null);
+
+    ctx2.getCache().maxJournalSize = 100;
+
+    # Write a large file to the source tree.
+    src := CachedNode(ctx, null, makeDirNode());
+    fileNode := CachedNode(ctx, null, Node());
+    src.addChild('changed', fileNode);
+    fileData := makeRandomData();
+    fileNode.write(0, fileData);
+
+    # Copy to the destination tree.
+    dst := CachedNode(ctx2, null, makeDirNode());
+    dst.addChild('changed', fileNode.copy(ctx2));
+
+    # Verify that we've committed and that there is no journal.
+    newRoot := Tree(nodeStore, 'slave').getRoot();
+    @assert(newRoot.getChild('changed').getContents() == fileData);
+    @assert(!ctx2.makeJournalIter());
+}
 
 # TODO:
 #   - create a directory and then a child node to verify that when we do

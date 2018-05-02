@@ -1100,12 +1100,18 @@ class CachedNode {
 
     ## Record a change in the journal for this node or for the appropriate
     ## parent node if this node doesn't have a digest yet.
-    void __recordChange(Change change) {
+    ##
+    ## Returns true if we committed in the course of this.
+    bool __recordChange(Change change) {
         change.path = Array[int32]();
         __makePath(change.path);
         __ctx.addChange(change);
-        if (__ctx.shouldCommit())
+        if (__ctx.shouldCommit()) {
             commitTree();
+            return true;
+        } else {
+            return false;
+        }
     }
 
     ## Internal add child method, which does everything but create a change
@@ -1128,11 +1134,15 @@ class CachedNode {
         return child;
     }
 
-    @final void __deepRecord() {
+    ## Record all children as "replace child" changes to reconstruct an added
+    ## node in the journal
+    ##
+    ## Returns true if this resulted in a commit.
+    @final bool __deepRecord() {
         if (!isDirty())
             # We should never actually do this because we're checking for a
             # null node in the layer above.
-            return;
+            return false;
 
         if (__populateChildren(false)) {
             for (childIter :on __children) {
@@ -1151,16 +1161,19 @@ class CachedNode {
                 change.type = CHANGE_REPLACE_CHILD;
                 @assert(change.node || change.digest);
                 change.index = int32(childIter.index);
-                __recordChange(change);
+                if (__recordChange(change))
+                    return true;
             }
 
             # Do a "deep record" on each of the dirty children.  This has to
             # happen _after_ the child nodes themselves are recorded.
             for (child :in __children) {
-                if (child.node)
-                    child.node.__deepRecord();
+                if (child.node && child.node.__deepRecord())
+                    return true;
             }
         }
+
+        return false;
     }
 
     ## Add a new child which is a CachedNode.
