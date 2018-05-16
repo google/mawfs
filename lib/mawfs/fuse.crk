@@ -64,7 +64,7 @@ class Context {
 
         # Look up the Path object, return null if we get to a non-directory.
         components := split(pathStr, b'/');
-        cur := __fs.getRoot();
+        Path cur = __fs.getRoot();
         for (int i = 1; i < components.count(); ++i) {
             if (cur && cur.isDir())
                 cur = cur[components[i]];

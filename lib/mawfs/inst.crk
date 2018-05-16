@@ -19,7 +19,7 @@ import crack.lang InvalidArgumentError, InvalidStateError;
 import crack.logger info;
 import crack.threads Mutex, MutexLock;
 
-import .admin InfoFiles;
+import .admin AdminRootFactory, InfoFiles;
 import .alt ResidentBranches;
 import .blockstore Commit, Node, NodeStore, MODE_DIR;
 import .cache Tree;
@@ -81,7 +81,7 @@ class InstanceState {
     ResidentBranches __branches;
 
     # Current root path of the instance.
-    Path __root;
+    MAWFSPath __root;
 
     class __Lock : MutexLock {
         InstanceState __state;
@@ -111,8 +111,10 @@ class InstanceState {
         __branches = ResidentBranches(__store, ctx.getCache());
         __branches.putIn(ctx);
 
-        # Store the instance information for the same reason.
+        # Store the instance information and admin root factory for the same
+        # reason.
         __infoFiles.putIn(ctx);
+        AdminRootFactory().putIn(ctx);
 
         __root = MAWFSPath(cachedRoot);
     }
@@ -185,13 +187,13 @@ class InstanceState {
         __tree.commit();
     }
 
-    ## Returns the root path.
-    Path getRoot() {
+    ## Gets the root directory of the filesystem.
+    MAWFSPath getRoot() {
         @checkLock();
         return __root;
     }
 
-    void setRoot(Path root) {
+    void setRoot(MAWFSPath root) {
         @checkLock();
         __root = root;
     }
@@ -232,12 +234,6 @@ class InstanceState {
             throw InvalidArgumentError(FStr() `Invalid branch $branchName`);
     }
 
-    ## Gets the root directory of the filesystem.
-    Path getRoot() {
-        @checkLock();
-        return __root;
-    }
-
     ## Returns the node store.
     NodeStore getStore() {
         @checkLock();
@@ -261,17 +257,7 @@ class InstanceState {
         commitDigest := store.getHead(branch);
         if (!commitDigest) {
             info `creating new filesystem`;
-
-            # Create an empty root node.
-            rootNode := Node();
-            rootNode.mode = MODE_DIR;
-            rootDigest := store.storeNode(rootNode);
-
-            # Store the first commit under "master".
-            commit := Commit();
-            commit.root = rootDigest;
-            commitDigest := store.storeCommit(commit);
-            store.setHead(branch, commitDigest);
+            store.createRepository(branch);
         }
 
         return InstanceState(backing, store, branch, mutex, userModule);

@@ -26,6 +26,7 @@ import crack.logger debug;
 import crack.runtime ENOENT, ENOTDIR, EEXIST, EINVAL, S_IFDIR, S_IFREG, SEEK_CUR,
     SEEK_END, SEEK_SET;
 import mawfs.cache CachedNode;
+import .path AdminDirFactory, MAWFSPath;
 
 @import crack.ann impl, interface;
 @import crack.fieldset_ann fieldset_accessors;
@@ -248,7 +249,7 @@ class BranchFile : AdminPath {
 
     ## Create a new directory containing the branch.  Returns null if the
     ## branch is not currrently defined.
-    @abstract Path makeBranchDir(String name);
+    @abstract MAWFSPath makeBranchDir(String name);
 
     @fieldset_accessors(AltSourceDir);
 }
@@ -380,3 +381,10 @@ class AdminRoot : AdminPath {
             InstInfoDir('inst', InfoFiles.get(root.getContext()));
     }
 }
+
+class AdminRootFactory : AdminDirFactory {
+    Path oper call(CachedNode root, String name) {
+        return AdminRoot(root, name);
+    }
+}
+

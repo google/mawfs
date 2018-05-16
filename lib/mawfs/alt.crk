@@ -52,7 +52,7 @@ class ResidentBranches @impl AltSourceDir {
 
     ## Make a new branch directory and add it to the set that is accessed by
     ## getBranches().
-    Path makeBranchDir(String name) {
+    MAWFSPath makeBranchDir(String name) {
         if (__branches.hasKey(name))
             throw Exception(FStr() `Branch $name Already defined`);
 

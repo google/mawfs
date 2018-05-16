@@ -37,7 +37,7 @@ import .rawchunk GeneralCallback, JournalBlock, RawChunkReader;
 import .ciphers AES256Cipher, Cipher;
 import .entropy getEntropySource;
 
-@import crack.ann interface, impl;
+@import crack.ann interface, impl, struct;
 @import crack.protobuf.ann protobuf;
 
 const MAX_NODE_SIZE := 1024 * 1024;
@@ -347,6 +347,28 @@ class Session {
 
     ## Gets the session object for the branch, creating a new one if necessary.
     @abstract Session getSession(String branch);
+
+    @struct RepoInfo {
+        String rootDigest;
+        String firstCommitDigest;
+    }
+
+    ## Convenience method to create a new repository in the node store.
+    @final RepoInfo createRepository(String branch) {
+        # Create an empty root node.
+        rootNode := Node();
+        rootNode.mode = MODE_DIR;
+        rootDigest := storeNode(rootNode);
+
+        # Store the first commit under "master".
+        commit := Commit();
+        commit.root = rootDigest;
+        commitDigest := storeCommit(commit);
+        setHead(branch, commitDigest);
+
+        return RepoInfo(rootDigest, commitDigest);
+    }
+
 }
 
 ## Interface for partial chunk stores that can load chunks from remote sources.

@@ -17,17 +17,18 @@ module;
 
 import crack.runtime EACCES, ENOENT, ENOTDIR;
 import crack.fs Path, PathIter, PathStat;
+import crack.functor Functor2;
 import crack.io Formatter, FStr, SeekableReader, SeekableWriter, SEEK_CUR,
     SEEK_END, SEEK_SET;
-import crack.lang Buffer, Exception, InvalidArgumentError, InvalidStateError,
-    WriteBuffer, SystemError;
+import crack.lang Buffer, Exception, FieldSet, InvalidArgumentError,
+    InvalidStateError, WriteBuffer, SystemError;
 import crack.logger debug;
 import crack.runtime S_IFDIR, S_IFREG;
-import mawfs.admin AdminRoot;
 import mawfs.blockstore Node, MODE_DIR, MODE_EXE;
 import mawfs.cache CachedNode;
 
-@import crack.ann implements;
+@import crack.ann impl, implements, interface;
+@import crack.fieldset_ann fieldset_accessors;
 
 ## RWPath extends the interface of crack.fs.Path to random-access read and
 ## write operations.
@@ -41,6 +42,10 @@ import mawfs.cache CachedNode;
     ## range, this should return an empty buffer.  If the node is not a file,
     ## the behavior is undefined.
     @abstract void read(uint pos, WriteBuffer data);
+}
+
+@abstract class AdminDirFactory @impl Functor2[Path, CachedNode, String] {
+    @fieldset_accessors(AdminDirFactory);
 }
 
 class _Seekable {
@@ -324,8 +329,9 @@ class MAWFSPath : RWPath {
     Path oper [](String child) {
         __checkExists();
 
-        if (isDir() && child == '.mawfs')
-            return AdminRoot(__rep.getRoot(), '.mawfs');
+        if (isDir() && child == '.mawfs' &&
+            factory := AdminDirFactory.get(__rep.getContext()))
+            return factory(__rep.getRoot(), '.mawfs');
 
         childNode := __rep.getChild(child);
         return MAWFSPath(childNode, this, child);
