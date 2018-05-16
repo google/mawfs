@@ -29,8 +29,8 @@ import crack.logger debug, error, info;
 import crack.serial SerialReader, SerialWriter;
 import crack.strutil StringArray;
 import crack.time Time;
-import mawfs.blockstore Entry, Change, Commit, JournalIter, Node, NodeStore,
-    Session, MODE_DIR;
+import mawfs.blockstore Entry, Change, ChangeEntry, Commit, JournalIter,
+    Node, NodeStore, Session, MODE_DIR;
 import mawfs.chunker RabinChunker, DEFAULT_WINDOW_SIZE;
 import mawfs.dllist DLList;
 
@@ -376,6 +376,7 @@ class NodeContext : HashMapFieldSet {
     @final uint getGCBottom() { return __cache.gcBottom }
 
     @final Cache getCache() { return __cache }
+    @final NodeStore getStore() { return __store }
 
     ## Records the digest of a new commit within the Head datastructure.
     @final void recordCommit(String commit) {
@@ -485,7 +486,7 @@ class NodeContext : HashMapFieldSet {
 }
 
 ## Creates a CachedNode.
-CachedNode _makeCachedNode(CachedNode parent, NodeContext ctx, String digest);
+CachedNode makeCachedNode(CachedNode parent, NodeContext ctx, String digest);
 
 ## Wraps a Node object with caching functionality.
 class CachedNode {
@@ -578,7 +579,7 @@ class CachedNode {
                     throw InvalidStateError(
                         FStr() `No hash or node for $(entry.name)`
                     );
-                node = _makeCachedNode(__parent, __ctx, entry.hash);
+                node = makeCachedNode(__parent, __ctx, entry.hash);
             }
             return node;
         }
@@ -940,7 +941,7 @@ class CachedNode {
         if (!cachedEntry) {
             entry := node.children[index];
 
-            node := _makeCachedNode(this, __ctx, entry.hash);
+            node := makeCachedNode(this, __ctx, entry.hash);
             if (!node) {
                 error `Unable to load node $(entry.hash)`;
                 return null;
@@ -2121,6 +2122,43 @@ class CachedNode {
         return __children[childIndex].getNode().__lookup(change, index + 1);
     }
 
+    ## Replay a single change from the journal.
+    ##
+    ## Returns the new last change digest.
+    ##
+    ## This should only be called on the root node (enforced in
+    ## replayJournal())
+    String __replayChange(ChangeEntry entry, String lastChangeDigest) {
+        change := entry.change;
+        if (!lastChangeDigest) {
+            # First change after a commit.  Verify that the change has a
+            # commit hash that matches the last commit.
+            if (!change.commit)
+                throw InvalidStateError('First change in the journal '
+                                         'does not have a commit field.'
+                                        );
+            if (change.commit != __ctx.getBaselineCommit())
+                throw InvalidStateError(
+                    FStr() I`First change in the journal is for commit \
+                             $(altEncode(change.commit)), current commit \
+                             is $(altEncode(__ctx.getBaselineCommit()))`
+                );
+        } else if (lastChangeDigest != change.lastChange) {
+            throw InvalidStateError(
+                FStr() I`Change $(altEncode(entry.digest)) should be \
+                         applied to $(altEncode(change.lastChange)). \
+                         last change was $(altEncode(lastChangeDigest)).`
+            );
+        }
+        node := __lookup(change, 0);
+        @assert(node);
+        node.__applyChange(change);
+        if (change.sessionId)
+            __ctx.storeSessionId(change.sessionId);
+        return entry.digest;
+
+    }
+
     ## Replay all journal entries against the node.  If the node doesn't have
     ## a digest or there are no changes, does nothing.  Should only be used on
     ## the root node.
@@ -2132,37 +2170,27 @@ class CachedNode {
 
         String lastChangeDigest;
         for (entry :in __ctx.makeJournalIter()) {
-            change := entry.change;
-            if (!lastChangeDigest) {
-                # First change after a commit.  Verify that the change has a
-                # commit hash that matches the last commit.
-                if (!change.commit)
-                    throw InvalidStateError('First change in the journal '
-                                             'does not have a commit field.'
-                                            );
-                if (change.commit != __ctx.getBaselineCommit())
-                    throw InvalidStateError(
-                        FStr() I`First change in the journal is for commit \
-                                 $(altEncode(change.commit)), current commit \
-                                 is $(altEncode(__ctx.getBaselineCommit()))`
-                    );
-            } else if (lastChangeDigest != change.lastChange) {
-                throw InvalidStateError(
-                    FStr() I`Change $(altEncode(entry.digest)) should be \
-                             applied to $(altEncode(change.lastChange)). \
-                             last change was $(altEncode(lastChangeDigest)).`
-                );
-            }
-            node := __lookup(change, 0);
-            @assert(node);
-            node.__applyChange(change);
-            lastChangeDigest = entry.digest;
-            if (change.sessionId)
-                __ctx.storeSessionId(change.sessionId);
+            lastChangeDigest = __replayChange(entry, lastChangeDigest);
         }
 
         # Store this in the context.
         __ctx.setLastChange(lastChangeDigest);
+    }
+
+    ## Replays the journals of 'a' and 'b' until the point where they diverge.
+    ##
+    ## This is used to obtain the common ancestor in the case of two branches
+    ## that have diverged since their baseline commit.
+    void replayJournalUntilDivergence(JournalIter a, JournalIter b) {
+        String lastChangeDigest;
+        while (a && b) {
+            aEntry := a.elem();
+            if (aEntry.change != b.elem().change)
+                break;
+            lastChangeDigest = __replayChange(aEntry, lastChangeDigest);
+            a.next();
+            b.next();
+        }
     }
 
     uint read(uint64 pos, WriteBuffer buffer) {
@@ -2405,7 +2433,7 @@ class CachedNode {
     }
 }
 
-CachedNode _makeCachedNode(CachedNode parent, NodeContext ctx, String digest) {
+CachedNode makeCachedNode(CachedNode parent, NodeContext ctx, String digest) {
     node := ctx.getNode(digest);
     if (!node)
         return null;
@@ -2442,7 +2470,7 @@ Reader _makeReadFile(NodeContext ctx, String digest) {
         CachedNode node;
         uint64 pos;
         oper init(NodeContext ctx, String digest) :
-            node = _makeCachedNode(null, ctx, digest) {
+            node = makeCachedNode(null, ctx, digest) {
         }
 
         uint read(WriteBuffer buffer) {
