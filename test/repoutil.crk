@@ -1,0 +1,48 @@
+# Copyright 2018 Google Inc. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+## Test housing for unit tests that need a repository.
+
+import mawfs.blockstore Node, MODE_DIR;
+import mawfs.cache CachedNode, NodeContext;
+import mawfs.memstore MemNodeStore;
+
+import test.unittest Test;
+
+@abstract class RepoTest : Test {
+    MemNodeStore store = {};
+    String commitDigest, rootDigest;
+
+    void setUp() {
+        info := store.createRepository('master');
+        rootDigest = info.rootDigest;
+        commitDigest = info.firstCommitDigest;
+    }
+
+    ## Create a directory node using the specified context.
+    CachedNode makeDir(NodeContext ctx) {
+        node := Node();
+        node.mode = MODE_DIR;
+        return CachedNode(ctx, rootDigest, node);
+    }
+
+    ## Create a cached node for a file with the specified contents.
+    CachedNode makeFile(NodeContext ctx, String contents) {
+        node := Node();
+        node.contents = contents;
+        node.size = contents ? contents.count() : 0;
+        digest := store.storeNode(node);
+        return CachedNode(ctx, digest, node);
+    }
+}

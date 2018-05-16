@@ -1,10 +1,15 @@
 ## Useful utilities.
 
+import crack.cont.array Array;
+import crack.cont.hashmap HashMap;
 import crack.lang InvalidResourceError;
 import crack.enc.base64 altEncode;
 import crack.io FStr;
 
 import .blockstore Commit, Node, NodeStore;
+import .cache makeCachedNode, CachedNode, NodeContext;
+
+@import crack.ann assert;
 
 ## Thrown when a node is not found during a tree traversal.
 class NodeNotFound : InvalidResourceError {
@@ -45,3 +50,136 @@ void traverse(NodeStore store, Commit commit) {
         }
     }
 }
+
+class _CommitFinder {
+    NodeStore __store;
+
+    # Keeps track of all of the commits we've discovered.  The value
+    # is an index (0 or 1) of the "side" of the relationship that the commit
+    # finder is to be run against: if we discover the current digest stored
+    # for the other side, we've discovered the common commit.
+    #
+    # A value of -1 is used as the default during get's, indicating
+    # an undiscovered commit.
+    HashMap[String, int] commits = {};
+
+    Array[String] queue;
+    int side;
+
+    ## commits: a common map from traversed commit digests to the side on
+    ##     which they were discovered.
+    ## side: The side of this commit (should be zero or 1).
+
+    oper init(NodeStore store, HashMap[String, int] commits,
+              String commitDigest,
+              int side) :
+        __store = store,
+        commits = commits,
+        queue = Array[String]![commitDigest],
+        side = side {
+    }
+
+    void expandParents(String digest) {
+        commit := __store.getCommit(digest);
+        @assert(commit);
+        if (commit.parent) {
+            for (parent :in commit.parent)
+                queue.append(parent);
+        }
+    }
+
+    String process() {
+        if (!queue)
+            return null;
+
+        curCommit := queue.pop();
+        status := commits.get(curCommit, -1);
+        if (status != -1) {
+            # If the commit was recorded on the other side we've found the
+            # common commit.
+            if (status == (side ? 0 : 1))
+                return curCommit;
+
+            # if the commit was recorded from this side, then we don't have to
+            # add it back to the queue - there's another digest in the queue
+            # that has already traversed that commit and will pick up all of
+            # its ancestors.
+        } else {
+            # Record the fact that we've traversed this commit and add all of
+            # its parents to the queue.
+            commits[curCommit] = side;
+            expandParents(curCommit);
+        }
+        return null;
+    }
+
+    ## Returns true if there is more processing we can do (basically if
+    ## there's anything left in the ancestor queue).
+    bool isTrue() { return queue.isTrue() }
+}
+
+## Returns a commit digest that is a common ancestor of commit digests
+## 'alpha' and 'beta'.
+##
+## This can return null if there is no common ancestor (meaning that either
+## the commits are not from the same repository, or that the repository is
+## broken)
+String findCommonCommit(NodeStore store, String alpha, String beta) {
+    # Keeps track of all of the commits we've discovered.  The value
+    # is either:
+    #    0: the commit was discovered in the alpha ancestors
+    #    1: The commit was disceovered in beta's ancestors.
+    # A value of -1 is used as the default during get's, indicating
+    # an undiscovered commit.
+    HashMap[String, int] commits = {};
+
+    alphaFinder := _CommitFinder(store, commits, alpha, 0);
+    betaFinder := _CommitFinder(store, commits, beta, 1);
+
+    while (alphaFinder || betaFinder) {
+        result := alphaFinder.process();
+        if (result) return result;
+        result = betaFinder.process();
+        if (result) return result;
+    }
+    return null;
+}
+
+## Returns the root of a tree that is the common ancestor of 'target' and
+## 'other' (representative nodes of two branches).
+##
+## Throws AssertionError if it can't do this for any reason (the nodes must
+## have a common ancestor).
+CachedNode findCommonAncestor(CachedNode target, CachedNode other) {
+    ctx := target.getContext();
+    targetBaseline := ctx.getBaselineCommit();
+    otherBaseline := other.getContext().getBaselineCommit();
+    if (targetBaseline == otherBaseline) {
+        # Get the baseline.
+        ctx := target.getContext();
+        commit := ctx.getCommit(ctx.getHead());
+        @assert(commit);
+        org := makeCachedNode(null, ctx, commit.root);
+        @assert(org);
+
+        # Find where the journal diverges.
+        org.replayJournalUntilDivergence(
+            ctx.makeJournalIter(),
+            other.getContext().makeJournalIter()
+        );
+
+        return org;
+    } else {
+        common := findCommonCommit(ctx.getStore(), targetBaseline, otherBaseline);
+
+        # We've traversed all the way back, we should have found a common
+        # node.
+        @assert(common);
+        commit := ctx.getCommit(common);
+        @assert(commit);
+        org := makeCachedNode(null, ctx, commit.root);
+        @assert(org);
+        return org;
+    }
+}
+
