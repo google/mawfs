@@ -138,6 +138,10 @@ void usage() {
                 Pull the branch.  'addr' is the mawfs instance address. You
                 may optionally specify a peer to pull the branch from a
                 specific peer, otherwise the instance will just select one.
+            mawfs merge <branch>
+                Merge with another branch.  This produces a new commit if
+                there are no conflicts, or a merge branch and a conflict
+                report if there are.
             mawfs hash <filename> ...
                 Show file hashes.
                 the correct way to do this.
@@ -177,6 +181,8 @@ class RPCCmd {
     oper del() {
         __comm.stop();
     }
+
+    PeerProxy getProxy() { return __proxy }
 
     void pullBranch(String branch, String peer) {
         localName := __proxy.pullBranch(branch, peer);
@@ -464,6 +470,19 @@ class CommandManager {
                                    (args.count() > 3) ? args[3] : null
                                    );
     }
+
+    ## The "merge" command.
+    void merge() {
+        checkArgs(3, "Usage: mawfs merge <branch>\n");
+        setLogLevel(DEBUG);
+
+        server := getServer();
+        result := makeRPC(server).getProxy().merge(args[2]);
+        if (result.commit)
+            cout `committed: $(result.commit)\n`;
+        else
+            cout `created merge branch: $(result.mergeBranch)\n`;
+    }
 }
 
 # The main function, which is a command dispatcher.
@@ -601,6 +620,8 @@ void main() {
             dumpNode(cout, node);
         } else if (cmd == 'pull') {
             cm.pull();
+        } else if (cmd == 'merge') {
+            cm.merge();
         } else {
             cerr `Unknown command: $cmd\n`;
             usage();

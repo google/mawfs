@@ -365,6 +365,9 @@ class MAWFSPath : RWPath {
     void formatTo(Formatter out) {
         out `Path for $__rep`;
     }
+
+    ## Returns the underlying cached node.
+    CachedNode getCachedNode() { return __rep }
 }
 
 Path _makeMAWFSPath(CachedNode node, Path parent, String name) {

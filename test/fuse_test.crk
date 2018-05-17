@@ -294,7 +294,7 @@ class ParamsTest : TestCase {
  }
 register(ParamsTest());
 
-class CloneTest : TestCase {
+@abstract class DoubleInstanceTest : TestCase {
     Path backing2, fs2;
 
     void setUp() {
@@ -304,25 +304,8 @@ class CloneTest : TestCase {
             backing2.deleteTree();
         if (fs2.exists())
             fs2.deleteTree();
-        TestCase.setUp();
-    }
-
-    void run() {
-        # Start up a server on port 12543
-        (makePath('backing')/'config/peers').writeAll('[server]\nport = 12543\n');
-        (makePath('fs')/'foo').writeAll('test file contents');
-        restartFS('master');
-        runMawfs(StringArray!['clone', 'localhost:12543', 'backing2']);
-        @assert((backing2/'params').exists());
         fs2.makeDir();
-        runMawfs(StringArray!['run', 'backing2', 'fs2']);
-        @assert((fs2/'foo').readAll() == 'test file contents');
-
-        # Now try doing a "pull" and verify that we see the update in the
-        # new filesystem.
-        (makePath('fs')/'bar').writeAll('more file contents');
-        runMawfs(StringArray!['pull', '-i', 'localhost:9119', 'master']);
-        @assert((fs2/'bar').readAll() == 'more file contents');
+        TestCase.setUp();
     }
 
     void tearDown() {
@@ -334,7 +317,58 @@ class CloneTest : TestCase {
         TestCase.tearDown();
     }
 }
+
+class CloneTest : DoubleInstanceTest {
+    void run() {
+        # Start up a server on port 12543
+        (makePath('backing')/'config/peers').writeAll('[server]\nport = 12543\n');
+        (makePath('fs')/'foo').writeAll('test file contents');
+        restartFS('master');
+        runMawfs(StringArray!['clone', 'localhost:12543', 'backing2']);
+        @assert((backing2/'params').exists());
+        runMawfs(StringArray!['run', 'backing2', 'fs2']);
+        @assert((fs2/'foo').readAll() == 'test file contents');
+
+        # Now try doing a "pull" and verify that we see the update in the
+        # new filesystem.
+        (makePath('fs')/'bar').writeAll('more file contents');
+        runMawfs(StringArray!['pull', '-i', 'localhost:9119', 'master']);
+        @assert((fs2/'bar').readAll() == 'more file contents');
+    }
+}
 register(CloneTest());
+
+class MergeTest : DoubleInstanceTest {
+    void run() {
+        (makePath('backing')/'config/peers').writeAll('[server]\nport = 12543\n');
+        (makePath('fs')/'first').writeAll('test file contents');
+        restartFS('master');
+        runMawfs(StringArray!['clone', 'localhost:12543', 'backing2']);
+
+        # Start the new instannce
+        cerr `Starting second instance\n`;
+        runMawfs(StringArray!['run', 'backing2', 'fs2']);
+
+        # Mutate some files, create a conflict.
+        (makePath('fs')/'on_master').writeAll('on master contents');
+        (makePath('fs2')/'on_slave').writeAll('on slave contents');
+        (makePath('fs')/'foo').writeAll('new contents');
+        (makePath('fs2')/'foo').writeAll('alt contents');
+
+        runMawfs(StringArray!['pull', '-i', 'localhost:9119', 'master']);
+        runMawfs(StringArray!['merge', '-i', 'localhost:9119',
+                              '127.0.0.1:12543:master'
+                              ]
+                 );
+        curBranch := (makePath('fs2')/'.mawfs'/'branch').readAll();
+        @assert(curBranch.startsWith('merge:'));
+        StringArray branches = {};
+        for (child :in (makePath('fs2')/'.mawfs'/'alt').children())
+            branches.append(child.getName());
+        assertEqual(branches, StringArray!['127.0.0.1:12543:master']);
+    }
+}
+register(MergeTest());
 
 runAllTests();
 

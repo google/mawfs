@@ -2375,7 +2375,7 @@ class CachedNode {
 
                 # Compare names of the children.
                 diff :=
-                    __children[i].getName().cmp(other.__children[i].getName());
+                    cmp(__children[i].getName(), other.__children[i].getName());
                 if (diff)
                     return diff;
 

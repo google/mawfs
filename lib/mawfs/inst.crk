@@ -227,11 +227,12 @@ class InstanceState {
 
     ## Add a resident branch.  Throws an InvalidArgumentError if the branch
     ## does not exist.  Succeeds silently if the branch is already resident.
-    void makeResidentBranch(String branchName) {
+    MAWFSPath makeResidentBranch(String branchName) {
         @checkLock();
-        if (!__branches.hasBranch(branchName) &&
-            !__branches.makeBranchDir(branchName))
+        result := __branches.getBranchDir(branchName);
+        if (!result)
             throw InvalidArgumentError(FStr() `Invalid branch $branchName`);
+        return result;
     }
 
     ## Returns the node store.

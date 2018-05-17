@@ -51,7 +51,7 @@ class ResidentBranches @impl AltSourceDir {
     }
 
     ## Make a new branch directory and add it to the set that is accessed by
-    ## getBranches().
+    ## getBranches().  Throws an exception if the branch already exists.
     MAWFSPath makeBranchDir(String name) {
         if (__branches.hasKey(name))
             throw Exception(FStr() `Branch $name Already defined`);
@@ -63,13 +63,21 @@ class ResidentBranches @impl AltSourceDir {
         tree := Tree(__store, __cache, name);
         root := tree.getRoot();
         __branches[name] = BranchInfo(name, tree);
-        __branchPaths[name] = MAWFSPath(tree.getRoot(), null, name);
-        return MAWFSPath(root, false);
+        __branchPaths[name] = path := MAWFSPath(tree.getRoot(), null, name);
+        return path;
     }
 
 
     ## Returns true if the branch exists in the set of resident branches.
     bool hasBranch(String name) {
         return __branches.hasKey(name);
+    }
+
+    ## Returns a branch of the given name, creating it if it does not exist.
+    MAWFSPath getBranchDir(String name) {
+        if (result := __branchPaths.get(name))
+            return MAWFSPath.cast(result);
+        else
+            return makeBranchDir(name);
     }
 }

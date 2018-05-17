@@ -2,6 +2,7 @@
 
 import crack.fs Path;
 import crack.functor Functor0;
+import crack.io FStr;
 import crack.lang Exception;
 import crack.logger debug, error, info;
 import crack.threads Mutex, MutexLock, Queue, Thread;
@@ -9,9 +10,11 @@ import crack.threads Mutex, MutexLock, Queue, Thread;
 import .blockstore ChunkStore, Commit;
 import .cache Cache, NodeContext;
 import .inst InstanceState;
+import .merge Merger = MergeResult;
 import .peernet PeerNetwork;
 import .rawchunk GeneralCallback;
 import .rpc InstIFace, MergeResult;
+import .util findCommonAncestor;
 
 @import crack.ann cvars, define, impl;
 
@@ -281,10 +284,28 @@ class MAWFSInstance @impl InstIFace {
         lock := __state.lock();
 
         # Get the local branch.
+        target := __state.getRoot().getCachedNode();
 
-        # Get the merge branch.
-        __state.makeResidentBranch(branch);
-        return MergeResult(branch, null);
+        # Get the branch to merge with.
+        otherPath := __state.makeResidentBranch(branch);
+        if (!otherPath)
+            throw Exception(FStr() `Branch $branch not found`);
+        other := otherPath.getCachedNode();
+
+        # Find the common ancestor.
+        org := findCommonAncestor(target, other);
+
+        # Attempt the merge.
+        result := Merger(target, org, other).merge();
+
+        if (result.conflict) {
+            # XXX todo: add conflict info to the result
+            return MergeResult(result.branch, null);
+        } else {
+            # XXX remove branch that we merged with.
+            commit := result.newRoot.getContext().getBaselineCommit();
+            return MergeResult(null, commit);
+        }
     }
 
     ## RPC service for pullBranch.  Starts the call off in a new thread.
