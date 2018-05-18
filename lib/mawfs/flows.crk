@@ -298,11 +298,14 @@ class MAWFSInstance @impl InstIFace {
         # Attempt the merge.
         result := Merger(target, org, other).merge();
 
+        # Install the new root node in the instance.
+        __state.setRoot(result.newRoot);
+
         if (result.conflict) {
             # XXX todo: add conflict info to the result
             return MergeResult(result.branch, null);
         } else {
-            # XXX remove branch that we merged with.
+            __state.removeResidentBranch(branch);
             commit := result.newRoot.getContext().getBaselineCommit();
             return MergeResult(null, commit);
         }

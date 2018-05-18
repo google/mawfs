@@ -384,8 +384,8 @@ class MergeTest : TestBed {
         proxy.pullBranch('foo', null);
         (master.getRoot('foo')/'masterFile').writeAll(FILE_CONTENTS);
         result := proxy.merge('foo');
-        @assert(result.mergeBranch == 'foo');
-        @assert((slave.getRoot()/'.mawfs'/'alt'/'foo').exists());
+        @assert(result.mergeBranch is null);
+        @assert(!(slave.getRoot()/'.mawfs'/'alt'/'foo').exists());
     }
 }
 register(MergeTest());

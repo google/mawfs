@@ -22,7 +22,7 @@ import crack.threads Mutex, MutexLock;
 import .admin AdminRootFactory, InfoFiles;
 import .alt ResidentBranches;
 import .blockstore Commit, Node, NodeStore, MODE_DIR;
-import .cache Tree;
+import .cache CachedNode, Tree;
 import .path MAWFSPath;
 
 @import crack.ann define, interface;
@@ -97,18 +97,13 @@ class InstanceState {
         }
     }
 
-    ## Reset the tree and the root node to the latest commit and journal on
-    ## the branch.
-    ## Do this when the journal changes from an external source (like a branch
-    ## pull).
-    void resetTree() {
-        __tree = Tree(__store, __branch);
-        cachedRoot := __tree.getRoot();
-
+    ## Hook the new root node into the tree.
+    void __setRoot(CachedNode cachedRoot) {
         # Create the set of resident branches and attach it to the root node
         # context.
         ctx := cachedRoot.getContext();
-        __branches = ResidentBranches(__store, ctx.getCache());
+        if (!__branches)
+            __branches = ResidentBranches(__store, ctx.getCache());
         __branches.putIn(ctx);
 
         # Store the instance information and admin root factory for the same
@@ -117,6 +112,22 @@ class InstanceState {
         AdminRootFactory().putIn(ctx);
 
         __root = MAWFSPath(cachedRoot);
+    }
+
+    ## Reset the tree and the root node to the latest commit and journal on
+    ## the branch.
+    ## Do this when the journal changes from an external source (like a branch
+    ## pull).
+    void resetTree() {
+        __tree = Tree(__store, __branch);
+        cachedRoot := __tree.getRoot();
+        __setRoot(cachedRoot);
+    }
+
+    ## Install a new root node into the instance.
+    void setRoot(CachedNode root) {
+        __tree = Tree(root);
+        __setRoot(root);
     }
 
     ## Constructor.
@@ -233,6 +244,12 @@ class InstanceState {
         if (!result)
             throw InvalidArgumentError(FStr() `Invalid branch $branchName`);
         return result;
+    }
+
+    ## Removes a resident branch.  Throws a KeyError if it doesn't exist.
+    void removeResidentBranch(String branchName) {
+        @checkLock();
+        __branches.removeBranchDir(branchName);
     }
 
     ## Returns the node store.

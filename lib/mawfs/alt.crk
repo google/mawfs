@@ -80,4 +80,9 @@ class ResidentBranches @impl AltSourceDir {
         else
             return makeBranchDir(name);
     }
+
+    ## Removes a branch dir, raises a KeyError if it doesn't exist.
+    void removeBranchDir(String name) {
+        __branchPaths.delete(name);
+    }
 }

@@ -2529,6 +2529,9 @@ class MissingChunkError : Exception {
         __ctx(context, cache, branch) {
     }
 
+    ## Create the tree for a given root node.
+    oper init(CachedNode root) : __ctx = root.getContext(), __root = root {}
+
     ## Initialize the tree if it's not already initialized.  This obtains the
     ## current head revision and root node and replays the journal, so it's a
     ## fairly heavy operation.
