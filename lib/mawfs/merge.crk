@@ -297,12 +297,20 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
     }
 }
 
-@final class MergeResult {
+## Merges three root nodes into a single filesystem.
+##
+## Usage:
+##    merger := Merger(target, org, other).merge();
+##
+## Details of the merge are stored in the attributes of the resulting Merger.
+@final class Merger {
     CachedNode target, org, other;
 
-    ## The original branch of the target.
+    ## The original branch name of the target.
     String orgBranch;
 
+    ## The "new root" node.  Callers should use this in replacement of
+    ## 'target'.
     CachedNode newRoot;
 
     ## nullable, if present this contains the conflict information.
@@ -312,6 +320,12 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
     ## there were no conflicts and the merge was fully committed.
     String branch;
 
+    ## target: The root of the head of a branch.  The merge will be performed
+    ##     on this object, it will be mutated to contain any changed files
+    ##     from 'other' that can be merged without conflct.
+    ## org: The root of the nearest tree that both 'target' and 'other' are
+    ##     derived from.
+    ## other: The root of a tree that has diverged from 'target'.
     oper init(CachedNode target, CachedNode org, CachedNode other ) :
         target = target,
         org = org,
@@ -356,8 +370,11 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
             ctx.addChange(changeEntry.change);
     }
 
+    ## Performs the merge, returns a Merger object containing the details of
+    ## the merge.
+    ##
     ## Must be called after createMergeBranch()
-    MergeResult merge() {
+    Merger merge() {
         if (!branch)
             createMergeBranch();
         outcome := merge3(target, org, other);

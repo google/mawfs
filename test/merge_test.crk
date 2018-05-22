@@ -19,7 +19,7 @@ import crack.strutil StringArray;
 import mawfs.blockstore Commit, Entry, Node, MODE_DIR;
 import mawfs.memstore MemNodeStore;
 import mawfs.cache sig, CachedNode, NodeContext, Tree;
-import mawfs.merge merge3, Conflict, MergeResult, Mutation, UNCHANGED;
+import mawfs.merge merge3, Conflict, Merger, Mutation, UNCHANGED;
 
 import test.unittest register, runAllTests, Test;
 
@@ -278,7 +278,7 @@ register(FileAddedInOther());
 
 class CommitOnSuccessfulMerge : FooBarTest {
     void run() {
-        a = MergeResult(a, org, b).merge().newRoot;
+        a = Merger(a, org, b).merge().newRoot;
         @assert(a);
         checkTree(a);
         a = Tree(store, 'master').getRoot();
@@ -295,7 +295,7 @@ class MergeBranchAfterConflicts : FooBarTest {
         a.addChild('conflict', makeFileNode('version for a'));
         b.addChild('conflict', makeFileNode(ctx2, 'version for b'));
 
-        merge := MergeResult(a, org, b).merge();
+        merge := Merger(a, org, b).merge();
         a = merge.newRoot;
         @assert(a);
         @assert(merge.conflict);

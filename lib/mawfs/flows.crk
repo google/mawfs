@@ -10,7 +10,7 @@ import crack.threads Mutex, MutexLock, Queue, Thread;
 import .blockstore ChunkStore, Commit;
 import .cache Cache, NodeContext;
 import .inst InstanceState;
-import .merge Merger = MergeResult;
+import .merge Merger;
 import .peernet PeerNetwork;
 import .rawchunk GeneralCallback;
 import .rpc InstIFace, MergeResult;
