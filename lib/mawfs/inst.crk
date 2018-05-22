@@ -246,6 +246,12 @@ class InstanceState {
         return result;
     }
 
+    ## Make a resident branch for the given root object.
+    void makeResidentBranch(String branchName, CachedNode root) {
+        @checkLock();
+        __branches.makeBranchDir(branchName, root);
+    }
+
     ## Removes a resident branch.  Throws a KeyError if it doesn't exist.
     void removeResidentBranch(String branchName) {
         @checkLock();

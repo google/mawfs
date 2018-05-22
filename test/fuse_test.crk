@@ -345,8 +345,7 @@ class MergeTest : DoubleInstanceTest {
         restartFS('master');
         runMawfs(StringArray!['clone', 'localhost:12543', 'backing2']);
 
-        # Start the new instannce
-        cerr `Starting second instance\n`;
+        # Start the new instance
         runMawfs(StringArray!['run', 'backing2', 'fs2']);
 
         # Mutate some files, create a conflict.
@@ -365,10 +364,77 @@ class MergeTest : DoubleInstanceTest {
         StringArray branches = {};
         for (child :in (makePath('fs2')/'.mawfs'/'alt').children())
             branches.append(child.getName());
-        assertEqual(branches, StringArray!['127.0.0.1:12543:master']);
+        assertEqual(branches,
+                    StringArray!['127.0.0.1:12543:master', 'merge:org']
+                    );
+
+        # Verify that file contents are as we expect.
+        assertEqual((makePath('fs2')/'on_master').readAll(),
+                    'on master contents'
+                    );
+        assertEqual((makePath('fs2')/'on_slave').readAll(),
+                    'on slave contents'
+                    );
+        assertEqual((makePath('fs2')/'foo').readAll(),
+                    'alt contents'
+                    );
+
+        masterFS := makePath('fs2')/'.mawfs'/'alt'/'127.0.0.1:12543:master';
+        assertEqual(
+            (masterFS/'on_master').readAll(),
+            'on master contents'
+        );
+        @assert(!(masterFS/'on_slave').exists());
+
+        orgFS := makePath('fs2')/'.mawfs'/'alt'/'merge:org';
+        assertEqual((orgFS/'first').readAll(), 'test file contents');
+        @assert(!(orgFS/'foo').exists());
+        @assert(!(orgFS/'on_master').exists());
+        @assert(!(orgFS/'on_slave').exists());
+
     }
 }
 register(MergeTest());
+
+class MergeNoConflictTest : DoubleInstanceTest {
+    void run() {
+        # Common code, move into a MergeTest base class.
+        (makePath('backing')/'config/peers').writeAll('[server]\nport = 12543\n');
+        (makePath('fs')/'first').writeAll('test file contents');
+        restartFS('master');
+        runMawfs(StringArray!['clone', 'localhost:12543', 'backing2']);
+
+        # Start the new instance
+        runMawfs(StringArray!['run', 'backing2', 'fs2']);
+
+        # Create files on each branch.
+        (makePath('fs')/'on_master').writeAll('on master contents');
+        (makePath('fs2')/'on_slave').writeAll('on slave contents');
+
+        # Pull and merge.
+        runMawfs(StringArray!['pull', '-i', 'localhost:9119', 'master']);
+        runMawfs(StringArray!['merge', '-i', 'localhost:9119',
+                              '127.0.0.1:12543:master'
+                              ]
+                 );
+
+        # Verify that we ended up in a clean state.
+        masterFS := makePath('fs2')/'.mawfs'/'alt'/'127.0.0.1:12543:master';
+        @assert(!masterFS.exists());
+        orgFS := makePath('fs2')/'.mawfs'/'alt'/'merge:org';
+        assertEqual((makePath('fs2')/'.mawfs'/'branch').readAll(),
+                    'master'
+                    );
+        assertEqual((makePath('fs2')/'on_master').readAll(),
+                    'on master contents'
+                    );
+        assertEqual((makePath('fs2')/'on_slave').readAll(),
+                    'on slave contents'
+                    );
+
+    }
+}
+register(MergeNoConflictTest());
 
 runAllTests();
 

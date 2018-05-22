@@ -21,7 +21,7 @@ import crack.lang Exception;
 import crack.io FStr;
 import .admin AltSourceDir, PathMap;
 import .blockstore NodeStore;
-import .cache Cache, Tree;
+import .cache Cache, CachedNode, Tree;
 import .path MAWFSPath;
 
 @import crack.ann impl, struct;
@@ -67,6 +67,15 @@ class ResidentBranches @impl AltSourceDir {
         return path;
     }
 
+    ## Make a new branch directory for the specified root node.  Throws an
+    ## exception if the branch already exists.
+    void makeBranchDir(String name, CachedNode root) {
+        if (__branches.hasKey(name))
+            throw Exception(FStr() `Branch $name already defined.`);
+        tree := Tree(root);
+        __branches[name] = BranchInfo(name, tree);
+        __branchPaths[name] = path := MAWFSPath(root, null, name);
+    }
 
     ## Returns true if the branch exists in the set of resident branches.
     bool hasBranch(String name) {

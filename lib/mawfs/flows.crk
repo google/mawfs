@@ -303,6 +303,8 @@ class MAWFSInstance @impl InstIFace {
 
         if (result.conflict) {
             # XXX todo: add conflict info to the result
+            # Add a branch for the common ancestor.
+            __state.makeResidentBranch('merge:org', org);
             return MergeResult(result.branch, null);
         } else {
             __state.removeResidentBranch(branch);
