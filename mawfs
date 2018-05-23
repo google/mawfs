@@ -480,8 +480,12 @@ class CommandManager {
         result := makeRPC(server).getProxy().merge(args[2]);
         if (result.commit)
             cout `committed: $(result.commit)\n`;
-        else
+        else {
             cout `created merge branch: $(result.mergeBranch)\n`;
+            cout `Conflicts (must be merged manually):`;
+            for (name :in result.conflict)
+                cout `   $name\n`;
+        }
     }
 }
 

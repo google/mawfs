@@ -111,12 +111,16 @@ class AppError : Exception {
         ## name of the temporary merge branch.
         optional string mergeBranch = 1;
         optional string commit = 2;
+        repeated string conflict = 3;
     }
 }
 
-@struct MergeResult {
-    String mergeBranch;
-    String commit;
+class MergeResult : MergeResponse {
+    oper init(String mergeBranch, String commit, Array[String] conflicts) {
+        this.mergeBranch = mergeBranch;
+        this.commit = commit;
+        conflict = conflicts;
+    }
 }
 
 @interface InstIFace {
@@ -124,7 +128,9 @@ class AppError : Exception {
                               GeneralCallback[String] callback
                               );
 
-    @abstract void merge(String branch, GeneralCallback[MergeResult] callback);
+    @abstract void merge(String
+                         branch, GeneralCallback[MergeResponse] callback
+                         );
 }
 
 InstIFace _inst;
@@ -359,13 +365,13 @@ class PeerProxy {
     }
 
     ## Initiates a merge of the active branch with the specified merge branch.
-    MergeResult merge(String branch) {
+    MergeResponse merge(String branch) {
         MergeRequest req = {};
         MergeResponse resp = {};
         req.branch = branch;
         respData := __invoke('merge', req.toString());
         readMessageFromString(resp, respData);
-        return MergeResult(resp.mergeBranch, resp.commit);
+        return MergeResult(resp.mergeBranch, resp.commit, resp.conflict);
     }
 }
 
@@ -582,17 +588,14 @@ void merge(Context context, RPCMessage msg, CommHandler comm) {
     MergeRequest req = {};
     readMessageFromString(req, msg.request);
 
-    class ResponseCallback @impl GeneralCallback[MergeResult] {
+    class ResponseCallback @impl GeneralCallback[MergeResponse] {
         @cvars {Context context; CommHandler comm; int32 requestId;}
-        void oper call(MergeResult mergeResult, Exception ex) {
+        void oper call(MergeResponse resp, Exception ex) {
             # merge is handled asynchronously, so we have to check
             # the 'ex' argument.
             if (ex) {
                 context.writeError(comm, ex.text, requestId);
             } else {
-                MergeResponse resp = {};
-                resp.mergeBranch = mergeResult.mergeBranch;
-                resp.commit = mergeResult.commit;
                 context.writeResponse(comm, resp, requestId);
             }
         }

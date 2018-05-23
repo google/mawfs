@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
+import crack.cont.array Array;
 import crack.cont.hashmap HashMap;
 import crack.fs makePath, Path;
 import crack.hash.sha256 SHA256;
@@ -91,7 +91,7 @@ class PeerInfo {
     }
 
     ## Returns a Path object for the root of the head of 'branch'.
-    Path getRoot(String branch) {
+    MAWFSPath getRoot(String branch) {
         # Otherwise just construct one from the chunk store.
         tree := Tree(cs, branch);
         return MAWFSPath(tree.getRoot());
@@ -389,6 +389,27 @@ class MergeTest : TestBed {
     }
 }
 register(MergeTest());
+
+class ConflictsTest : TestBed {
+    void run() {
+        master.makeBranch('master');
+        (master.getRoot('master')/'dir').makeDir();
+        proxy.pullBranch('master', null);
+
+        # Cause a divergence.
+        (master.getRoot('master')/'dir'/'conflict').writeAll('some data');
+        (slave.getRoot('master')/'dir'/'conflict').writeAll('other data');
+
+        # Reset the slave's instance state (getRoot() creates its own tree).
+        slave.instState.resetTree();
+
+        # Merge, verify there were conflicts.
+        altBranch := proxy.pullBranch('master', null);
+        result := proxy.merge(altBranch);
+        assertEqual(result.conflict, Array[String]!['dir/conflict']);
+    }
+}
+register(ConflictsTest());
 
 /* This test fails.  Double writeAll() breaky-breaky.
 class DoubleWriteAll : TestBed {

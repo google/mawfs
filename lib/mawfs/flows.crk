@@ -1,5 +1,6 @@
 ## High-level workflows.
 
+import crack.cont.array Array;
 import crack.fs Path;
 import crack.functor Functor0;
 import crack.io FStr;
@@ -13,7 +14,7 @@ import .inst InstanceState;
 import .merge Merger;
 import .peernet PeerNetwork;
 import .rawchunk GeneralCallback;
-import .rpc InstIFace, MergeResult;
+import .rpc InstIFace, MergeResult, MergeResponse;
 import .util findCommonAncestor;
 
 @import crack.ann cvars, define, impl;
@@ -302,14 +303,19 @@ class MAWFSInstance @impl InstIFace {
         __state.setRoot(result.newRoot);
 
         if (result.conflict) {
-            # XXX todo: add conflict info to the result
             # Add a branch for the common ancestor.
             __state.makeResidentBranch('merge:org', org);
-            return MergeResult(result.branch, null);
+
+            # Build the list of conflicting paths.
+            conflict := Array[String]();
+            for (name :in result.conflict)
+                conflict.append(name);
+
+            return MergeResult(result.branch, null, conflict);
         } else {
             __state.removeResidentBranch(branch);
             commit := result.newRoot.getContext().getBaselineCommit();
-            return MergeResult(null, commit);
+            return MergeResult(null, commit, null);
         }
     }
 
@@ -322,8 +328,8 @@ class MAWFSInstance @impl InstIFace {
         __pool.submit(MyTask(this, name, peer, callback));
     }
 
-    void merge(String branch, GeneralCallback[MergeResult] callback) {
-        @task(MAWFSInstance inst; String branch;, MergeResult,
+    void merge(String branch, GeneralCallback[MergeResponse] callback) {
+        @task(MAWFSInstance inst; String branch;, MergeResponse,
               inst.merge(branch));
         __pool.submit(MyTask(this, branch, callback));
     }
