@@ -1859,7 +1859,7 @@ class CachedNode {
         ListWriter writer = {};
         RabinChunker chunker = {writer};
 
-        if (node.children is null && !node.contents) {
+        if (!node.children && !node.contents) {
 
             # Empty node.
 
@@ -1868,9 +1868,24 @@ class CachedNode {
             chunker.write(data);
             chunker.flush();
 
-            # Just append all of the items to the tree.
-            for (item :in writer.items)
-                append(item);
+            # If there's only one item, we can just replace its contents.
+            # Otherwise, append all of the items to the tree.
+            #
+            # This trick is only appropriate for an empty node, which
+            # can only happen for a toplevel file node (or an empty directory
+            # node, which isn't materially different).  In all other cases,
+            # we need to worry about keeping the tree balanced.
+            if (writer.items.count() == 1) {
+                node.contents = writer.items[0];
+                node.size = node.contents.count();
+                node.children = null;
+                __children = null;
+                __markDirty();
+            } else {
+                # Just append all of the items to the tree.
+                for (item :in writer.items)
+                    append(item);
+            }
 
         } else if (!(node.contents is null)) {
 
