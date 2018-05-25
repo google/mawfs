@@ -818,7 +818,7 @@ if (true) {
     @assert(!ctx2.makeJournalIter());
 }
 
-cerr `Rewriting an empty file.\n`;
+cerr `Rewriting an empty file - single chunk.\n`;
 if (true) {
     nodeStore = MemNodeStore();
     ctx = NodeContext(nodeStore, 'master', null);
@@ -828,6 +828,19 @@ if (true) {
     root.getChild('foo').resize(0);
     root.getChild('foo').write(0, 'second data');
     @assert(root.getChild('foo').getContents() == 'second data');
+}
+
+cerr `Rewriting an empty file - multi-chunk.\n`;
+if (true) {
+    nodeStore = MemNodeStore();
+    ctx = NodeContext(nodeStore, 'master', null);
+    root := CachedNode(ctx, null, makeDirNode());
+    root.addChild('foo', Node());
+    root.getChild('foo').write(0, 'first data');
+    root.getChild('foo').resize(0);
+    randomData := makeRandomData();
+    root.getChild('foo').write(0, randomData);
+    @assert(root.getChild('foo').getContents() == randomData);
 }
 
 
