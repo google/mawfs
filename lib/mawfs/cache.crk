@@ -206,7 +206,7 @@ class Head {
     ## this.
     String baselineCommit;
 
-    ## The digest of the last change.
+    ## The digest of the last change.  This is null if there is no journal.
     String lastChange;
 
     ## The name of the branch.  "master" is the default branch.
