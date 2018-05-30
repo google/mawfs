@@ -90,6 +90,15 @@ class MemNodeStore @impl NodeStore {
         return __branches.get(branch);
     }
 
+    bool deleteHead(String branch) {
+        if (__branches.hasKey(branch)) {
+            __branches.delete(branch);
+            return true;
+        } else {
+            return false;
+        }
+    }
+
     @static String __digest(String data) {
         SHA256 hasher = {};
         hasher.update(data);

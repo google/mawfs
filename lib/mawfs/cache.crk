@@ -360,6 +360,12 @@ class NodeContext : HashMapFieldSet {
         __head.branch = branch;
     }
 
+    ## Remove the branch.
+    @final void removeBranch(String branch) {
+        __store.deleteHead(branch);
+        __store.deleteJournal(branch);
+    }
+
     @final String makeDigest(Node node) { return __store.makeDigest(node) }
 
     @final uint getMaxChildren() { return __cache.maxChildren }

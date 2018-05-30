@@ -324,6 +324,9 @@ class Session {
     ## Sets the digest of the head commit for the branch.
     @abstract void setHead(String branch, String digest);
 
+    ## Delete the head commit for the branch.
+    @abstract bool deleteHead(String branch);
+
     ## Write a change to the journal for the branch.  Returns the digest of
     ## the change.
     @abstract String writeToJournal(String branch, Change change);
@@ -689,6 +692,14 @@ class ChunkStore @impl NodeStore {
         if (!branchFile.parent().exists())
             branchFile.parent().makeDirs();
         branchFile.writeAll(altEncode(digest));
+    }
+
+    bool deleteHead(String branch) {
+        branchFile := __dir/'refs'/branch;
+        if (!branchFile.exists())
+            return false;
+        branchFile.delete();
+        return true;
     }
 
     ## Returns a RawChunkReader for the blockstore.  The mutex is locked prior

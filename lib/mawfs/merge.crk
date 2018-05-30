@@ -297,6 +297,21 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
     }
 }
 
+## Keeps track of the current state of a pending merge.
+@struct MergeState {
+
+    ## The name of the target branch (the branch that we started from and that
+    ## the instance is merging into).
+    String targetBranch;
+
+    ## Tha name of the merge branch.  This is a name of the form
+    ## "merge:<digest>".
+    String mergeBranch;
+
+    ## Tha neme of the other branch (the one that we are merging).
+    String otherBranch;
+}
+
 ## Merges three root nodes into a single filesystem.
 ##
 ## Usage:
@@ -326,7 +341,7 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
     ## org: The root of the nearest tree that both 'target' and 'other' are
     ##     derived from.
     ## other: The root of a tree that has diverged from 'target'.
-    oper init(CachedNode target, CachedNode org, CachedNode other ) :
+    oper init(CachedNode target, CachedNode org, CachedNode other) :
         target = target,
         org = org,
         other = other {
@@ -340,8 +355,8 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
     ## the merge are expected to be applied directly to the new branch.
     void createMergeBranch() {
         @assert(!branch && !newRoot);
-        # The new branch name is a hash constructed from the digests of the hashes
-        # of the target branch and the other branch.
+        # The new branch name is a hash constructed from the digests of the
+        # hashes of the target branch and the other branch.
         String getBranchHash(Head head) {
             return head.lastChange ? head.lastChange : head.baselineCommit;
         }
@@ -387,5 +402,10 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
         }
         conflict = Conflict.cast(outcome);
         return this;
+    }
+
+    ## Returns the MergeState for the merge.
+    MergeState getState() {
+        return MergeState(orgBranch, branch, other.getContext().getBranch());
     }
 }

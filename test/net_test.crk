@@ -26,7 +26,7 @@ import crack.runtime sleep;
 import crack.sys argv;
 import crack.threads Mutex;
 
-import mawfs.blockstore ChunkStore, Commit, FSInfo, Node, MODE_DIR;
+import mawfs.blockstore ChunkStore, Commit, FSInfo, Node, NodeStore, MODE_DIR;
 import mawfs.cache Tree;
 import mawfs.flows MAWFSInstance;
 import mawfs.inst InstanceState;
@@ -395,6 +395,12 @@ class ConflictsTest : TestBed {
         master.makeBranch('master');
         (master.getRoot('master')/'dir').makeDir();
         proxy.pullBranch('master', null);
+        NodeStore store;
+        if (true) {
+            lock := slave.instState.lock();
+            store = slave.instState.getStore();
+        }
+        baseCommit := store.getHead('master');
 
         # Cause a divergence.
         (master.getRoot('master')/'dir'/'conflict').writeAll('some data');
@@ -407,9 +413,56 @@ class ConflictsTest : TestBed {
         altBranch := proxy.pullBranch('master', null);
         result := proxy.merge(altBranch);
         assertEqual(result.conflict, Array[String]!['dir/conflict']);
+
+        slave.instState.resetTree();
+        alt := slave.getRoot()/'.mawfs'/'alt';
+        @assert((alt/altBranch).exists());
+        @assert((alt/'merge:org').exists());
+
+        # Verify that the merge branch exists in the store.
+        @assert(store.getHead(result.mergeBranch));
+        @assert(store.makeJournalIter(result.mergeBranch));
+
+        # Rewrite the conflicted file.
+        (slave.getRoot()/'dir'/'conflict').writeAll(
+            'some data or other');
+        proxy.resolve();
+
+        # Verify that the resident branches for the merge have been cleaned up.
+        slave.instState.resetTree();
+        alt = slave.getRoot()/'.mawfs'/'alt';
+        @assert(!(alt/'merge:org').exists());
+        @assert(!(alt/altBranch).exists());
+
+        # Verify that we've ended up with the final data.
+        assertEqual((slave.getRoot()/'dir'/'conflict').readAll(),
+                    'some data or other'
+                    );
+
+        # Verify that the current branch is "master".
+        lock := slave.instState.lock();
+        assertEqual(slave.instState.getBranch(), 'master');
+
+        # verify that we have a new commit and no journal.
+        @assert(!store.makeJournalIter('master'));
+        commit := store.getCommit(store.getHead('master'));
+
+        # It should have 1 parent (because we didn't commit on either side).
+        @assert(commit.parent.count() == 1);
+        assertEqual(commit.parent[0], baseCommit);
+
+        # Verify that the merge branch has been removed.
+        assertEqual(store.getHead(result.mergeBranch), null);
+        @assert(!store.makeJournalIter(result.mergeBranch));
     }
 }
 register(ConflictsTest());
+
+# XXX need a test to verify that we don't clobber a branch that we've
+# previously pulled.
+
+# XXX need a test to verify that a merge commit derived from two different
+# commits stores those two different commits (spoiler: it doesn't)
 
 /* This test fails.  Double writeAll() breaky-breaky.
 class DoubleWriteAll : TestBed {

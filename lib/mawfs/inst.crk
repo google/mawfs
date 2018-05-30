@@ -23,6 +23,7 @@ import .admin AdminRootFactory, InfoFiles;
 import .alt ResidentBranches;
 import .blockstore Commit, Node, NodeStore, MODE_DIR;
 import .cache CachedNode, Tree;
+import .merge MergeState;
 import .path MAWFSPath;
 
 @import crack.ann define, interface;
@@ -79,6 +80,9 @@ class InstanceState {
     # the .mawfs/alt directory.  They can be created by the user with a
     # "mkdir" or internally from other parts of the system, like RPCs.
     ResidentBranches __branches;
+
+    # The current pending merge.
+    MergeState __pendingMerge;
 
     # Current root path of the instance.
     MAWFSPath __root;
@@ -271,13 +275,27 @@ class InstanceState {
         __infoFiles[filename] = contents;
     }
 
+    ## Set the pending merge operation.
+    void setPendingMerge(MergeState mergeState) {
+        @checkLock();
+        __pendingMerge = mergeState;
+    }
+
+    ## Returns the current merge state, or null if we're not in a pending
+    ## merge.
+    MergeState getPendingMerge() {
+        @checkLock();
+        return __pendingMerge;
+    }
+
     ## Create a new state object, creating a new commit node and root node if
     ## necessary.
     @static InstanceState create(Path backing, NodeStore store, String branch,
                                  Mutex mutex,
                                  UserModule userModule
                                  ) {
-        # Get the existing root node or create one if this is an empty filesystem.
+        # Get the existing root node or create one if this is an empty
+        # filesystem.
         commitDigest := store.getHead(branch);
         if (!commitDigest) {
             info `creating new filesystem`;

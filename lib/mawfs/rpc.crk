@@ -131,6 +131,8 @@ class MergeResult : MergeResponse {
     @abstract void merge(String
                          branch, GeneralCallback[MergeResponse] callback
                          );
+
+    @abstract void resolve(GeneralCallback[int] callback);
 }
 
 InstIFace _inst;
@@ -373,6 +375,11 @@ class PeerProxy {
         readMessageFromString(resp, respData);
         return MergeResult(resp.mergeBranch, resp.commit, resp.conflict);
     }
+
+    ## Resolve a merge that is outstanding due to conflicts.
+    void resolve() {
+        __invoke('resolve', null);
+    }
 }
 
 ## Server-side RPC message context.
@@ -386,7 +393,7 @@ class Context {
     void writeResponse(CommHandler comm, Message response, int32 requestId) {
         RPCMessage reply = {};
         reply.id = requestId;
-        reply.response = response.toString();
+        reply.response = response ? response.toString() : null;
         StringWriter backing = {};
         SerialWriter sw = {backing};
         sw.write(reply.toString());
@@ -604,6 +611,20 @@ void merge(Context context, RPCMessage msg, CommHandler comm) {
     _inst.merge(req.branch, ResponseCallback(context, comm, msg.id));
 }
 
+void resolve(Context context, RPCMessage msg, CommHandler comm) {
+    class ResponseCallback @impl GeneralCallback[int] {
+        @cvars {Context context; CommHandler comm; int32 requestId;}
+        void oper call(int resp, Exception ex) {
+            if (ex) {
+                context.writeError(comm, ex.text, requestId);
+            } else {
+                context.writeResponse(comm, null, requestId);
+            }
+        }
+    }
+    _inst.resolve(ResponseCallback(context, comm, msg.id));
+}
+
 class PeerServiceCommFactory @impl CommHandlerFactory {
     MethodMap __methods = {};
     Context __context;
@@ -615,6 +636,7 @@ class PeerServiceCommFactory @impl CommHandlerFactory {
         __methods['getFile'] = MethodHandler.Wrap(getFile);
         __methods['pullBranch'] = MethodHandler.Wrap(pullBranch);
         __methods['merge'] = MethodHandler.Wrap(merge);
+        __methods['resolve'] = MethodHandler.Wrap(resolve);
     }
 
     CommHandler makeCommHandler(NewConnection conn) {

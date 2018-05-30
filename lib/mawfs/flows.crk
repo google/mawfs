@@ -311,6 +311,9 @@ class MAWFSInstance @impl InstIFace {
             for (name :in result.conflict)
                 conflict.append(name);
 
+            # Attach the current merge state to the instance.
+            __state.setPendingMerge(result.getState());
+
             return MergeResult(result.branch, null, conflict);
         } else {
             __state.removeResidentBranch(branch);
@@ -318,6 +321,46 @@ class MAWFSInstance @impl InstIFace {
             return MergeResult(null, commit, null);
         }
     }
+
+    ## Close out a merge that had conflicts.  This removes the temporary merge
+    ## branches and commits the merge against the original branch.  This
+    ## fails if the original branch has received changes since the merge.
+    ##
+    ## This has a return type of 'int' only to conform to the needs of the @task
+    ## macro.  Always returns zero.
+    int resolve() {
+        lock := __state.lock();
+
+        # Verify that there's a pending merge.
+        merge := __state.getPendingMerge();
+        if (!merge)
+            throw Exception('No merge operations is pending');
+
+        # XXX verify that the original branch is unchanged.
+
+        # Do a commit on the merge branch.
+        root := __state.getRoot().getCachedNode();
+        root.commitTree();
+
+        # Replace the original branch.
+        rootContext := root.getContext();
+        __state.setHead(rootContext.getBaselineCommit());
+
+        # Now we can just change the branch name of the root node context.
+        rootContext.setBranch(merge.targetBranch);
+
+        # Remove the backing files for the merge branch.
+        rootContext.removeBranch(merge.mergeBranch);
+
+        # Clean up the resident branches.
+        __state.removeResidentBranch(merge.otherBranch);
+        __state.removeResidentBranch('merge:org');
+        return 0;
+    }
+
+    ## Cancels the pending merge operation, removing all temporary merge
+    ## branches.
+    void cancelMerge() {}
 
     ## RPC service for pullBranch.  Starts the call off in a new thread.
     void pullBranch(String name, String peer,
@@ -332,5 +375,10 @@ class MAWFSInstance @impl InstIFace {
         @task(MAWFSInstance inst; String branch;, MergeResponse,
               inst.merge(branch));
         __pool.submit(MyTask(this, branch, callback));
+    }
+
+    void resolve(GeneralCallback[int] callback) {
+        @task(MAWFSInstance inst;, int, inst.resolve());
+        __pool.submit(MyTask(this, callback));
     }
 }
