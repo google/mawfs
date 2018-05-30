@@ -464,15 +464,4 @@ register(ConflictsTest());
 # XXX need a test to verify that a merge commit derived from two different
 # commits stores those two different commits (spoiler: it doesn't)
 
-/* This test fails.  Double writeAll() breaky-breaky.
-class DoubleWriteAll : TestBed {
-    void run() {
-        master.makeBranch('foo');
-        (master.getRoot('foo')/'file').writeAll(FILE_CONTENTS);
-        (master.getRoot('foo')/'file').writeAll(FILE_CONTENTS);
-    }
-}
-DoubleWriteAll().exec();
-*/
-
 runAllTests();
