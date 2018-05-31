@@ -484,7 +484,7 @@ class CommandManager {
             cout `committed: $(result.commit)\n`;
         else {
             cout `created merge branch: $(result.mergeBranch)\n`;
-            cout `Conflicts (must be merged manually):`;
+            cout `Conflicts (must be merged manually):\n`;
             for (name :in result.conflict)
                 cout `   $name\n`;
         }
