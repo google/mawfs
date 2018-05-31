@@ -142,6 +142,8 @@ void usage() {
                 Merge with another branch.  This produces a new commit if
                 there are no conflicts, or a merge branch and a conflict
                 report if there are.
+            mawfs resolve
+                Resolve an outstanding merge that had conflicts.
             mawfs hash <filename> ...
                 Show file hashes.
                 the correct way to do this.
@@ -487,6 +489,15 @@ class CommandManager {
                 cout `   $name\n`;
         }
     }
+
+    ## The "resolve" command.
+    void resolve() {
+        checkArgs(2, "Usage: mawfs resolve\n");
+        setLogLevel(DEBUG);
+        server := getServer();
+        makeRPC(server).getProxy().resolve();
+        cout `Resolve completed successfully\n`;
+    }
 }
 
 # The main function, which is a command dispatcher.
@@ -626,6 +637,8 @@ void main() {
             cm.pull();
         } else if (cmd == 'merge') {
             cm.merge();
+        } else if (cmd == 'resolve') {
+            cm.resolve();
         } else {
             cerr `Unknown command: $cmd\n`;
             usage();
