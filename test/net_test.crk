@@ -382,25 +382,47 @@ class MergeTest : TestBed {
     void run() {
         master.makeBranch('foo');
         proxy.pullBranch('foo', null);
-        (master.getRoot('foo')/'masterFile').writeAll(FILE_CONTENTS);
-        result := proxy.merge('foo');
-        @assert(result.mergeBranch is null);
-        @assert(!(slave.getRoot()/'.mawfs'/'alt'/'foo').exists());
-    }
-}
-register(MergeTest());
 
-class ConflictsTest : TestBed {
-    void run() {
-        master.makeBranch('master');
-        (master.getRoot('master')/'dir').makeDir();
-        proxy.pullBranch('master', null);
+        (master.getRoot('foo')/'masterFile').writeAll(FILE_CONTENTS);
+        master.commit('foo');
+        proxy.pullBranch('foo', null);
+
         NodeStore store;
         if (true) {
             lock := slave.instState.lock();
             store = slave.instState.getStore();
         }
-        baseCommit := store.getHead('master');
+        commits := Array[String]![store.getHead('master'),
+                                  store.getHead('foo')
+                                  ];
+
+        result := proxy.merge('foo');
+        @assert(result.mergeBranch is null);
+        @assert(!(slave.getRoot()/'.mawfs'/'alt'/'foo').exists());
+
+        # We should have two parents, the base commit of the target and
+        slave.instState.resetTree();
+        commit := store.getCommit(store.getHead('master'));
+        assertEqual(commit.parent, commits);
+    }
+}
+register(MergeTest());
+
+@abstract class ConflictTestBase : TestBed {
+    NodeStore store;
+    String baseCommit;
+
+    void setUp() {
+        TestBed.setUp();
+
+        master.makeBranch('master');
+        (master.getRoot('master')/'dir').makeDir();
+        proxy.pullBranch('master', null);
+        if (true) {
+            lock := slave.instState.lock();
+            store = slave.instState.getStore();
+        }
+        baseCommit = store.getHead('master');
 
         # Cause a divergence.
         (master.getRoot('master')/'dir'/'conflict').writeAll('some data');
@@ -408,7 +430,11 @@ class ConflictsTest : TestBed {
 
         # Reset the slave's instance state (getRoot() creates its own tree).
         slave.instState.resetTree();
+    }
+}
 
+class ConflictsTest : ConflictTestBase {
+    void run() {
         # Merge, verify there were conflicts.
         altBranch := proxy.pullBranch('master', null);
         result := proxy.merge(altBranch);
@@ -461,7 +487,23 @@ register(ConflictsTest());
 # XXX need a test to verify that we don't clobber a branch that we've
 # previously pulled.
 
-# XXX need a test to verify that a merge commit derived from two different
-# commits stores those two different commits (spoiler: it doesn't)
+class MergeFromTwoCommits : ConflictTestBase {
+    void run() {
+        master.commit('master');
+        slave.commit('master');
+        slaveCommit := store.getHead('master');
+        slave.instState.resetTree();
+
+        # Merge.
+        altBranch := proxy.pullBranch('master', null);
+        proxy.merge(altBranch);
+        proxy.resolve();
+
+        commit := store.getCommit(store.getHead('master'));
+        @assert(commit.parent.count() == 2);
+        assertEqual(commit.parent[0], slaveCommit);
+    }
+}
+register(MergeFromTwoCommits());
 
 runAllTests();

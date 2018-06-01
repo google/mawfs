@@ -340,7 +340,10 @@ class MAWFSInstance @impl InstIFace {
 
         # Do a commit on the merge branch.
         root := __state.getRoot().getCachedNode();
-        root.commitTree();
+        if (merge.otherCommit != merge.targetCommit)
+            root.commitTree(merge.otherCommit);
+        else
+            root.commitTree();
 
         # Replace the original branch.
         rootContext := root.getContext();
@@ -355,6 +358,8 @@ class MAWFSInstance @impl InstIFace {
         # Clean up the resident branches.
         __state.removeResidentBranch(merge.otherBranch);
         __state.removeResidentBranch('merge:org');
+
+        __state.resetTree();
         return 0;
     }
 

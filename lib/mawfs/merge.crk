@@ -211,7 +211,9 @@ class Mutation : Outcome {
         parent.addChild(name, clone);
     }
 
-    CachedNode get(CachedNode target) { return replacement }
+    CachedNode get(CachedNode target) {
+        return replacement.copy(target.getContext());
+    }
 }
 
 ## As the name implies, this is returned when both result trees are identical.
@@ -310,6 +312,20 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
 
     ## Tha neme of the other branch (the one that we are merging).
     String otherBranch;
+
+    ## The digest of the baseline commit of the target branch.
+    String targetCommit;
+
+    ## The digest of the baseline commit of the other branch.
+    String otherCommit;
+
+    ## The digest of the last change in the journal of the target branch, null
+    ## if there is no journal.
+    String targetChange;
+
+    ## The digest of the last change in the journal of the other branch, null
+    ## if there is no journal.
+    String otherChange;
 }
 
 ## Merges three root nodes into a single filesystem.
@@ -335,6 +351,8 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
     ## there were no conflicts and the merge was fully committed.
     String branch;
 
+    String __targetCommit, __otherCommit, __targetChange, __otherChange;
+
     ## target: The root of the head of a branch.  The merge will be performed
     ##     on this object, it will be mutated to contain any changed files
     ##     from 'other' that can be merged without conflct.
@@ -347,6 +365,12 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
         other = other {
 
         orgBranch = org.getContext().getBranch();
+        targetCtx := target.getContext();
+        otherCtx := other.getContext();
+        __targetCommit = targetCtx.getBaselineCommit();
+        __otherCommit = otherCtx.getBaselineCommit();
+        __targetChange = targetCtx.getLastChange();
+        __otherChange = otherCtx.getLastChange();
     }
 
     ## Creates a new merge branch and converts "target" to it.
@@ -397,7 +421,10 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
         if (!outcome.isa(Conflict)) {
             # There were no conflicts.  We can commit on the current branch.
             newRoot.getContext().setBranch(orgBranch);
-            newRoot.commitTree(other.getContext().getHead());
+            if (__otherCommit == __targetCommit)
+                newRoot.commitTree();
+            else
+                newRoot.commitTree(__otherCommit);
             return this;
         }
         conflict = Conflict.cast(outcome);
@@ -406,6 +433,9 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
 
     ## Returns the MergeState for the merge.
     MergeState getState() {
-        return MergeState(orgBranch, branch, other.getContext().getBranch());
+        return MergeState(orgBranch, branch, other.getContext().getBranch(),
+                          __targetCommit, __otherCommit, __targetChange,
+                          __otherChange
+                          );
     }
 }
