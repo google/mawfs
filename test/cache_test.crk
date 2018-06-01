@@ -753,7 +753,8 @@ if (true) {
     src := CachedNode(ctx, null, makeDirNode());
     subdir := CachedNode(ctx, null, makeDirNode());
     src.addChild('dir', subdir);
-    subdir.addChild('unchanged', makeFileNode('unchanged after commit', 0));
+    unchangedNode := makeFileNode('unchanged after commit', 0);
+    subdir.addChild('unchanged', unchangedNode);
     fileNode := CachedNode(ctx, null, Node());
     subdir.addChild('changed', fileNode);
     fileNode.write(0, makeRandomData());
@@ -761,6 +762,9 @@ if (true) {
 
     # Commit it.
     src.commitTree();
+
+    # Store the digest of the unchanged node.
+    unchangedDigest := subdir.getChild('unchanged').digest;
 
     # Change it up.
     subdir = src.getChild('dir');
@@ -771,6 +775,9 @@ if (true) {
     added := CachedNode(ctx, null, makeFileNode('added file', 0));
     subdir.addChild('added', added);
     subdir.deleteChild('deleted');
+    subdir.addChild('unchangedCopy',
+                    CachedNode(ctx, unchangedDigest, unchangedNode)
+                    );
 
     # Copy into a new tree.
     dst := CachedNode(ctx2, null, makeDirNode());
@@ -791,6 +798,9 @@ if (true) {
     @assert(subdir.getChild('added').getContents() == 'added file');
     @assert(subdir.getChild('changed').getContents() == changedNodeContents);
     @assert(subdir.getChild('deleted') is null);
+    @assert(subdir.getChild('unchangedCopy').getContents() ==
+            'unchanged after commit'
+            );
 }
 
 cerr `Commits during a child copy.\n`;

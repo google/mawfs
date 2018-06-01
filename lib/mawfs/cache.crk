@@ -2443,10 +2443,21 @@ class CachedNode {
             @assert(result.__populateChildren(true));
             for (int i; i < __children.count(); ++i) {
                 child := __children[i];
-                if (child.node && child.node.isDirty()) {
-                    cachedNode := child.node.copy(ctx);
-                    result.__children[i].node = cachedNode;
-                    cachedNode.parent = result;
+                if (child.node) {
+                    if (child.node.isDirty()) {
+                        # Dirty child, copy it.
+                        cachedNode := child.node.copy(ctx);
+                        result.__children[i].node = cachedNode;
+                        cachedNode.parent = result;
+                    } else {
+                        # Clean child, Clear the original that doesn't
+                        # belong to us and make sure our entry digest is in
+                        # sync with the contents of the node. (we don't need
+                        # to do size, that's kept in sync throughout the code,
+                        # but the digest may rely on a commit).
+                        result.__children[i].node = null;
+                        result.__children[i].setDigest(child.node.digest);
+                    }
                 }
             }
         }
