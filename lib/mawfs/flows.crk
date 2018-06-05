@@ -11,7 +11,7 @@ import crack.threads Mutex, MutexLock, Queue, Thread;
 import .blockstore ChunkStore, Commit;
 import .cache Cache, NodeContext;
 import .inst InstanceState;
-import .merge Merger;
+import .merge Merger, MergeState;
 import .peernet PeerNetwork;
 import .rawchunk GeneralCallback;
 import .rpc InstIFace, MergeResult, MergeResponse;
@@ -322,6 +322,18 @@ class MAWFSInstance @impl InstIFace {
         }
     }
 
+    ## Cleans up an existing merge.  Must have the instance state locked.
+    void __cleanupMerge(MergeState merge) {
+        ctx := __state.getRoot().getCachedNode().getContext();
+
+        # Remove the backing files for the merge branch.
+        ctx.removeBranch(merge.mergeBranch);
+
+        # Clean up the resident branches.
+        __state.removeResidentBranch(merge.otherBranch);
+        __state.removeResidentBranch('merge:org');
+    }
+
     ## Close out a merge that had conflicts.  This removes the temporary merge
     ## branches and commits the merge against the original branch.  This
     ## fails if the original branch has received changes since the merge.
@@ -352,20 +364,28 @@ class MAWFSInstance @impl InstIFace {
         # Now we can just change the branch name of the root node context.
         rootContext.setBranch(merge.targetBranch);
 
-        # Remove the backing files for the merge branch.
-        rootContext.removeBranch(merge.mergeBranch);
-
-        # Clean up the resident branches.
-        __state.removeResidentBranch(merge.otherBranch);
-        __state.removeResidentBranch('merge:org');
-
+        __cleanupMerge(merge);
         __state.resetTree();
         return 0;
     }
 
     ## Cancels the pending merge operation, removing all temporary merge
     ## branches.
-    void cancelMerge() {}
+    ## The integer return value is unused.
+    int cancelMerge() {
+        lock := __state.lock();
+
+        # Verify that there's a pending merge.
+        merge := __state.getPendingMerge();
+        if (!merge)
+            throw Exception('No merge operations is pending');
+
+        # Return the tree to its target branch.
+        __state.setBranch(merge.targetBranch);
+
+        __cleanupMerge(merge);
+        return 0;
+    }
 
     ## RPC service for pullBranch.  Starts the call off in a new thread.
     void pullBranch(String name, String peer,
@@ -384,6 +404,11 @@ class MAWFSInstance @impl InstIFace {
 
     void resolve(GeneralCallback[int] callback) {
         @task(MAWFSInstance inst;, int, inst.resolve());
+        __pool.submit(MyTask(this, callback));
+    }
+
+    void cancelMerge(GeneralCallback[int] callback) {
+        @task(MAWFSInstance inst;, int, inst.cancelMerge());
         __pool.submit(MyTask(this, callback));
     }
 }

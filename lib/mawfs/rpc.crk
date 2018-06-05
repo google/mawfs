@@ -133,6 +133,7 @@ class MergeResult : MergeResponse {
                          );
 
     @abstract void resolve(GeneralCallback[int] callback);
+    @abstract void cancelMerge(GeneralCallback[int] callback);
 }
 
 InstIFace _inst;
@@ -380,6 +381,11 @@ class PeerProxy {
     void resolve() {
         __invoke('resolve', null);
     }
+
+    ## Cancel a pending merge.
+    void cancelMerge() {
+        __invoke('cancelMerge', null);
+    }
 }
 
 ## Server-side RPC message context.
@@ -611,18 +617,25 @@ void merge(Context context, RPCMessage msg, CommHandler comm) {
     _inst.merge(req.branch, ResponseCallback(context, comm, msg.id));
 }
 
-void resolve(Context context, RPCMessage msg, CommHandler comm) {
-    class ResponseCallback @impl GeneralCallback[int] {
-        @cvars {Context context; CommHandler comm; int32 requestId;}
-        void oper call(int resp, Exception ex) {
-            if (ex) {
-                context.writeError(comm, ex.text, requestId);
-            } else {
-                context.writeResponse(comm, null, requestId);
-            }
+## Callback that can be used for RPCs that don't have a meaningful return
+## value.
+class EmptyResponseCallback @impl GeneralCallback[int] {
+    @cvars {Context context; CommHandler comm; int32 requestId;}
+    void oper call(int resp, Exception ex) {
+        if (ex) {
+            context.writeError(comm, ex.text, requestId);
+        } else {
+            context.writeResponse(comm, null, requestId);
         }
     }
-    _inst.resolve(ResponseCallback(context, comm, msg.id));
+}
+
+void resolve(Context context, RPCMessage msg, CommHandler comm) {
+    _inst.resolve(EmptyResponseCallback(context, comm, msg.id));
+}
+
+void cancelMerge(Context context, RPCMessage msg, CommHandler comm) {
+    _inst.cancelMerge(EmptyResponseCallback(context, comm, msg.id));
 }
 
 class PeerServiceCommFactory @impl CommHandlerFactory {
@@ -637,6 +650,7 @@ class PeerServiceCommFactory @impl CommHandlerFactory {
         __methods['pullBranch'] = MethodHandler.Wrap(pullBranch);
         __methods['merge'] = MethodHandler.Wrap(merge);
         __methods['resolve'] = MethodHandler.Wrap(resolve);
+        __methods['cancelMerge'] = MethodHandler.Wrap(cancelMerge);
     }
 
     CommHandler makeCommHandler(NewConnection conn) {

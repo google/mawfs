@@ -189,6 +189,14 @@ class InstanceState {
         return __branch;
     }
 
+    ## Set the branch to that specified.  This also changes the root node and
+    ## resets the tree.
+    void setBranch(String branch) {
+        @checkLock();
+        __branch = branch;
+        resetTree();
+    }
+
     ## Calls the start() method of the UserModule, if there is one.
     void start() {
         @checkLock();

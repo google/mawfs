@@ -506,4 +506,19 @@ class MergeFromTwoCommits : ConflictTestBase {
 }
 register(MergeFromTwoCommits());
 
+class CancelMergeTest : ConflictTestBase {
+    void run() {
+        altBranch := proxy.pullBranch('master', null);
+        proxy.merge(altBranch);
+        proxy.cancelMerge();
+
+        # Should be no resident branches and the current branch should be
+        # master.
+        @assert(!(slave.getRoot()/'.mawfs'/'alt').children());
+        lock := slave.instState.lock();
+        assertEqual(slave.instState.getBranch(), 'master');
+    }
+}
+register(CancelMergeTest());
+
 runAllTests();
