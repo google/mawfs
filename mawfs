@@ -144,6 +144,8 @@ void usage() {
                 report if there are.
             mawfs resolve
                 Resolve an outstanding merge that had conflicts.
+            mawfs cancelMerge
+                Cancel an outstanding merge.
             mawfs hash <filename> ...
                 Show file hashes.
                 the correct way to do this.
@@ -498,6 +500,14 @@ class CommandManager {
         makeRPC(server).getProxy().resolve();
         cout `Resolve completed successfully\n`;
     }
+
+    ## The "cancelMerge" command.
+    void cancelMerge() {
+        checkArgs(2, 'Usage: mawfs cancelMerge\n');
+        server := getServer();
+        makeRPC(server).getProxy().cancelMerge();
+        cout `Merge cancelled\n`;
+    }
 }
 
 # The main function, which is a command dispatcher.
@@ -639,6 +649,8 @@ void main() {
             cm.merge();
         } else if (cmd == 'resolve') {
             cm.resolve();
+        } else if (cmd == 'cancelMerge') {
+            cm.cancelMerge();
         } else {
             cerr `Unknown command: $cmd\n`;
             usage();
