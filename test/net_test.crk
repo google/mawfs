@@ -510,7 +510,15 @@ class CancelMergeTest : ConflictTestBase {
     void run() {
         altBranch := proxy.pullBranch('master', null);
         proxy.merge(altBranch);
+
+        # Make a change.
+        (slave.getRoot()/'local_change').writeAll('some data');
+        @assert((slave.getRoot()/'local_change').exists());
+
         proxy.cancelMerge();
+
+        # Should have discarded the local change.
+        @assert(!(slave.getRoot()/'local_change').exists());
 
         # Should be no resident branches and the current branch should be
         # master.
