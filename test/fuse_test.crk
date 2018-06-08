@@ -73,8 +73,12 @@ bool gotFailures;
             throw Exception('Failed in startup');
     }
 
+    void startFS(String branch, String backing, String dir) {
+        runMawfs(StringArray!['run', '-b', branch, backing, dir]);
+    }
+
     void startFS(String branch) {
-        runMawfs(StringArray!['run', '-b', branch, 'backing', 'fs']);
+        startFS(branch, 'backing', 'fs');
     }
 
     void stopFS(String dir) {
@@ -96,6 +100,11 @@ bool gotFailures;
     void restartFS(String branch) {
         stopFS('fs');
         startFS(branch);
+    }
+
+    void restartSlaveFS(String branch) {
+        stopFS('fs2');
+        startFS(branch, 'backing2', 'fs2');
     }
 
     void setUp() {
@@ -371,6 +380,7 @@ class MergeWithConflictsTest : MergeTest {
 
         pullAndMerge();
 
+        # Verify that the meta-data looks as we expect.
         curBranch := (makePath('fs2')/'.mawfs'/'branch').readAll();
         @assert(curBranch.startsWith('merge:'));
         StringArray branches = {};
@@ -456,6 +466,30 @@ class CancelMergeTest : MergeTest {
     }
 }
 register(CancelMergeTest());
+
+## Verify that we can restore existing merge states.
+class RestoreStateTest : MergeTest {
+    void run() {
+        # Mutate some files, create a conflict.
+        (makePath('fs')/'foo').writeAll('new contents');
+        (makePath('fs2')/'foo').writeAll('alt contents');
+
+        pullAndMerge();
+        restartSlaveFS('master');
+
+        # Verify that the meta-data looks as we expect after a restart.
+        curBranch := (makePath('fs2')/'.mawfs'/'branch').readAll();
+        @assert(curBranch.startsWith('merge:'));
+        StringArray branches = {};
+        for (child :in (makePath('fs2')/'.mawfs'/'alt').children())
+            branches.append(child.getName());
+        assertEqual(branches,
+                    StringArray!['127.0.0.1:12543:master', 'merge:org']
+                    );
+
+    }
+}
+register(RestoreStateTest());
 
 runAllTests();
 

@@ -19,12 +19,14 @@ import crack.cont.treemap TreeMap;
 import crack.enc.base64 altEncode;
 import crack.io cerr, Formatter;
 import crack.io.fmtutil Indenter;
-import crack.lang cmp, AppendBuffer;
+import crack.lang cmp, makeHashVal, AppendBuffer;
 import crack.logger info;
+import crack.protobuf Field, Message, ProtoWriter;
 import crack.strutil StringArray;
 import mawfs.cache sig, CachedNode, Head;
 
-@import crack.ann assert, struct;
+@import crack.ann assert, impl, struct;
+@import crack.protobuf.ann protobuf;
 
 int _cmp(CachedNode a, CachedNode b) {
     return cmp(uintz(a), uintz(b));
@@ -300,32 +302,49 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
 }
 
 ## Keeps track of the current state of a pending merge.
-@struct MergeState {
+@protobuf {
+    message MergeState {
 
-    ## The name of the target branch (the branch that we started from and that
-    ## the instance is merging into).
-    String targetBranch;
+        ## The name of the target branch (the branch that we started from and
+        ## that the instance is merging into).
+        optional string targetBranch = 1;
 
-    ## Tha name of the merge branch.  This is a name of the form
-    ## "merge:<digest>".
-    String mergeBranch;
+        ## Tha name of the merge branch.  This is a name of the form
+        ## "merge:<digest>".
+        optional string mergeBranch = 2;
 
-    ## Tha neme of the other branch (the one that we are merging).
-    String otherBranch;
+        ## Tha neme of the other branch (the one that we are merging).
+        optional string otherBranch = 3;
 
-    ## The digest of the baseline commit of the target branch.
-    String targetCommit;
+        ## The digest of the baseline commit of the target branch.
+        optional string targetCommit = 4;
 
-    ## The digest of the baseline commit of the other branch.
-    String otherCommit;
+        ## The digest of the baseline commit of the other branch.
+        optional string otherCommit = 5;
 
-    ## The digest of the last change in the journal of the target branch, null
-    ## if there is no journal.
-    String targetChange;
+        ## The digest of the last change in the journal of the target branch,
+        ## null if there is no journal.
+        optional string targetChange = 6;
 
-    ## The digest of the last change in the journal of the other branch, null
-    ## if there is no journal.
-    String otherChange;
+        ## The digest of the last change in the journal of the other branch,
+        ## null if there is no journal.
+        optional string otherChange = 7;
+
+        ## The branch name and change digest of the origin node.  'orgChange'
+        ## may be omitted if the origin is at the head of the branch.
+        optional string orgBranch = 8;
+        optional string orgChange = 9;
+    }
+
+    ## Used to store the entirety local instance state.  For now, this is just
+    ## the merge state, so we define this here.
+    ##
+    ## The local instance state is similar to 'params', only where 'params'
+    ## contains parameters relevant to the entire cell and repository, the
+    ## instance state is specific to the current instance.
+    message LocalInstanceState {
+        optional MergeState mergeState = 1;
+    }
 }
 
 ## Merges three root nodes into a single filesystem.
@@ -351,7 +370,8 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
     ## there were no conflicts and the merge was fully committed.
     String branch;
 
-    String __targetCommit, __otherCommit, __targetChange, __otherChange;
+    String __targetCommit, __otherCommit, __targetChange, __otherChange,
+        __orgChange;
 
     ## target: The root of the head of a branch.  The merge will be performed
     ##     on this object, it will be mutated to contain any changed files
@@ -367,10 +387,12 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
         orgBranch = org.getContext().getBranch();
         targetCtx := target.getContext();
         otherCtx := other.getContext();
+        orgCtx := org.getContext();
         __targetCommit = targetCtx.getBaselineCommit();
         __otherCommit = otherCtx.getBaselineCommit();
         __targetChange = targetCtx.getLastChange();
         __otherChange = otherCtx.getLastChange();
+        __orgChange = orgCtx.getLastChange();
     }
 
     ## Creates a new merge branch and converts "target" to it.
@@ -433,9 +455,16 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
 
     ## Returns the MergeState for the merge.
     MergeState getState() {
-        return MergeState(orgBranch, branch, other.getContext().getBranch(),
-                          __targetCommit, __otherCommit, __targetChange,
-                          __otherChange
-                          );
+        result := MergeState();
+        result.targetBranch = orgBranch;
+        result.mergeBranch = branch;
+        result.otherBranch = other.getContext().getBranch();
+        result.targetCommit = __targetCommit;
+        result.otherCommit = __otherCommit;
+        result.targetChange = __targetChange;
+        result.otherChange = __otherChange;
+        result.orgBranch = orgBranch;
+        result.orgChange = __orgChange;
+        return result;
     }
 }

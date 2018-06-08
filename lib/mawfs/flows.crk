@@ -313,6 +313,7 @@ class MAWFSInstance @impl InstIFace {
 
             # Attach the current merge state to the instance.
             __state.setPendingMerge(result.getState());
+            __state.save();
 
             return MergeResult(result.branch, null, conflict);
         } else {
@@ -332,6 +333,10 @@ class MAWFSInstance @impl InstIFace {
         # Clean up the resident branches.
         __state.removeResidentBranch(merge.otherBranch);
         __state.removeResidentBranch('merge:org');
+
+        # Fix the merge info and rewrite the local state.
+        __state.setPendingMerge(null);
+        __state.save();
     }
 
     ## Close out a merge that had conflicts.  This removes the temporary merge

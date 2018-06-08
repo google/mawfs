@@ -614,7 +614,9 @@ void main() {
             }
 
             peerModule := PeerNetModule(configStore, chunkReader);
-            instState := InstanceState.create(rootDir, chunkStore,
+            instState := InstanceState.create(rootDir,
+                                              chunkStore.getCipher(),
+                                              chunkStore,
                                               opts.getString('branch'),
                                               mutex,
                                               peerModule

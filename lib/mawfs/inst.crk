@@ -17,13 +17,15 @@ import crack.fs Path;
 import crack.io FStr, SeekableReader, SeekableWriter;
 import crack.lang InvalidArgumentError, InvalidStateError;
 import crack.logger info;
+import crack.protobuf readMessageFromString;
 import crack.threads Mutex, MutexLock;
 
 import .admin AdminRootFactory, InfoFiles;
 import .alt ResidentBranches;
 import .blockstore Commit, Node, NodeStore, MODE_DIR;
+import .ciphers Cipher;
 import .cache CachedNode, Tree;
-import .merge MergeState;
+import .merge LocalInstanceState, MergeState;
 import .path MAWFSPath;
 
 @import crack.ann define, interface;
@@ -66,6 +68,7 @@ class InstanceState {
     # Current backing directory.
     Path __backing;
 
+    Cipher __cipher;
     NodeStore __store;
     Tree __tree;
     HashMap[int, FileInfo] __files = {};
@@ -142,11 +145,13 @@ class InstanceState {
     ## mutex: the filesystem mutex
     ## userModule: a user module to be started when the fuse system is
     ##     initialized.  May be null.
-    oper init(Path backing, NodeStore store, String branch, Mutex mutex,
+    oper init(Path backing, Cipher cipher, NodeStore store, String branch,
+              Mutex mutex,
               UserModule userModule
               ) :
         __mutex = mutex,
         __backing = backing,
+        __cipher = cipher,
         __store = store,
         __branch = branch,
         __userModule = userModule {
@@ -283,7 +288,8 @@ class InstanceState {
         __infoFiles[filename] = contents;
     }
 
-    ## Set the pending merge operation.
+    ## Set the pending merge operation.  'mergeState' may be null to clear the
+    ## current pending merge.
     void setPendingMerge(MergeState mergeState) {
         @checkLock();
         __pendingMerge = mergeState;
@@ -296,9 +302,49 @@ class InstanceState {
         return __pendingMerge;
     }
 
+    ## Load the local instance state from the backing store.
+    void load() {
+        @checkLock();
+
+        # Quit early if there's no state file.
+        instStateFile := __backing/'inst';
+        if (!instStateFile.exists())
+            return;
+
+        state := LocalInstanceState();
+        serialized := instStateFile.readAll();
+        readMessageFromString(state, __cipher.decrypt(serialized));
+        __pendingMerge = state.mergeState;
+
+        # If we're currently looking at the target branch, set to the merge
+        # branch.
+        if (__pendingMerge && __pendingMerge.targetBranch == __branch) {
+
+            # Restore the resident branches.
+            orgTree := Tree(__store,
+                            __root.getCachedNode().getContext().getCache(),
+                            __branch
+                            );
+            orgTree.setTargetChange(__pendingMerge.orgChange);
+            orgTree.initialize();
+            makeResidentBranch('merge:org', orgTree.getRoot());
+            makeResidentBranch(__pendingMerge.otherBranch);
+            setBranch(__pendingMerge.mergeBranch);
+        }
+    }
+
+    ## Write the local instance state to the backing store.
+    void save() {
+        state := LocalInstanceState();
+        state.mergeState = __pendingMerge;
+        (__backing/'inst').writeAll(__cipher.encrypt(state.toString()));
+    }
+
     ## Create a new state object, creating a new commit node and root node if
     ## necessary.
-    @static InstanceState create(Path backing, NodeStore store, String branch,
+    @static InstanceState create(Path backing, Cipher cipher,
+                                 NodeStore store,
+                                 String branch,
                                  Mutex mutex,
                                  UserModule userModule
                                  ) {
@@ -310,6 +356,11 @@ class InstanceState {
             store.createRepository(branch);
         }
 
-        return InstanceState(backing, store, branch, mutex, userModule);
+        state := InstanceState(backing, cipher, store, branch, mutex,
+                               userModule
+                               );
+        lock := state.lock();
+        state.load();
+        return state;
     }
 }

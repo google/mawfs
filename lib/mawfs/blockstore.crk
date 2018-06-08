@@ -492,6 +492,9 @@ class ChunkStore @impl NodeStore {
 
     oper init(Path dir, FSInfo fsInfo) : __dir = dir, __fsInfo = fsInfo {}
 
+    ## Returns the cipher used to encrypt/decrypt chunks from the store.
+    Cipher getCipher() { return __fsInfo.cipher }
+
     @final void setRemoteReader(RemoteReader remote) { __remote = remote }
 
     ## Loads and returns the chunk with the specified digest, returns null if
