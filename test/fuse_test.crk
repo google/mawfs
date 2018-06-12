@@ -74,7 +74,8 @@ bool gotFailures;
     }
 
     void startFS(String branch, String backing, String dir) {
-        runMawfs(StringArray!['run', '-b', branch, backing, dir]);
+        runMawfs(StringArray!['run', '-b', branch, '-l',
+                              'mawfs_' + dir + '.log', backing, dir]);
     }
 
     void startFS(String branch) {
@@ -335,7 +336,7 @@ class CloneTest : DoubleInstanceTest {
         restartFS('master');
         runMawfs(StringArray!['clone', 'localhost:12543', 'backing2']);
         @assert((backing2/'params').exists());
-        runMawfs(StringArray!['run', 'backing2', 'fs2']);
+        startFS('master', 'backing2', 'fs2');
         @assert((fs2/'foo').readAll() == 'test file contents');
 
         # Now try doing a "pull" and verify that we see the update in the
@@ -356,7 +357,7 @@ register(CloneTest());
         runMawfs(StringArray!['clone', 'localhost:12543', 'backing2']);
 
         # Start the new instance
-        runMawfs(StringArray!['run', 'backing2', 'fs2']);
+        startFS('master', 'backing2', 'fs2');
 
         # Create files on each branch.
         (makePath('fs')/'on_master').writeAll('on master contents');
@@ -475,6 +476,8 @@ class RestoreStateTest : MergeTest {
         (makePath('fs2')/'foo').writeAll('alt contents');
 
         pullAndMerge();
+        orgDir := makePath('fs2')/'.mawfs'/'alt'/'merge:org';
+        @assert(!(orgDir/'foo').exists());
         restartSlaveFS('master');
 
         # Verify that the meta-data looks as we expect after a restart.
@@ -487,6 +490,10 @@ class RestoreStateTest : MergeTest {
                     StringArray!['127.0.0.1:12543:master', 'merge:org']
                     );
 
+        # Verify that the origin looks like we expect it to.
+        path := orgDir/'first';
+        assertEqual(path.readAll(), 'test file contents');
+        @assert(!(orgDir/'foo').exists());
     }
 }
 register(RestoreStateTest());

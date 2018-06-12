@@ -2161,14 +2161,14 @@ class CachedNode {
             if (change.commit != __ctx.getBaselineCommit())
                 throw InvalidStateError(
                     FStr() I`First change in the journal is for commit \
-                             $(altEncode(change.commit)), current commit \
-                             is $(altEncode(__ctx.getBaselineCommit()))`
+                             $(sig(change.commit)), current commit \
+                             is $(sig(__ctx.getBaselineCommit()))`
                 );
         } else if (lastChangeDigest != change.lastChange) {
             throw InvalidStateError(
-                FStr() I`Change $(altEncode(entry.digest)) should be \
-                         applied to $(altEncode(change.lastChange)). \
-                         last change was $(altEncode(lastChangeDigest)).`
+                FStr() I`Change $(sig(entry.digest)) should be \
+                         applied to $(sig(change.lastChange)). \
+                         last change was $(sig(lastChangeDigest)).`
             );
         }
         node := __lookup(change, 0);
@@ -2212,6 +2212,7 @@ class CachedNode {
             a.next();
             b.next();
         }
+        __ctx.setLastChange(lastChangeDigest);
     }
 
     ## Replay the journal until we encounter the specified changeDigest.
@@ -2221,8 +2222,10 @@ class CachedNode {
         String lastChangeDigest;
         for (entry :in __ctx.makeJournalIter()) {
             lastChangeDigest = __replayChange(entry, lastChangeDigest);
-            if (lastChangeDigest == changeDigest)
+            if (lastChangeDigest == changeDigest) {
+                __ctx.setLastChange(lastChangeDigest);
                 return;
+            }
         }
         throw InvalidArgumentError(
             FStr() I`Change $(sig(changeDigest)) not found in journal for \

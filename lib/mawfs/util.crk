@@ -154,12 +154,13 @@ CachedNode findCommonAncestor(CachedNode target, CachedNode other) {
     ctx := target.getContext();
     targetBaseline := ctx.getBaselineCommit();
     otherBaseline := other.getContext().getBaselineCommit();
+    orgCtx := NodeContext(ctx.getStore(), ctx.getCache(), ctx.getBranch());
     if (targetBaseline == otherBaseline) {
         # Get the baseline.
-        ctx := target.getContext();
-        commit := ctx.getCommit(ctx.getHead());
+        commit := orgCtx.getCommit(commitDigest := orgCtx.getHead());
+        orgCtx.recordCommit(commitDigest);
         @assert(commit);
-        org := makeCachedNode(null, ctx, commit.root);
+        org := makeCachedNode(null, orgCtx, commit.root);
         @assert(org);
 
         # Find where the journal diverges.
@@ -176,8 +177,9 @@ CachedNode findCommonAncestor(CachedNode target, CachedNode other) {
         # node.
         @assert(common);
         commit := ctx.getCommit(common);
+        orgCtx.recordCommit(common);
         @assert(commit);
-        org := makeCachedNode(null, ctx, commit.root);
+        org := makeCachedNode(null, orgCtx, commit.root);
         @assert(org);
         return org;
     }
