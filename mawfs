@@ -347,6 +347,67 @@ class CommandManager {
         cerr `"mawfs run $rootDir <mount-point>" to begin using it.\n`;
     }
 
+    @static String __getServerFromDir(Path path) {
+        serversFile := path/'.mawfs/inst/servers';
+        if (!serversFile.exists())
+            return null;
+        contents := serversFile.readAll();
+        if (contents) {
+            addr := split(contents, b'\n')[0];
+
+            # Translate 0.0.0.0 (INADDR_ANY) into localhost.
+            if (addr.startsWith('0.0.0.0'))
+                addr = '127.0.0.1' + addr.substr(7);
+
+            return addr;
+        }
+        return null;
+    }
+
+    ## Get a server address from the specified name.  'name' can either be a
+    ## directory or an explicit hostname:port address.
+    String getServer(String name) {
+        # Got one.  Is it a directory?
+        if ((path := makePath(name)).isDir()) {
+            return __getServerFromDir(path);
+        }
+
+        # If it wasn't a directory or didn't contain a server address, try
+        # treating it as an address.
+        return name;
+    }
+
+    ## Get the instance server address. The rules are:
+    ##    if there is a -i (or --instance) argument:
+    ##        if it is a directory, and contains a non-empty
+    ##              .mawfs/inst/servers file:
+    ##           return the first address in the file
+    ##        return the value of the argument itself (it should be an address)
+    ##    else if there is a .mawfs/inst/servers file in the current directory:
+    ##        return the first address in the file.
+    ##    else:
+    ##        return null
+    String getServer() {
+        String server;
+
+        # Now we need to find the address of the instances we're connecting to.
+        # First check for an instance flag.
+        inst := opts.getString('instance');
+        if (inst) {
+            server = getServer(inst);
+        } else {
+            server = __getServerFromDir(cwd);
+        }
+
+        if (!server) {
+            cerr I`You must either call this from a MAWFS filesystem directory
+                   or specify an instance directory or address using the -i flag.
+                   `;
+            exit(1);
+        }
+        return server;
+    }
+
     ## The "clone" command.
     void clone() {
         checkArgs(4, 'Usage: mawfs clone <peer-address> <backing-dir>\n');
@@ -354,7 +415,7 @@ class CommandManager {
         initBackingStore(args[3]);
 
         # Need to share all of this code with 'pull'.
-        peerAddr := parsePeerAddr(args[2]);
+        peerAddr := parsePeerAddr(getServer(args[2]));
         password := readPassword();
 
         # Only need a raw chunk reader if we're running a server, so we
@@ -405,62 +466,6 @@ class CommandManager {
         makeChunkStore();
         cerr I`MAWFS Cell created\n`;
         showRunInstructions();
-    }
-
-    ## Get the instance server address. The rules are:
-    ##    if there is a -i (or --instance) argument:
-    ##        if it is a directory, and contains a non-empty
-    ##              .mawfs/inst/servers file:
-    ##           return the first address in the file
-    ##        return the value of the argument itself (it should be an address)
-    ##    else if there is a .mawfs/inst/servers file in the current directory:
-    ##        return the first address in the file.
-    ##    else:
-    ##        return null
-    String getServer() {
-        String server;
-
-        String getServerFromDir(Path path) {
-            serversFile := path/'.mawfs/inst/servers';
-            if (!serversFile.exists())
-                return null;
-            contents := serversFile.readAll();
-            if (contents) {
-                addr := split(contents, b'\n')[0];
-
-                # Translate 0.0.0.0 (INADDR_ANY) into localhost.
-                if (addr.startsWith('0.0.0.0'))
-                    addr = '127.0.0.1' + addr.substr(7);
-
-                return addr;
-            }
-            return null;
-        }
-
-        # Now we need to find the address of the instances we're connecting to.
-        # First check for an instance flag.
-        inst := opts.getString('instance');
-        if (inst) {
-            # Got one.  Is it a directory?
-            if ((path := makePath(inst)).isDir()) {
-                server = getServerFromDir(path);
-            }
-
-            # If it wasn't a directory or didn't contain a server address, try
-            # treating it as an address.
-            if (!server)
-                server = inst;
-        } else {
-            server = getServerFromDir(cwd);
-        }
-
-        if (!server) {
-            cerr I`You must either call this from a MAWFS filesystem directory
-                   or specify an instance directory or address using the -i flag.
-                   `;
-            exit(1);
-        }
-        return server;
     }
 
     ## The "pull" command.
