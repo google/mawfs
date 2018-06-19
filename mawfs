@@ -14,7 +14,7 @@
 # limitations under the License.
 
 import crack.ascii hex, radix;
-import crack.cmdline CmdOptions, Option, CMD_INT, CMD_STR;
+import crack.cmdline CmdOptions, Option, CMD_BOOL, CMD_INT, CMD_STR;
 import crack.enc.base64 altDecode, altEncode;
 #import crack.exp.fuse fuseMain = main, LockedFilesystem, NodeImpl;
 import crack.lang Exception, InvalidArgumentError, SystemError;
@@ -286,6 +286,9 @@ opts := CmdOptions![
     Option('branch', 'b', 'branch name', 'master', CMD_STR),
     Option('port', 'p', 'port number', '9119', CMD_INT),
     Option('instance', 'i', 'instance directory or address', null, CMD_STR),
+    Option('overwrite', 'o', 'overwrite existing backing directoory', null,
+           CMD_BOOL
+           ),
 ];
 
 class CommandManager {
@@ -321,7 +324,7 @@ class CommandManager {
     ## doesn't exist.
     void initBackingStore(String arg) {
         rootDir = makePath(arg);
-        if (rootDir.exists()) {
+        if (rootDir.exists() && !opts.getBool('overwrite')) {
             cerr `Directory $rootDir already exists\n`;
             exit(1);
         }
@@ -461,6 +464,8 @@ class CommandManager {
 
     ## The "create" command.
     void create() {
+        checkArgs(3, 'Usage: mawfs create <backing-dir>\n');
+        cerr `port is $(opts.getInt('port'))\n`;
         initLogs();
         initBackingStore(args[2]);
         makeChunkStore();

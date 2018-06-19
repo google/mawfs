@@ -1,0 +1,237 @@
+#!/usr/bin/python
+# Mawfs wrapper script.
+#
+# This exists to smooth over some of the temporary deficiencies of the mawfs
+# tool.
+#
+# It's python because crack doesn't yet have good annotation support for
+# doing reflection on functions.
+
+import getpass
+import base64
+import hashlib
+import os
+import socket
+import re
+import shutil
+import subprocess
+import sys
+
+class Abort(Exception):
+    pass
+
+commands = {}
+
+def command(func):
+    commands[func.__name__] = func
+    return func
+
+def get_args(func):
+    """Returns the function argument list."""
+    code = func.__code__
+    return code.co_varnames[:code.co_argcount]
+
+def check_args(func, args):
+    """Verifies that the argument list in 'args' is suitable for 'func'."""
+    params = get_args(func)
+    if len(args) != len(params):
+        raise Abort('Expected arguments to %s are %s' %
+                     (func.__name__, params)
+                    )
+
+def get_backing_dir_root():
+    """Returns the directory where we keep all of the backing stores."""
+    return os.path.join(os.path.expanduser('~'), '.mawfs')
+
+def get_backing_dir(path):
+    """Returns the full path to the backing dir for 'path'.
+    Args:
+        path: (str) absolute path
+    """
+    hasher = hashlib.md5()
+    hasher.update(path)
+
+    # Encode it and truncate the trailing newline and equal signs.
+    return os.path.join(get_backing_dir_root(),
+                        base64.encodestring(hasher.digest())[:-3])
+
+def make_backing_dir(path):
+    """
+    Args:
+        path: (str) an absolute path.
+    """
+    backing = get_backing_dir(path)
+    if not os.path.exists(backing):
+        os.makedirs(backing)
+    else:
+        # TODO: SHould we just try to create the mount point?
+        raise Abort('Backing dir for %s already exists (%s)' % (path, backing))
+    return backing
+
+PORT_RX = re.compile(r'port\s*=\s*(\d+)')
+
+def get_port_from_peers_file(filename):
+    server_section = False
+    for line in open(filename):
+        if line.strip() == '[server]':
+            server_section = True
+        elif line.startswith('['):
+            server_section = False
+        elif server_section:
+            m = PORT_RX.match(line)
+            if m:
+                return int(m.group(1))
+
+def find_unused_port():
+    """Returns an unused port number (int) for a new instance."""
+    ports = set()
+    root = get_backing_dir_root()
+    for back in os.listdir(root):
+        peers_file = os.path.join(root, back, 'config/peers')
+        if os.path.exists(peers_file):
+            ports.add(get_port_from_peers_file(peers_file))
+
+    def port_available(port):
+        if port in ports:
+            return false
+
+        # Try binding to the port on all interfaces
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
+        try:
+            s.bind(('0.0.0.0', port))
+        except:
+            import traceback
+            traceback.print_exc()
+            return False
+        s.close()
+        return True
+
+    port = 9131
+    while not port_available(port):
+        port += 1
+
+    return port
+
+def run_mawfs(*args, **kwargs):
+    stdin = kwargs.get('stdin')
+    proc = subprocess.Popen([os.environ.get('MAWFS_BIN', 'mawfs')] + list(args),
+                            stdin=subprocess.PIPE)
+    out, err = proc.communicate(stdin)
+
+@command
+def new(path):
+    """Create a new mawfs repository and mount it."""
+    if os.path.exists(path):
+        raise Abort('Path %s already exists' % path)
+
+    backing = make_backing_dir(os.path.abspath(path))
+    logfile = os.path.join(backing, 'mawfs.log')
+    try:
+        rc = 0
+        os.mkdir(path)
+        port = find_unused_port()
+
+        password = getpass.getpass()
+
+        rc = run_mawfs('create', '-ol', logfile, backing, '-p', str(port),
+                       stdin=password
+                       ) or \
+             run_mawfs('run', '-l', logfile,
+                       backing, path,
+                       stdin=password,
+                       )
+    finally:
+        if rc and os.path.exists(backing):
+            shutil.rmtree(backing)
+            shutil.rmtree(path)
+
+    return rc
+
+@command
+def umount(path):
+    """Unmount a mounted mawfs filesystem."""
+    return subprocess.call(['fusermount', '-u', path])
+
+def check_backing_exists(backing, path):
+    if not os.path.exists(backing):
+        raise Abort('%s is not a known mawfs filesystem' % path)
+
+@command
+def mount(path):
+    """Mount mawfs directory and start an instance."""
+    backing = get_backing_dir(os.path.abspath(path))
+    check_backing_exists(backing, path)
+    if not os.path.exists(path):
+        raise Abort('%s does not exist.  (Re)create it with mkdir?')
+    logfile = os.path.join(backing, 'mawfs.log')
+    return run_mawfs('run', '-l', logfile, backing, path)
+
+@command
+def delete(path):
+    """Delete a mawfs instance and its backing store."""
+    backing = get_backing_dir(os.path.abspath(path))
+    check_backing_exists(backing, path)
+
+    # First unmount if mounted.
+    if os.path.exists(os.path.join(path, '.mawfs')):
+        umount(path)
+
+    try:
+        os.rmdir(path)
+    except OSError as ex:
+        if ex.errno == 39:
+            umount(path)
+        os.rmdir(path)
+    shutil.rmtree(backing)
+
+@command
+def clone(source, dest):
+    """Clone 'source' to 'dest'."""
+    # TODO: check for ssh: prefixes in both source and dest.
+
+    if os.path.exists(dest):
+        raise Abort('%s already exists' % dest)
+    backing = get_backing_dir(os.path.abspath(dest))
+
+    # Let mawfs do the heavy lifting.
+    print('cloning into %s (mount = %s)' % (backing, dest))
+    run_mawfs('clone', source, backing)
+
+    os.mkdir(dest)
+    print('or just run %s mount %s' % (sys.argv[0], dest))
+
+@command
+def info(path):
+    """Show info on a mawfs instance."""
+    backing = get_backing_dir(os.path.abspath(path))
+    check_backing_exists(backing, path)
+    print 'Backing-dir: %s' % backing
+
+@command
+def help():
+    """Show this help message."""
+    for name, func in commands.items():
+        args = get_args(func)
+        print(' '.join((func.__name__,) + args))
+        if not func.__doc__:
+            print('   Undocumented!')
+        else:
+            print('   ' + '\n   '.join(func.__doc__.split('\n')))
+
+def main(args):
+    try:
+        if len(args) < 2:
+            help()
+            return 1
+        cmd = commands.get(args[1])
+        if not cmd:
+            raise Abort('Unknown command %s' % args[1])
+
+        args = args[2:]
+        check_args(cmd, args)
+        return cmd(*args)
+
+    except Abort as ex:
+        print ex.args[0]
+
+sys.exit(main(sys.argv))
