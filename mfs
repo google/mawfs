@@ -7,6 +7,7 @@
 # It's python because crack doesn't yet have good annotation support for
 # doing reflection on functions.
 
+import getopt
 import getpass
 import base64
 import hashlib
@@ -26,17 +27,36 @@ def command(func):
     commands[func.__name__] = func
     return func
 
+class ArgInfo(object):
+
+    def __init__(self, name, has_default):
+        self.name = name
+        self.has_default = has_default
+
+    def __str__(self):
+        if self.has_default:
+            return '[%s]' % self.name
+        else:
+            return '<%s>' % self.name
+
 def get_args(func):
     """Returns the function argument list."""
     code = func.__code__
-    return code.co_varnames[:code.co_argcount]
+    args = code.co_varnames[:code.co_argcount]
+    defaults = func.__defaults__ or ()
+    zipped = zip(args,
+                 [False] * (len(args) - len(defaults)) +
+                 [True] * len(defaults)
+                 )
+    return [ArgInfo(name, has_default) for name, has_default in zipped]
 
 def check_args(func, args):
     """Verifies that the argument list in 'args' is suitable for 'func'."""
     params = get_args(func)
-    if len(args) != len(params):
+    undefaulted = [x for x in params if not x.has_default]
+    if len(args) > len(params) or len(args) < len(undefaulted):
         raise Abort('Expected arguments to %s are %s' %
-                     (func.__name__, params)
+                     (func.__name__, [str(x) for x in params])
                     )
 
 def get_backing_dir_root():
@@ -93,7 +113,7 @@ def find_unused_port():
 
     def port_available(port):
         if port in ports:
-            return false
+            return False
 
         # Try binding to the port on all interfaces
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
@@ -114,9 +134,41 @@ def find_unused_port():
 
 def run_mawfs(*args, **kwargs):
     stdin = kwargs.get('stdin')
-    proc = subprocess.Popen([os.environ.get('MAWFS_BIN', 'mawfs')] + list(args),
-                            stdin=subprocess.PIPE)
-    out, err = proc.communicate(stdin)
+    cmd = [os.environ.get('MAWFS_BIN', 'mawfs')] + \
+          [str(arg) for arg in args if arg is not None]
+    if stdin is not None:
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+        proc.communicate(stdin)
+        return proc.wait()
+    else:
+        return subprocess.call(cmd)
+
+processed_instance = instance = None
+
+def get_server_from_dir(dir):
+    return open(os.path.join(dir, '.mawfs/inst/servers')).read().strip()
+
+def get_instance():
+    """Returns the address of the mawfs instnace.
+
+    Returns the address of the mawfs instance from the -i flag or from the
+    current directory.
+    """
+    global instance, processed_instance
+    if processed_instance:
+        return processed_instance
+    elif instance is None:
+        # check for a local ".mawfs" directory with servers in it.
+        if os.path.exists('.mawfs/inst/servers'):
+            processed_instance = get_server_from_dir(os.getcwd())
+        else:
+            raise Abort('You must specify an instance (-i <instance>) for '
+                        'this command.')
+    elif os.path.isdir(instance):
+        processed_instance = get_server_from_dir(instance)
+    else:
+        processed_instance = instance
+    return processed_instance
 
 @command
 def new(path):
@@ -136,10 +188,7 @@ def new(path):
         rc = run_mawfs('create', '-ol', logfile, backing, '-p', str(port),
                        stdin=password
                        ) or \
-             run_mawfs('run', '-l', logfile,
-                       backing, path,
-                       stdin=password,
-                       )
+             run_mawfs('run', '-l', logfile, backing, path, stdin=password)
     finally:
         if rc and os.path.exists(backing):
             shutil.rmtree(backing)
@@ -193,9 +242,11 @@ def clone(source, dest):
         raise Abort('%s already exists' % dest)
     backing = get_backing_dir(os.path.abspath(dest))
 
+    port = find_unused_port()
+
     # Let mawfs do the heavy lifting.
     print('cloning into %s (mount = %s)' % (backing, dest))
-    run_mawfs('clone', source, backing)
+    run_mawfs('clone', '-p', port, source, backing)
 
     os.mkdir(dest)
     print('or just run %s mount %s' % (sys.argv[0], dest))
@@ -212,22 +263,38 @@ def help():
     """Show this help message."""
     for name, func in commands.items():
         args = get_args(func)
-        print(' '.join((func.__name__,) + args))
+        print(' '.join([func.__name__] + [str(x) for x in args]))
         if not func.__doc__:
             print('   Undocumented!')
         else:
             print('   ' + '\n   '.join(func.__doc__.split('\n')))
 
+@command
+def pull(branch, peer=None):
+    """Pull the branch from the cell."""
+    run_mawfs('pull', '-i', get_instance(), branch, peer)
+
+@command
+def merge(branch):
+    """Merge a branch into the current branch."""
+    run_mawfs('merge', '-i', get_instance(), branch)
+
 def main(args):
+    global instance
+    opts, args = getopt.getopt(args[1:], 'i:')
+    for opt, val in opts:
+        if opt == '-i':
+            instance = val
     try:
-        if len(args) < 2:
+        if not args:
             help()
             return 1
-        cmd = commands.get(args[1])
+        cmd = commands.get(args[0])
         if not cmd:
-            raise Abort('Unknown command %s' % args[1])
+            raise Abort('Unknown command %s' % args[0])
 
-        args = args[2:]
+        # Remove the command, check args and call.
+        args = args[1:]
         check_args(cmd, args)
         return cmd(*args)
 
