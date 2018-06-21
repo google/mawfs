@@ -42,6 +42,7 @@ import crack.protobuf readMessageFromString;
 import crack.threads Mutex;
 
 import mawfs.blockstore hashFile, ChunkStore, FSInfo, Node, BLOCK_SIZE;
+import mawfs.cache sig;
 import mawfs.configstore ConfigStore;
 import mawfs.entropy DeviceEntropySource;
 import mawfs.fuse runFuse;
@@ -475,7 +476,7 @@ class CommandManager {
 
     ## The "pull" command.
     void pull() {
-        checkArgs(3, "Usage: mawfs pull <branch> [peer]\n");
+        checkArgsAtLeast(2, "Usage: mawfs pull <branch> [peer]\n");
         setLogLevel(DEBUG);
 
         server := getServer();
@@ -493,7 +494,7 @@ class CommandManager {
         server := getServer();
         result := makeRPC(server).getProxy().merge(args[2]);
         if (result.commit)
-            cout `committed: $(result.commit)\n`;
+            cout `committed: $(sig(result.commit))\n`;
         else {
             cout `created merge branch: $(result.mergeBranch)\n`;
             cout `Conflicts (must be merged manually):\n`;
