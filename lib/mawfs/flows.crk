@@ -14,6 +14,7 @@ import .inst InstanceState;
 import .merge Merger, MergeState;
 import .peernet PeerNetwork;
 import .rawchunk GeneralCallback;
+import .rpc parseAddr;
 import .rpc InstIFace, MergeResult, MergeResponse;
 import .util findCommonAncestor;
 
@@ -392,6 +393,33 @@ class MAWFSInstance @impl InstIFace {
         return 0;
     }
 
+    ## Adds a new peer to the instance (and only the instance, not the entire
+    ## network).
+    int addPeer(String peerName, String peerAddr) {
+        lock := __state.lock();
+
+        __net.addPeer(parseAddr(peerAddr));
+
+        # Read the existing file.
+        backing := __state.getBacking();
+        peerFile := backing/'config/peers';
+        contents := peerFile.exists() ? peerFile.readAll() : '';
+
+        # Rewrite it with the new contents.
+        peerFile.parent().makeDirs();
+        writer := peerFile.writer();
+        writer.write(contents);
+
+        addr := parseAddr(peerAddr);
+
+        writer.write(FStr() I`
+            [peer-$peerName]
+            host = $(addr.getHostname())
+            port = $(addr.getPort())
+            `);
+        return 0;
+    }
+
     ## RPC service for pullBranch.  Starts the call off in a new thread.
     void pullBranch(String name, String peer,
                     GeneralCallback[String] callback
@@ -415,5 +443,13 @@ class MAWFSInstance @impl InstIFace {
     void cancelMerge(GeneralCallback[int] callback) {
         @task(MAWFSInstance inst;, int, inst.cancelMerge());
         __pool.submit(MyTask(this, callback));
+    }
+
+    void addPeer(String peerName, String peerAddr,
+                 GeneralCallback[int] callback
+                 ) {
+        @task(MAWFSInstance inst; String peerName; String peerAddr;, int,
+              inst.addPeer(peerName, peerAddr));
+        __pool.submit(MyTask(this, peerName, peerAddr, callback));
     }
 }

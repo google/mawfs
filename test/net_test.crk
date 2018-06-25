@@ -16,7 +16,7 @@ import crack.cont.array Array;
 import crack.cont.hashmap HashMap;
 import crack.fs makePath, Path;
 import crack.hash.sha256 SHA256;
-import crack.io cerr;
+import crack.io cerr, FStr;
 import crack.lang Exception;
 import crack.logger cerrLogger, info, setLogFile, setLogLevel, DEBUG;
 import crack.logger.ctx Log;
@@ -532,5 +532,19 @@ class CancelMergeTest : ConflictTestBase {
     }
 }
 register(CancelMergeTest());
+
+class AddPeerTest : TestBed {
+    void run() {
+        proxy.addPeer('master', FStr() `127.0.0.1:$(master.port)`);
+        assertEqual(
+            (slave.backDir/'config/peers').readAll(),
+            I'
+            [peer-master]
+            host = 127.0.0.1
+            port = 9130
+            ');
+    }
+}
+register(AddPeerTest());
 
 runAllTests();

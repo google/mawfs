@@ -113,6 +113,11 @@ class AppError : Exception {
         optional string commit = 2;
         repeated string conflict = 3;
     }
+
+    message AddPeerRequest {
+        optional string peerName = 1;
+        optional string peerAddr = 2;
+    }
 }
 
 class MergeResult : MergeResponse {
@@ -134,6 +139,9 @@ class MergeResult : MergeResponse {
 
     @abstract void resolve(GeneralCallback[int] callback);
     @abstract void cancelMerge(GeneralCallback[int] callback);
+    @abstract void addPeer(String peerName, String peerAddr,
+                           GeneralCallback[int] callback
+                           );
 }
 
 InstIFace _inst;
@@ -385,6 +393,15 @@ class PeerProxy {
     ## Cancel a pending merge.
     void cancelMerge() {
         __invoke('cancelMerge', null);
+    }
+
+    ## Add a new peer to the instance.  The peer will not be propagated
+    ## through the network.
+    void addPeer(String peerName, String peerAddr) {
+        req := AddPeerRequest();
+        req.peerName = peerName;
+        req.peerAddr = peerAddr;
+        __invoke('addPeer', req.toString());
     }
 }
 
@@ -638,6 +655,15 @@ void cancelMerge(Context context, RPCMessage msg, CommHandler comm) {
     _inst.cancelMerge(EmptyResponseCallback(context, comm, msg.id));
 }
 
+void addPeer(Context context, RPCMessage msg, CommHandler comm) {
+    req := AddPeerRequest();
+    readMessageFromString(req, msg.request);
+
+    _inst.addPeer(req.peerName, req.peerAddr,
+                  EmptyResponseCallback(context, comm, msg.id)
+                  );
+}
+
 class PeerServiceCommFactory @impl CommHandlerFactory {
     MethodMap __methods = {};
     Context __context;
@@ -651,6 +677,7 @@ class PeerServiceCommFactory @impl CommHandlerFactory {
         __methods['merge'] = MethodHandler.Wrap(merge);
         __methods['resolve'] = MethodHandler.Wrap(resolve);
         __methods['cancelMerge'] = MethodHandler.Wrap(cancelMerge);
+        __methods['addPeer'] = MethodHandler.Wrap(addPeer);
     }
 
     CommHandler makeCommHandler(NewConnection conn) {
