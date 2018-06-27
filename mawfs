@@ -519,6 +519,13 @@ class CommandManager {
         makeRPC(server).getProxy().cancelMerge();
         cout `Merge cancelled\n`;
     }
+
+    ## THe "addPeer" command.
+    void addPeer() {
+        checkArgs(4, 'Usage: mawfs addPeer <peer-name> <peer-addr>');
+        server := getServer();
+        makeRPC(server).getProxy().addPeer(args[2], args[3]);
+    }
 }
 
 # The main function, which is a command dispatcher.
@@ -619,6 +626,12 @@ void main() {
                     setInst(MAWFSInstance(instState, __net));
                     __net.storeServersIn(instState);
 
+                    # Set the remote reader from the peer net (note that we
+                    # already have the instance lock).
+                    instState.getStore().setRemoteReader(
+                        RemoteReaderImpl(__net)
+                    );
+
                     # Break the cycle with the instance state.
                     instState = null;
                 }
@@ -664,6 +677,8 @@ void main() {
             cm.resolve();
         } else if (cmd == 'cancelMerge') {
             cm.cancelMerge();
+        } else if (cmd == 'addPeer') {
+            cm.addPeer();
         } else {
             cerr `Unknown command: $cmd\n`;
             usage();
