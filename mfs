@@ -75,6 +75,23 @@ def get_backing_dir(path):
     return os.path.join(get_backing_dir_root(),
                         base64.encodestring(hasher.digest())[:-3])
 
+def is_mawfs_root(path):
+    """Returns true if 'path' is the root of a MAWFS filesystem.
+
+    Returns the backing dir path if 'path' is both a directory and has an
+    associated backing dir.
+    """
+    path = os.path.abspath(path)
+    if not os.path.isdir(path):
+        print('not a dir')
+        return False
+    backing = get_backing_dir(path)
+    if not os.path.exists(backing):
+        print('no backing dir %s' % backing)
+        return False
+
+    return backing
+
 def make_backing_dir(path):
     """
     Args:
@@ -89,18 +106,33 @@ def make_backing_dir(path):
     return backing
 
 PORT_RX = re.compile(r'port\s*=\s*(\d+)')
+SECTION_RX = re.compile(r'\[(.+)\]')
+VAR_RX = re.compile(r'\s*([^\s=]+)\s*=\s*(\S+(\s*\S+)*)')
+
+def parse_peers_file(filename):
+    """Parse the peers file and return it as a multi-level dictionary.
+
+    Returns:
+        Dict[str, Dict[str, str]]
+    """
+    result = {}
+    section = {}  # Variables outside of a section will get ignored.
+    for line in open(filename):
+        m = SECTION_RX.match(line)
+        if m:
+            section = {}
+            result[m.group(1)] = section
+            continue
+
+        m = VAR_RX.match(line)
+        if m:
+            section[m.group(1)] = m.group(2)
+
+    return result
 
 def get_port_from_peers_file(filename):
-    server_section = False
-    for line in open(filename):
-        if line.strip() == '[server]':
-            server_section = True
-        elif line.startswith('['):
-            server_section = False
-        elif server_section:
-            m = PORT_RX.match(line)
-            if m:
-                return int(m.group(1))
+    config = parse_peers_file(filename)
+    return int(config.get('server', {}).get('port', '0'))
 
 def find_unused_port():
     """Returns an unused port number (int) for a new instance."""
@@ -185,7 +217,7 @@ def new(path):
 
         password = getpass.getpass()
 
-        rc = run_mawfs('create', '-ol', logfile, backing, '-p', str(port),
+        rc = run_mawfs('create', '-ol', logfile, backing, '-p', port,
                        stdin=password
                        ) or \
              run_mawfs('run', '-l', logfile, backing, path, stdin=password)
@@ -251,12 +283,48 @@ def clone(source, dest):
     os.mkdir(dest)
     print('or just run %s mount %s' % (sys.argv[0], dest))
 
+
+def get_host_and_port(config):
+    """Extract the host and port from the config object.
+
+    Returns Tuple[str, str] (host and port) if the host and port are
+    configured, None if not.
+    """
+    server_section = config['server']
+    iface = server_section.get('iface')
+    port = server_section.get('port')
+    enabled = server_section.get('enabled')
+    if iface or port or enabled:
+        return (iface or '0.0.0.0'), (port or '9119')
+    else:
+        return None
+
 @command
 def info(path):
     """Show info on a mawfs instance."""
     backing = get_backing_dir(os.path.abspath(path))
     check_backing_exists(backing, path)
-    print 'Backing-dir: %s' % backing
+    print('Backing-dir: %s' % backing)
+    peers_file = os.path.join(backing, 'config', 'peers')
+    if os.path.exists(peers_file):
+        config = parse_peers_file(peers_file)
+
+        try:
+            host_and_port = get_host_and_port(config)
+            if host_and_port:
+                print('Server-Iface: %s' % host_and_port[0])
+                print('Server-Port: %s' % host_and_port[1])
+        except KeyError:
+            pass
+
+        # Print out info on the peers.
+        for key in sorted(config.keys()):
+            if key.startswith('peer-'):
+                sec = config[key]
+                print('%s: host=%s port=%s' %
+                      (key, sec.get('host', ''), sec.get('port', '')))
+    else:
+        print('No peers file.')
 
 @command
 def help():
@@ -278,6 +346,30 @@ def pull(branch, peer=None):
 def merge(branch):
     """Merge a branch into the current branch."""
     run_mawfs('merge', '-i', get_instance(), branch)
+
+@command
+def add_peer(peer_name, peer_addr):
+    """Add a new peer to the instance.
+
+    peer_addr can be either an address (e.g. host:port) or another MAFWS
+    directory.
+    """
+
+    # Convert a peer directory to an address.
+    backing = is_mawfs_root(peer_addr)
+    if backing:
+        config = parse_peers_file(os.path.join(backing, 'config', 'peers'))
+        host_and_port = get_host_and_port(config)
+        if host_and_port:
+            if host_and_port[0] == '0.0.0.0':
+                host_and_port = '127.0.0.1', host_and_port[1]
+            peer_addr = '%s:%s' % host_and_port
+        else:
+            print('%s appeares to be a MAWFS root but has no server address' %
+                (peer_addr,))
+            return 1
+
+    run_mawfs('addPeer', '-i', get_instance(), peer_name, peer_addr)
 
 def main(args):
     global instance
