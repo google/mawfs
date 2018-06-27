@@ -18,7 +18,7 @@ import .rpc parseAddr;
 import .rpc InstIFace, MergeResult, MergeResponse;
 import .util findCommonAncestor;
 
-@import crack.ann cvars, define, impl;
+@import crack.ann assert, cvars, define, impl;
 
 alias Task = Functor0[void];
 
@@ -108,6 +108,7 @@ class MAWFSInstance @impl InstIFace {
             return true;
 
         commit := __state.getStore().getCommit(commitDigest);
+        @assert(commit);
         bool result;
         if (commit.parent) {
             for (parent :in commit.parent) {
@@ -127,11 +128,14 @@ class MAWFSInstance @impl InstIFace {
     ## Requires a lock on the instance state.
     Commit __getFollowingCommit(String curCommitDigest, String laterCommitDigest) {
         commit := __state.getStore().getCommit(laterCommitDigest);
-        for (parent :in commit.parent) {
-            if (parent == curCommitDigest)
-                return commit;
-            else if (c := __getFollowingCommit(curCommitDigest, parent))
-                return c;
+        @assert(commit);
+        if (commit.parent) {
+            for (parent :in commit.parent) {
+                if (parent == curCommitDigest)
+                    return commit;
+                else if (c := __getFollowingCommit(curCommitDigest, parent))
+                    return c;
+            }
         }
         return null;
     }
@@ -398,7 +402,9 @@ class MAWFSInstance @impl InstIFace {
     int addPeer(String peerName, String peerAddr) {
         lock := __state.lock();
 
-        __net.addPeer(parseAddr(peerAddr));
+        info `adding peer $peerAddr to network and backing store\n`;
+        addr := parseAddr(peerAddr);
+        __net.addPeer(addr);
 
         # Read the existing file.
         backing := __state.getBacking();
@@ -409,8 +415,6 @@ class MAWFSInstance @impl InstIFace {
         peerFile.parent().makeDirs();
         writer := peerFile.writer();
         writer.write(contents);
-
-        addr := parseAddr(peerAddr);
 
         writer.write(FStr() I`
             [peer-$peerName]
