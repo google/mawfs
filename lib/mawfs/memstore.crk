@@ -19,10 +19,11 @@ import crack.cont.hashmap HashMap;
 import crack.enc.base64 altEncode;
 import crack.hash.sha256 SHA256;
 import crack.io StringWriter;
+import crack.lang Exception;
 import crack.logger debug;
 import crack.protobuf readMessageFromString, Message, ProtoWriter;
 import mawfs.blockstore Change, ChangeEntry, Chunk, Commit, JournalIter,
-    Node, NodeStore, Session;
+    Node, NodeStore, RemoteReader, Session;
 
 @import crack.ann impl;
 
@@ -49,6 +50,10 @@ class MemNodeStore @impl NodeStore {
         chunk := __toChunk(message);
         __objs[chunk.digest] = chunk.contents;
         return chunk.digest;
+    }
+
+    void setRemoteReader(RemoteReader remoteReader) {
+        throw Exception('Not implemented.');
     }
 
     String storeNode(Node node) {

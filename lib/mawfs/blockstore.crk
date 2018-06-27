@@ -297,8 +297,19 @@ class Session {
     void setId(String id) { __id = id }
 }
 
+## Interface for partial chunk stores that can load chunks from remote sources.
+@interface RemoteReader {
+    ## Returns the contents of the object with the named digest, returns null
+    ## if unable to obtain it for any reason.
+    @abstract String getContents(String digest);
+}
+
 ## Interface for a node store.
 @interface NodeStore {
+
+    ## Set the remote reader for the store.  The remote reader is used to
+    ## attempt to obtain blocks that can not be discovered locally.
+    @abstract void setRemoteReader(RemoteReader remoteReader);
 
     ## Store a chunk, return its digest.
     @abstract String storeNode(Node node);
@@ -372,13 +383,6 @@ class Session {
         return RepoInfo(rootDigest, commitDigest);
     }
 
-}
-
-## Interface for partial chunk stores that can load chunks from remote sources.
-@interface RemoteReader {
-    ## Returns the contents of the object with the named digest, returns null
-    ## if unable to obtain it for any reason.
-    @abstract String getContents(String digest);
 }
 
 class FSRawChunkReader @impl RawChunkReader {
@@ -495,7 +499,7 @@ class ChunkStore @impl NodeStore {
     ## Returns the cipher used to encrypt/decrypt chunks from the store.
     Cipher getCipher() { return __fsInfo.cipher }
 
-    @final void setRemoteReader(RemoteReader remote) { __remote = remote }
+    void setRemoteReader(RemoteReader remote) { __remote = remote }
 
     ## Loads and returns the chunk with the specified digest, returns null if
     ## the chunk doesn't exist in the store.
