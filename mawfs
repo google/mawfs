@@ -287,8 +287,9 @@ opts := CmdOptions![
     Option('branch', 'b', 'branch name', 'master', CMD_STR),
     Option('port', 'p', 'port number', '9119', CMD_INT),
     Option('iface', 'f',
-           'Server interface to bind to.  This is only used by the "create" '
-           'command and only when the --port option is also specified.',
+           'Server interface to bind to.  This is only used by commands that '
+           'create an instance ("create" and "clone") and only when the '
+           '--port option is also specified.',
            '0.0.0.0',
            CMD_STR
            ),
