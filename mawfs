@@ -286,6 +286,12 @@ opts := CmdOptions![
     Option('logfile', 'l', 'logfile name', 'mawfs.log', CMD_STR),
     Option('branch', 'b', 'branch name', 'master', CMD_STR),
     Option('port', 'p', 'port number', '9119', CMD_INT),
+    Option('iface', 'f',
+           'Server interface to bind to.  This is only used by the "create" '
+           'command and only when the --port option is also specified.',
+           '0.0.0.0',
+           CMD_STR
+           ),
     Option('instance', 'i', 'instance directory or address', null, CMD_STR),
     Option('overwrite', 'o', 'overwrite existing backing directoory', null,
            CMD_BOOL
@@ -332,9 +338,11 @@ class CommandManager {
 
         # Create a peer config if "port" is specified.
         if (port := opts.getString('port')) {
+            String iface = opts.getString('iface');
             (rootDir/'config').makeDirs();
             StandardFormatter((rootDir/'config'/'peers').writer()) I`\
                 [server]
+                iface = $iface
                 port = $port
                 `;
         }
