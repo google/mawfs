@@ -286,7 +286,7 @@ def clone(source, dest):
 
     # Let mawfs do the heavy lifting.
     print('cloning into %s (mount = %s)' % (backing, dest))
-    run_mawfs('clone', '-p', port, source, backing)
+    run_mawfs('clone', '-p', port, '-f', '127.0.0.1', source, backing)
 
     os.mkdir(dest)
     print('or just run %s mount %s' % (sys.argv[0], dest))
