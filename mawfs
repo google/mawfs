@@ -158,6 +158,10 @@ void usage() {
                 output.
             mawfs dump <filename>
                 Dump the contents of an encrypted backing file.
+            mawfs addPeer <peer-name> <peer-addr>
+                Add a new peer to the instance.  'peer-name' can be any name
+                that is meaningful to the user.  'peer-addr' is an IP address
+                in host:port format.
         `;
 }
 
