@@ -75,6 +75,10 @@ const _ADDRS_SIZE := 100;
 const array[voidptr] _addrs = {_ADDRS_SIZE};
 const array[byteptr] _addrInfo = {3};
 
+class Abort : Exception {
+    oper init(String message) : Exception(message) {}
+}
+
 void trapHandler(int signal, SigInfo si, voidptr ucontext) {
     StringFormatter trace = {};
     trace `Stack Trace\n`;
@@ -184,7 +188,7 @@ class RPCCmd {
         __log = Log(cerrLogger, 'client');
         __comm = Comm(__log);
         __comm.start();
-        __proxy = PeerProxy(__comm, __log, addr);
+        __proxy = PeerProxy.make(__comm, __log, addr);
     }
 
     oper del() {
@@ -200,7 +204,10 @@ class RPCCmd {
 }
 
 RPCCmd makeRPC(String addr) {
-    return RPCCmd(addr);
+    cmd := RPCCmd(addr);
+    if (!cmd.getProxy())
+        throw Abort(FStr() `Unable to connect to $addr`);
+    return cmd;
 }
 
 String readPassword() {
@@ -246,10 +253,6 @@ String readPassword() {
     hashed_password := hasher.digest();
 
     return hashed_password;
-}
-
-class Abort : Exception {
-    oper init(String message) : Exception(message) {}
 }
 
 ## initializes the chunk store from disk.  Reads the password from the user.
@@ -489,7 +492,7 @@ class CommandManager {
 
     ## The "pull" command.
     void pull() {
-        checkArgsAtLeast(2, "Usage: mawfs pull <branch> [peer]\n");
+        checkArgsAtLeast(3, "Usage: mawfs pull <branch> [peer]\n");
         setLogLevel(DEBUG);
 
         server := getServer();
@@ -699,15 +702,19 @@ void main() {
         }
     } catch (Abort ex) {
         cerr `$(ex.text)\n`;
+        exit(1);
     } catch (SystemError ex) {
         cerr `system error: $ex\n`;
         error `$(ex.text)`;
+        exit(1);
     } catch (InvalidArgumentError ex) {
         cerr `invalid argument: $ex\n`;
         error `$(ex.text)`;
+        exit(1);
     } catch (Exception ex) {
         cerr `general exception: $ex\n`;
         error `got general exception: $ex\n`;
+        exit(1);
     }
 }
 

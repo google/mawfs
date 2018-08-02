@@ -72,17 +72,20 @@ class RPCTestBed {
     }
 
     void testGetObject() {
-        peer := PeerProxy(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`);
+        peer :=
+            PeerProxy.make(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`);
         @assert(peer.getObject('foo') == 'from the chunk reader');
     }
 
     void testGetHead() {
-        peer := PeerProxy(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`);
+        peer :=
+            PeerProxy.make(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`);
         @assert(peer.getHead('master') == 'digest');
     }
 
     void testReadJournal() {
-        peer := PeerProxy(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`);
+        peer :=
+            PeerProxy.make(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`);
         jb := peer.getJournalBlock('digest', 'branch', 0);
         @assert(jb.firstBlockDigest == 'digest');
         @assert(jb.contents == 'branch contents');
@@ -93,7 +96,8 @@ class RPCTestBed {
     }
 
     void testGetFile() {
-        peer := PeerProxy(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`);
+        peer :=
+            PeerProxy.make(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`);
         @assert(peer.getFile('filename') == 'contents');
     }
 

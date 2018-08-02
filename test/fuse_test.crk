@@ -62,14 +62,19 @@ bool gotFailures;
         return backing;
     }
 
-    void runMawfs(StringArray args) {
+    ## Run the MAWFS command with 'args' and return the exit code.
+    int runMawfsRC(StringArray args) {
         cmd := StringArray![crackPath, './mawfs'];
         cmd.extend(args);
         proc := Process(cmd, CRK_PIPE_STDIN);
         proc.putStdIn('TestPasswordDudeBestAsstwordFood');
         proc.closeStdIn();
-        rc := proc.run();
-        if (rc != CRK_PROC_EXITED)
+        return proc.run() & 0xff;
+    }
+
+    ## Run the mawfs command, throw an exception if there was an error.
+    void runMawfs(StringArray args) {
+        if (runMawfsRC(args))
             throw Exception('Failed in startup');
     }
 
@@ -83,19 +88,18 @@ bool gotFailures;
     }
 
     void stopFS(String dir) {
-        rc := Process(StringArray!['fusermount', '-u', dir]).run();
+        rc := Process(StringArray!['fusermount', '-uz', dir]).run();
         if (rc != CRK_PROC_EXITED) {
             # There seems to be a timing issue here. This doesn't always
             # succeed on the first try.  So if the unmount fails, sleep and
             # try again one more time.
             sleep(1);
-            rc = Process(StringArray!['fusermount', '-u', 'fs']).run();
+            cerr `trying unmount again\n`;
+            rc = Process(StringArray!['fusermount', '-uz', 'fs']).run();
         }
 
-        if (rc != CRK_PROC_EXITED || failed) {
-            cerr `fusermount failed`;
-            cerr `$(makePath('mawfs.log').readAll())\n`;
-        }
+        if (rc != CRK_PROC_EXITED || failed)
+            cerr `fusermount failed\n`;
     }
 
     void restartFS(String branch) {
@@ -118,6 +122,8 @@ bool gotFailures;
 
     void tearDown() {
         stopFS('fs');
+        if (failed)
+            cerr `$(makePath('mawfs.log').readAll())\n`;
         deleteBacking();
     }
 
@@ -497,6 +503,27 @@ class RestoreStateTest : MergeTest {
     }
 }
 register(RestoreStateTest());
+
+## Verify that we can still run things with a missing peer.
+class MissingPeerTest : DoubleInstanceTest {
+    void run() {
+        # Move the master to port 12543, clone it to the slave and start the
+        # slave.
+        (makePath('backing')/'config/peers').writeAll('[server]\nport = 12543\n');
+        restartFS('master');
+        runMawfs(StringArray!['clone', 'localhost:12543', 'backing2']);
+        startFS('master', 'backing2', 'fs2');
+
+        # Shut down both, verify that we can bring up the slave (the slave has
+        # the master as its peer).
+        stopFS('fs');
+
+        restartSlaveFS('master');
+        rc := runMawfsRC(StringArray!['pull', '-i', 'localhost:9119', 'master']);
+        @assert(rc == 1);
+    }
+}
+register(MissingPeerTest());
 
 runAllTests();
 

@@ -40,7 +40,7 @@ class Peer {
     ## Returns the peer proxy, creating it if necessary.
     PeerProxy getProxy() {
         if (!__proxy)
-            __proxy = PeerProxy(__comm, __log, addr);
+            __proxy = PeerProxy.make(__comm, __log, addr);
         return __proxy;
     }
 

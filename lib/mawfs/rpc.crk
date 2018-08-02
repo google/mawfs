@@ -265,15 +265,35 @@ class PeerProxy {
     Log __log;
     int32 __lastId;
 
-    oper init(Comm comm, Log log, String addr) : __comm = comm, __log = log {
-        a := parseAddr(addr);
-        __log.info `connecting to $a`;
-        __proxy = __comm.getSyncProxy(a, _Handler());
+    oper init(Comm comm, Log log, SyncCommProxy proxy) :
+        __comm = comm,
+        __log = log,
+        __proxy = proxy {
     }
 
-    oper init(Comm comm, Log log, Address addr) : __comm = comm, __log = log {
-        __log.info `connecting to $addr`;
-        __proxy = __comm.getSyncProxy(addr, _Handler());
+    @static
+    SyncCommProxy __makeCommProxy(Comm comm, Log log, Address addr) {
+        log.info `connecting to $addr`;
+        try {
+            conn := comm.getSyncProxy(addr, _Handler());
+            return conn;
+        } catch (Exception ex) {
+            log.warn `Unable to connect to $addr: $(ex.text)\n`;
+            return null;
+        }
+    }
+
+    @static
+    PeerProxy make(Comm comm, Log log, String addr) {
+        a := parseAddr(addr);
+        proxy := __makeCommProxy(comm, log, a);
+        return proxy ? PeerProxy(comm, log, proxy) : null;
+    }
+
+    @static
+    PeerProxy make(Comm comm, Log log, Address addr) {
+        proxy := __makeCommProxy(comm, log, addr);
+        return proxy ? PeerProxy(comm, log, proxy) : null;
     }
 
     ## Test constructor.

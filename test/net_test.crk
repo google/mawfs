@@ -158,7 +158,7 @@ class PeerInfo {
         log := Log(cerrLogger, 'client-proxy');
         comm = Comm(log);
         comm.start();
-        proxy = PeerProxy(comm, log, InetAddress(127, 0, 0, 1, getPort()));
+        proxy = PeerProxy.make(comm, log, InetAddress(127, 0, 0, 1, getPort()));
     }
 
     void tearDown() {
