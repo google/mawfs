@@ -88,6 +88,9 @@ bool gotFailures;
     }
 
     void stopFS(String dir) {
+        if (!(makePath(dir)/'.mawfs').exists())
+            return;
+
         rc := Process(StringArray!['fusermount', '-uz', dir]).run();
         if (rc != CRK_PROC_EXITED) {
             # There seems to be a timing issue here. This doesn't always
@@ -123,7 +126,7 @@ bool gotFailures;
     void tearDown() {
         stopFS('fs');
         if (failed)
-            cerr `$(makePath('mawfs.log').readAll())\n`;
+            cerr `$(makePath('mawfs_fs.log').readAll())\n`;
         deleteBacking();
     }
 
@@ -524,6 +527,17 @@ class MissingPeerTest : DoubleInstanceTest {
     }
 }
 register(MissingPeerTest());
+
+class AdminDirAfterFSyncTest : TestCase {
+    void run() {
+        fd := open(makePath('fs').getFullName().buffer, O_RDONLY, 0);
+        fsync(fd);
+        close(fd);
+
+        @assert(makePath('fs/.mawfs').exists());
+    }
+}
+register(AdminDirAfterFSyncTest());
 
 runAllTests();
 

@@ -213,6 +213,7 @@ class InstanceState {
     void commit() {
         @checkLock();
         __tree.commit();
+        resetTree();
     }
 
     ## Gets the root directory of the filesystem.
