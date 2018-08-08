@@ -13,7 +13,8 @@ import crack.net.comm2 Comm;
 import mawfs.blockstore RemoteReader;
 import mawfs.configstore ConfigStore;
 import mawfs.rawchunk RawChunkReader;
-import mawfs.rpc parseAddr, Context, PeerProxy, PeerServiceCommFactory;
+import mawfs.rpc parseAddr, Context, PeerDisconnectedError, PeerProxy,
+    PeerServiceCommFactory;
 
 import .inst InstanceState;
 import .params ParamInfo;
@@ -121,10 +122,14 @@ class PeerNetwork {
         for (peer :in __peers) {
             proxy := peer.getProxy();
             if (proxy) {
-                __log.debug `got peer proxy for $(peer.addr)`;
-                head := proxy.getHead(branch);
-                if (head)
-                    return HeadAndPeer(head, peer.getName());
+                try {
+                    __log.debug `got peer proxy for $(peer.addr)`;
+                    head := proxy.getHead(branch);
+                    if (head)
+                        return HeadAndPeer(head, peer.getName());
+                } catch (PeerDisconnectedError ex) {
+                    __log.debug `Peer $(peer.addr) disconnected.`;
+                }
             } else {
                 __log.debug `unable to get proxy for $(peer.addr)\n`;
             }
@@ -137,9 +142,13 @@ class PeerNetwork {
         for (peer :in __peers) {
             proxy := peer.getProxy();
             if (proxy) {
-                contents := proxy.getObject(digest);
-                if (contents)
-                    return contents;
+                try {
+                    contents := proxy.getObject(digest);
+                    if (contents)
+                        return contents;
+                } catch (PeerDisconnectedError ex) {
+                    __log.debug `Peer $(peer.addr) disconnected.`;
+                }
             }
         }
 
@@ -163,42 +172,47 @@ class PeerNetwork {
         for (peer :in __peers) {
             proxy := peer.getProxy();
             if (proxy) {
-                __log.info `Pulling journal from $peer`;
+                try {
+                    __log.info `Pulling journal from $peer`;
 
-                # Get the first block.
-                jb := proxy.getJournalBlock(null, branch, 0);
+                    # Get the first block.
+                    jb := proxy.getJournalBlock(null, branch, 0);
 
-                localName := qualified ? peer.getName() + ':' + branch : branch;
-                branchPath := root/'journals'/localName;
-                if (jb.contents) {
-                    branchPath.parent().makeDirs();
-                    dst = branchPath.writer();
-                    dst.write(jb.contents);
-                    pos = jb.contents.size;
-                }
-
-                while (!jb.done) {
-                    jb := proxy.getJournalBlock(jb.firstBlockDigest, branch,
-                                                pos
-                                                );
+                    localName :=
+                        qualified ? peer.getName() + ':' + branch : branch;
+                    branchPath := root/'journals'/localName;
                     if (jb.contents) {
-                        pos += jb.contents.size;
+                        branchPath.parent().makeDirs();
+                        dst = branchPath.writer();
                         dst.write(jb.contents);
-                    } else if (!jb.firstBlockDigest && !jb.done) {
-                        # The journal has changed.
-                        # TODO: This is where we really need to get the new
-                        # head and start over again.
-                        __log.info `Remote journal has changed.`;
-                        branchPath.delete();
-                        break;
+                        pos = jb.contents.size;
                     }
 
-                    if (jb.done)
-                        break;
-                }
+                    while (!jb.done) {
+                        jb := proxy.getJournalBlock(jb.firstBlockDigest, branch,
+                                                    pos
+                                                    );
+                        if (jb.contents) {
+                            pos += jb.contents.size;
+                            dst.write(jb.contents);
+                        } else if (!jb.firstBlockDigest && !jb.done) {
+                            # The journal has changed.
+                            # TODO: This is where we really need to get the new
+                            # head and start over again.
+                            __log.info `Remote journal has changed.`;
+                            branchPath.delete();
+                            break;
+                        }
 
-                __log.info `Journal of size $pos retrieved.`;
-                return localName;
+                        if (jb.done)
+                            break;
+                    }
+
+                    __log.info `Journal of size $pos retrieved.`;
+                    return localName;
+                } catch (PeerDisconnectedError ex) {
+                    __log.debug `Peer $(peer.addr) disconnected.`;
+                }
             }
         }
 
@@ -214,14 +228,18 @@ class PeerNetwork {
         for (peer :in __peers) {
             proxy := peer.getProxy();
             if (proxy) {
-                __log.info `Pulling params from $peer`;
-                contents := proxy.getFile('params');
-                pi := ParamInfo.read(StringReader(contents), password);
-                if (!pi)
-                    throw Exception('Invalid password');
-                root.makeDirs();
-                (root/'params').writeAll(contents);
-                return pi;
+                try {
+                    __log.info `Pulling params from $peer`;
+                    contents := proxy.getFile('params');
+                    pi := ParamInfo.read(StringReader(contents), password);
+                    if (!pi)
+                        throw Exception('Invalid password');
+                    root.makeDirs();
+                    (root/'params').writeAll(contents);
+                    return pi;
+                } catch (PeerDisconnectedError ex) {
+                    __log.debug `Peer $(peer.addr) disconnected.`;
+                }
             }
         }
         return null;

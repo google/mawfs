@@ -524,6 +524,22 @@ class MissingPeerTest : DoubleInstanceTest {
         restartSlaveFS('master');
         rc := runMawfsRC(StringArray!['pull', '-i', 'localhost:9119', 'master']);
         @assert(rc == 1);
+
+        # restart the master, verify that we can pull.
+        restartFS('master');
+        rc = runMawfsRC(StringArray!['pull', '-i', 'localhost:9119',
+                                     'master'
+                                     ]
+                        );
+        @assert(!rc);
+
+        # Now stop the master again, verify that we still get an error.
+        stopFS('fs');
+        rc = runMawfsRC(StringArray!['pull', '-i', 'localhost:9119',
+                                     'master'
+                                     ]
+                        );
+        @assert(rc == 1);
     }
 }
 register(MissingPeerTest());

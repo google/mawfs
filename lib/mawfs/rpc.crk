@@ -11,6 +11,7 @@ import crack.net resolve, Address, InetAddress;
 import crack.net.comm2 Comm, CommHandler, CommHandlerFactory, NewConnection,
     SyncCommProxy, UserHandler, WaiterFor;
 import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
+import crack.rawptr RawPtr;
 import crack.regex Regex;
 import crack.serial SerialReader, SerialWriter;
 import mawfs.rawchunk GeneralCallback, JournalBlock, RawChunkReader;
@@ -25,6 +26,10 @@ const IPV4_ADDR := Regex(r'(\d+)\.(\d+)\.(\d+)\.(\d+)');
 class AppError : Exception {
     oper init(String message) : Exception(message) {}
 }
+
+## Raised when we discover that a peer has been disconnected while sending a
+## message.
+class PeerDisconnectedError : Exception {}
 
 @protobuf {
     version = 1
@@ -259,24 +264,64 @@ ExtendedAddress parseAddr(String addr) {
     return a;
 }
 
+## Manages a single connection to a peer.  Remains valid (true) as long as
+## the peer is connected.  Does not automatically reconnect.
 class PeerProxy {
     Comm __comm;
     SyncCommProxy __proxy;
     Log __log;
     int32 __lastId;
 
-    oper init(Comm comm, Log log, SyncCommProxy proxy) :
+    void __invalidateProxy() {
+        __proxy = null;
+    }
+
+    class _PeerProxyHandler : _Handler {
+        RawPtr[PeerProxy] owner;
+        Log log;
+
+        oper init(Log log) : log = log {}
+
+        void terminate(CommHandler comm) {
+            if (owner)
+                owner.__invalidateProxy();
+            _Handler.terminate(comm);
+        }
+
+        void disown() { owner = null }
+    }
+
+    _PeerProxyHandler __handler;
+
+    oper init(Comm comm, Log log, SyncCommProxy proxy,
+              _PeerProxyHandler handler
+              ) :
         __comm = comm,
         __log = log,
-        __proxy = proxy {
+        __proxy = proxy,
+        __handler = handler {
+    }
+
+    oper del() {
+        if (__handler) __handler.disown();
+    }
+
+    ## A proxy is false if it is disconnected.
+    bool isTrue() {
+        return __proxy;
     }
 
     @static
-    SyncCommProxy __makeCommProxy(Comm comm, Log log, Address addr) {
+    PeerProxy __makeCommProxy(Comm comm, Log log, Address addr) {
         log.info `connecting to $addr`;
         try {
-            conn := comm.getSyncProxy(addr, _Handler());
-            return conn;
+            proxy := comm.getSyncProxy(addr,
+                                       handler := _PeerProxyHandler(log)
+                                       );
+
+            result := PeerProxy(comm, log, proxy, handler);
+            handler.owner = RawPtr[PeerProxy](result);
+            return result;
         } catch (Exception ex) {
             log.warn `Unable to connect to $addr: $(ex.text)\n`;
             return null;
@@ -286,14 +331,12 @@ class PeerProxy {
     @static
     PeerProxy make(Comm comm, Log log, String addr) {
         a := parseAddr(addr);
-        proxy := __makeCommProxy(comm, log, a);
-        return proxy ? PeerProxy(comm, log, proxy) : null;
+        return __makeCommProxy(comm, log, a);
     }
 
     @static
     PeerProxy make(Comm comm, Log log, Address addr) {
-        proxy := __makeCommProxy(comm, log, addr);
-        return proxy ? PeerProxy(comm, log, proxy) : null;
+        return __makeCommProxy(comm, log, addr);
     }
 
     ## Test constructor.
@@ -308,6 +351,8 @@ class PeerProxy {
     }
 
     RPCMessage __sendSync(RPCMessage message) {
+        if (!__proxy)
+            throw PeerDisconnectedError();
         # Serialize and send the message.
         serialized := __serialize(message);
         waiter := RPCWaiter(message.id);
@@ -323,15 +368,17 @@ class PeerProxy {
         msg.request = contents;
         resp := __sendSync(msg);
 
-        if (resp.error)
+        if (resp.error) {
             throw RemoteError(resp.error);
+        }
 
         return resp.response;
     }
 
     ## Shutdown the proxy connection.
     void shutdown() {
-        __proxy.close();
+        if (__proxy)
+            __proxy.close();
     }
 
     ## Returns the object with the specified digest, null if the peer doesn't
@@ -485,7 +532,7 @@ class ClientHandler @impl UserHandler {
         handler := __methods.get(msg.method);
         if (handler) {
             try {
-                comm.log.debug `calling handler`;
+                comm.log.debug `calling handler for $(msg.method)`;
                 handler(__context, msg, comm);
                 return;
             } catch (Exception ex) {
@@ -621,7 +668,9 @@ void pullBranch(Context context, RPCMessage msg, CommHandler comm) {
             # Pull-branch is handled asynchronously, so we have to check
             # the 'ex' argument.
             if (ex) {
-                context.writeError(comm, ex.text, requestId);
+                context.writeError(comm,
+                                   ex.text ? ex.text : String(ex.class.name),
+                                   requestId);
             } else {
                 PullBranchResponse resp = {};
                 resp.localName = localName;

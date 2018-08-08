@@ -61,6 +61,8 @@ class FakeProxy : PeerProxy {
             return 'contents';
         }
     }
+
+    bool isTrue() { return true }
 }
 
 class TestBed {
