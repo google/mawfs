@@ -181,7 +181,7 @@ class SIVCipher @impl Cipher {
     ## key or additional data is not the same as that used to encrypt
     ## 'ciphertext'.
     String decrypt(Buffer ciphertext) {
-        @assert(ciphertext.size > 16);
+        @assert(ciphertext.size >= 16);
         iv := Buffer(ciphertext.buffer,
                      (ciphertext.size >= 16) ? 16 : ciphertext.size
                      );

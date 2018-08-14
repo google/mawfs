@@ -42,4 +42,11 @@ if (true) {
     @assert(crypt.decrypt(ciphertext) == plain);
 }
 
+# Empty string.
+if (true) {
+    crypt := SIVCipher('1234567890asdfghjkl;123456789012', null);
+    ciphertext := crypt.encrypt('');
+    @assert(crypt.decrypt(ciphertext) == '');
+}
+
 cerr `ok\n`;
