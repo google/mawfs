@@ -370,6 +370,7 @@ class MAWFSInstance @impl InstIFace {
         # Replace the original branch.
         rootContext := root.getContext();
         __state.setHead(rootContext.getBaselineCommit());
+        __state.getStore().deleteJournal(__state.getBranch());
 
         # Now we can just change the branch name of the root node context.
         rootContext.setBranch(merge.targetBranch);

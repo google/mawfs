@@ -401,29 +401,41 @@ class MergeWithConflictsTest : MergeTest {
                     );
 
         # Verify that file contents are as we expect.
-        assertEqual((makePath('fs2')/'on_master').readAll(),
+        fs2 := makePath('fs2');
+        assertEqual((fs2/'on_master').readAll(),
                     'on master contents'
                     );
-        assertEqual((makePath('fs2')/'on_slave').readAll(),
+        assertEqual((fs2/'on_slave').readAll(),
                     'on slave contents'
                     );
-        assertEqual((makePath('fs2')/'foo').readAll(),
+        assertEqual((fs2/'foo').readAll(),
                     'alt contents'
                     );
 
-        masterFS := makePath('fs2')/'.mawfs'/'alt'/'127.0.0.1:12543:master';
+        masterFS := fs2/'.mawfs'/'alt'/'127.0.0.1:12543:master';
         assertEqual(
             (masterFS/'on_master').readAll(),
             'on master contents'
         );
         @assert(!(masterFS/'on_slave').exists());
+        assertEqual((masterFS/'foo').readAll(), 'new contents');
 
-        orgFS := makePath('fs2')/'.mawfs'/'alt'/'merge:org';
+        orgFS := fs2/'.mawfs'/'alt'/'merge:org';
         assertEqual((orgFS/'first').readAll(), 'test file contents');
         @assert(!(orgFS/'foo').exists());
         @assert(!(orgFS/'on_master').exists());
         @assert(!(orgFS/'on_slave').exists());
 
+        # now try doing the merge.
+        (fs2/'foo').writeAll('resolved');
+        runMawfs(StringArray!['resolve', '-i', 'fs2']);
+
+        assertEqual((fs2/'foo').readAll(), 'resolved');
+        assertEqual((fs2/'on_master').readAll(), 'on master contents');
+        assertEqual((fs2/'on_slave').readAll(), 'on slave contents');
+
+        @assert(!masterFS.exists());
+        @assert(!orgFS.exists());
     }
 }
 register(MergeWithConflictsTest());
