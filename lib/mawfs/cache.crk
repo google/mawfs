@@ -2161,7 +2161,7 @@ class CachedNode {
             if (change.commit != __ctx.getBaselineCommit())
                 throw InvalidStateError(
                     FStr() I`First change in the journal is for commit \
-                             $(sig(change.commit)), current commit \
+                             $(sig(change.commit)) and current commit \
                              is $(sig(__ctx.getBaselineCommit()))`
                 );
         } else if (lastChangeDigest != change.lastChange) {
