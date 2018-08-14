@@ -166,6 +166,8 @@ void usage() {
                 Add a new peer to the instance.  'peer-name' can be any name
                 that is meaningful to the user.  'peer-addr' is an IP address
                 in host:port format.
+            mawfs dbg_log <backing-dir> <branch>
+                Show a log of all changes in a branch.  Requires a password.
         `;
 }
 
@@ -542,6 +544,35 @@ class CommandManager {
         server := getServer();
         makeRPC(server).getProxy().addPeer(args[2], args[3]);
     }
+
+    void dbg_log() {
+        checkArgs(4, 'Usage: mawfs dbg_log <backing-dir> <branch>');
+        password := readPassword();
+        params := ParamInfo.read(makePath(args[2])/'params', password);
+        store := ChunkStore(makePath(args[2]), FSInfo(params.cipher));
+        branch := args[3];
+        commitDigest := store.getHead(branch);
+        if (!commitDigest) {
+            cerr `branch $branch not found\n`;
+            commitDigest = altDecode(branch);
+        }
+
+        cerr `looking up $(sig(commitDigest))\n`;
+        commit := store.getCommit(commitDigest);
+        if (!commit)
+            cerr `Head commit $(sig(commitDigest)) not found!\n`;
+        while (commit) {
+            cout `commit: $(sig(commitDigest))\n`;
+            if (commit.parent) {
+                for (parent :in commit.parent)
+                    cout `  parent: $(sig(parent))\n`;
+                commitDigest = commit.parent[0];
+                commit = store.getCommit(commitDigest);
+            } else {
+                commit = null;
+            }
+        }
+    }
 }
 
 # The main function, which is a command dispatcher.
@@ -695,6 +726,8 @@ void main() {
             cm.cancelMerge();
         } else if (cmd == 'addPeer') {
             cm.addPeer();
+        } else if (cmd == 'dbg_log') {
+            cm.dbg_log();
         } else {
             cerr `Unknown command: $cmd\n`;
             usage();
