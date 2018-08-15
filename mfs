@@ -83,11 +83,9 @@ def is_mawfs_root(path):
     """
     path = os.path.abspath(path)
     if not os.path.isdir(path):
-        print('not a dir')
         return False
     backing = get_backing_dir(path)
     if not os.path.exists(backing):
-        print('no backing dir %s' % backing)
         return False
 
     return backing
@@ -152,9 +150,10 @@ def find_unused_port():
         try:
             s.bind(('0.0.0.0', port))
         except:
-            import traceback
-            traceback.print_exc()
-            return False
+            if ex.errno == 98:
+                return False
+            else:
+                raise
         s.close()
         return True
 
@@ -202,6 +201,12 @@ def get_instance():
         processed_instance = instance
     return processed_instance
 
+def read_password():
+    if sys.stdin.isatty():
+        return getpass.getpass()
+    else:
+        return sys.stdin.readline().rstrip()
+
 @command
 def new(path):
     """Create a new mawfs repository and mount it."""
@@ -215,7 +220,7 @@ def new(path):
         os.mkdir(path)
         port = find_unused_port()
 
-        password = getpass.getpass()
+        password = read_password()
 
         rc = run_mawfs('create', '-ol', logfile, backing, '-p', port,
                        '-f', '127.0.0.1',
@@ -265,12 +270,13 @@ def delete(path):
     if os.path.exists(os.path.join(path, '.mawfs')):
         umount(path)
 
-    try:
-        os.rmdir(path)
-    except OSError as ex:
-        if ex.errno == 39:
-            umount(path)
-        os.rmdir(path)
+    if os.path.exists(path):
+        try:
+            os.rmdir(path)
+        except OSError as ex:
+            if ex.errno == 39:
+                umount(path)
+            os.rmdir(path)
     shutil.rmtree(backing)
 
 @command
@@ -335,6 +341,29 @@ def info(path):
         print('No peers file.')
 
 @command
+def backing_dir(path):
+    """Print out the backing direcctory for an instance."""
+    backing = get_backing_dir(os.path.abspath(path))
+    check_backing_exists(backing, path)
+    print(backing)
+
+@command
+def address(path):
+    """Print the address of the instance for the given backing directory."""
+    backing = get_backing_dir(os.path.abspath(path))
+    check_backing_exists(backing, path)
+
+    peers_file = os.path.join(backing, 'config', 'peers')
+    if os.path.exists(peers_file):
+        config = parse_peers_file(peers_file)
+        try:
+            host_and_port = get_host_and_port(config)
+            if host_and_port:
+                print('%s:%s' % host_and_port)
+        except KeyError:
+            pass
+
+@command
 def help():
     """Show this help message."""
     for name, func in commands.items():
@@ -374,7 +403,7 @@ def add_peer(peer_name, peer_addr):
             peer_addr = '%s:%s' % host_and_port
         else:
             print('%s appeares to be a MAWFS root but has no server address' %
-                (peer_addr,))
+                  (peer_addr,))
             return 1
 
     run_mawfs('addPeer', '-i', get_instance(), peer_name, peer_addr)
