@@ -436,6 +436,15 @@ class MergeWithConflictsTest : MergeTest {
 
         @assert(!masterFS.exists());
         @assert(!orgFS.exists());
+
+        # Try pulling back to the master and verify that the new commit gets
+        # accepted.
+        runMawfs(StringArray!['addPeer', '-i', 'fs', 'clone',
+                              'localhost:9119'
+                              ]
+                 );
+        runMawfs(StringArray!['pull', '-i', 'fs', 'master']);
+        assertEqual((makePath('fs')/'foo').readAll(), 'resolved');
     }
 }
 register(MergeWithConflictsTest());

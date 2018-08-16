@@ -445,6 +445,12 @@ class NodeContext : HashMapFieldSet {
         __sessionIds[sessionId] = true;
     }
 
+    ## Copy all session ids from the other context (used for merging a branch).
+    @final void copySessionIds(NodeContext other) {
+        for (item :in other.__sessionIds)
+            __sessionIds[item.key] = true;
+    }
+
     ## Set the current session id (introduced to support unit tests).
     @final void setSessionId(String sessionId) {
         __session.setId(sessionId);
@@ -2632,6 +2638,13 @@ class MissingChunkError : Exception {
     @final CachedNode getRoot() {
         initialize();
         return __root;
+    }
+
+    ## Returns the tree's NodeContext.  Calls 'initialize()', so it's
+    ## always safe to call this.
+    @final NodeContext getContext() {
+        initialize();
+        return __ctx;
     }
 
     ## Commit the tree.  This ends up setting the local branch head and

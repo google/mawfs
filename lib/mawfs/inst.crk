@@ -276,6 +276,13 @@ class InstanceState {
         __branches.removeBranchDir(branchName);
     }
 
+    ## Returns the tree for the given resident branch.  Returns null if the
+    ## branch is not defined.
+    Tree getResidentBranchTree(String branchName) {
+        @checkLock();
+        return __branches.getBranchTree(branchName);
+    }
+
     ## Returns the node store.
     NodeStore getStore() {
         @checkLock();

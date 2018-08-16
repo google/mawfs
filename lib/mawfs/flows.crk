@@ -360,15 +360,20 @@ class MAWFSInstance @impl InstIFace {
 
         # XXX verify that the original branch is unchanged.
 
-        # Do a commit on the merge branch.
+        # Move all session ids from the journal of the other branch.
         root := __state.getRoot().getCachedNode();
+        rootContext := root.getContext();
+        otherBranchTree := __state.getResidentBranchTree(merge.otherBranch);
+        @assert(otherBranchTree);
+        rootContext.copySessionIds(otherBranchTree.getContext());
+
+        # Do a commit on the merge branch.
         if (merge.otherCommit != merge.targetCommit)
             root.commitTree(merge.otherCommit);
         else
             root.commitTree();
 
         # Replace the original branch.
-        rootContext := root.getContext();
         __state.setHead(rootContext.getBaselineCommit());
         __state.getStore().deleteJournal(__state.getBranch());
 

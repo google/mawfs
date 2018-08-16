@@ -90,6 +90,14 @@ class ResidentBranches @impl AltSourceDir {
             return makeBranchDir(name);
     }
 
+    ## Returns the tree for the specified branch or null if it doesn't exist.
+    Tree getBranchTree(String name) {
+        if (info := __branches.get(name))
+            return info.tree;
+        else
+            return null;
+    }
+
     ## Removes a branch dir, raises a KeyError if it doesn't exist.
     void removeBranchDir(String name) {
         __branchPaths.delete(name);
