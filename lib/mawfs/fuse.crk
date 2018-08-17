@@ -24,7 +24,7 @@ import crack.io SeekableReader, SeekableWriter, SEEK_SET;
 import crack.lang Buffer, Exception, SystemError, WriteBuffer;
 import crack.logger debug, error, info;
 import crack.runtime free, memcpy, Stat, EACCES, EEXIST, EINVAL, ENOENT,
-    ENOTDIR, O_CREAT, O_RDONLY, O_RDWR, O_WRONLY, S_IFDIR, S_IFREG;
+    ENOTDIR, O_APPEND, O_CREAT, O_RDONLY, O_RDWR, O_WRONLY, S_IFDIR, S_IFREG;
 import crack.strutil split, StringArray;
 import crack.threads Mutex, MutexLock;
 import mawfs.path MAWFSPath;
@@ -160,7 +160,10 @@ int _open(byteptr path, FuseFileInfo fi) {
             if (flags == O_RDONLY || flags == O_RDWR) {
                 reader = p.reader();
             }
-            if (flags == O_WRONLY || flags == O_RDWR) {
+
+            if (fi.flags & O_APPEND && p.exists()) {
+                writer = p.appender();
+            } else if (flags == O_WRONLY || flags == O_RDWR) {
                 writer = p.writer();
             }
 

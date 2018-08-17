@@ -277,6 +277,16 @@ class RmDirTest : TestCase {
 }
 register(RmDirTest());
 
+class AppendTest : TestCase {
+    void run() {
+        file := makePath('fs/test.txt');
+        file.writeAll('this is contents');
+        file.appender().write('; more contents!');
+        assertEqual(file.readAll(), 'this is contents; more contents!');
+    }
+}
+register(AppendTest());
+
 class AdminFSTest : TestCase {
     void run() {
         admin := makePath('fs')/'.mawfs';

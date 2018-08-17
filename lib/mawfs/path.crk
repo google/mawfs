@@ -265,8 +265,6 @@ class MAWFSPath : RWPath {
 
     bool isLink() { return false }
 
-    SeekableWriter appender() { return null }
-
     void makeDir(bool errorOnExists) {
         __checkMutable();
         if (__rep) {
