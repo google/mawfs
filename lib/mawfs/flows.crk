@@ -194,6 +194,9 @@ class MAWFSInstance @impl InstIFace {
                         if (!sessionIds.get(entry.change.sessionId)) {
                             # There are changes in the local journal that
                             # aren't in the commit, so we have to branch.
+                            info I`Unable to fast-forward pull of \
+                                   branch $branch, missing session id \
+                                   $(entry.change.sessionId.getRepr())`;
                             incompatible = true;
                             break;
                         }
