@@ -548,7 +548,12 @@ class CommandManager {
     void dbg_log() {
         checkArgs(4, 'Usage: mawfs dbg_log <backing-dir> <branch>');
         password := readPassword();
-        params := ParamInfo.read(makePath(args[2])/'params', password);
+        paramsFile := makePath(args[2])/'params';
+        if (!paramsFile.exists())
+            throw Abort('No params file');
+        params := ParamInfo.read(paramsFile, password);
+        if (!params)
+            throw Abort('Invalid password');
         store := ChunkStore(makePath(args[2]), FSInfo(params.cipher));
         branch := args[3];
         commitDigest := store.getHead(branch);
