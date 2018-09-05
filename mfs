@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+from tempfile import SpooledTemporaryFile
 
 class Abort(Exception):
     pass
@@ -164,13 +165,31 @@ def find_unused_port():
     return port
 
 def run_mawfs(*args, **kwargs):
+    """Run the "mawfs" command.
+
+    Returns:
+        (int) If capture_stdout was not True, returns just the exit code of
+        the child process.
+        (int, str) if capture_stdout was passed as True, returns the exit code
+        and standard output.
+    """
     stdin = kwargs.get('stdin')
+    capture_stdout = kwargs.get('capture_stdout')
     cmd = [os.environ.get('MAWFS_BIN', 'mawfs')] + \
           [str(arg) for arg in args if arg is not None]
-    if stdin is not None:
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
-        proc.communicate(stdin)
-        return proc.wait()
+    if stdin is not None or capture_stdout:
+        popen_kwargs = {}
+        if stdin is not None:
+            popen_kwargs['stdin'] = subprocess.PIPE
+        if capture_stdout:
+            popen_kwargs['stdout'] = subprocess.PIPE
+        proc = subprocess.Popen(cmd, **popen_kwargs)
+        stdout, _ = proc.communicate(stdin or '')
+        rc = proc.wait()
+        if capture_stdout:
+            return rc, stdout
+        else:
+            return rc
     else:
         return subprocess.call(cmd)
 
@@ -379,10 +398,56 @@ def pull(branch, peer=None):
     """Pull the branch from the cell."""
     run_mawfs('pull', '-i', get_instance(), branch, peer)
 
+def file_or_dev_null(filename):
+    return filename if os.path.exists(filename) else '/dev/null'
+
+def merge_file(root, branch, filename):
+    out = SpooledTemporaryFile()
+    target = file_or_dev_null(os.path.join(root, filename))
+    org_file = file_or_dev_null(os.path.join(root, '.mawfs/alt/merge:org',
+                                             filename))
+    other_file = file_or_dev_null(os.path.join(root, '.mawfs/alt', branch,
+                                               filename))
+    subprocess.call(['diff3', '-m', target, org_file, other_file],
+                    stdout=out)
+
+    # Copy everything to the target files.
+    out.seek(0)
+    with open(target, 'w') as fp:
+        while True:
+            data = out.read(4096)
+            if not data:
+                break
+            fp.write(data)
+
 @command
 def merge(branch):
     """Merge a branch into the current branch."""
-    run_mawfs('merge', '-i', get_instance(), branch)
+    _, output = run_mawfs('merge', '-i', get_instance(), branch,
+                          capture_stdout=True)
+    processing = False
+    for line in output.split('\n'):
+        if line.startswith('Conflicts'):
+            processing = True
+        elif processing and line.startswith('   '):
+            filename = line[3:]
+            print 'merging %s' % filename
+            merge_file('', branch, filename)
+        else:
+            print(line)
+    if processing:
+        print('There were conflicts in the files above.  Fix them and '
+              'use "mfs resolve" to complete the merge.')
+    else:
+        print('Merge completed without conflicts.')
+
+@command
+def resolve():
+    run_mawfs('resolve', '-i', get_instance())
+
+@command
+def cancel_merge():
+    run_mawfs('cancelMerge')
 
 @command
 def add_peer(peer_name, peer_addr):
