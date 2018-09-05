@@ -34,6 +34,9 @@ import .path MAWFSPath;
 ## Encapsulates the set of branches that are currently memory resident.  This
 ## gets attached to the node context for use throughout the filesystem.
 class ResidentBranches @impl AltSourceDir {
+
+    # __branches keeps track of the Tree for a loaded branch (and is also the
+    # primary indicator of whether the branch is currently resident)
     TreeMap[String, BranchInfo] __branches = {};
     PathMap __branchPaths = {};
     NodeStore __store;
@@ -100,6 +103,7 @@ class ResidentBranches @impl AltSourceDir {
 
     ## Removes a branch dir, raises a KeyError if it doesn't exist.
     void removeBranchDir(String name) {
+        __branches.delete(name);
         __branchPaths.delete(name);
     }
 }
