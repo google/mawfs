@@ -442,7 +442,9 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
         newRoot = outcome.get(target);
         if (!outcome.isa(Conflict)) {
             # There were no conflicts.  We can commit on the current branch.
-            newRoot.getContext().setBranch(orgBranch);
+            ctx := newRoot.getContext();
+            ctx.copySessionIds(other.getContext());
+            ctx.setBranch(orgBranch);
             if (__otherCommit == __targetCommit)
                 newRoot.commitTree();
             else

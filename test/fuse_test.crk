@@ -390,6 +390,15 @@ register(CloneTest());
                               ]
                  );
     }
+
+    ## Add the slave as a peer and pull "master" back to the master.
+    void pullBack() {
+        runMawfs(StringArray!['addPeer', '-i', 'fs', 'clone',
+                              'localhost:9119'
+                              ]
+                 );
+        runMawfs(StringArray!['pull', '-i', 'fs', 'master']);
+    }
 }
 
 class MergeWithConflictsTest : MergeTest {
@@ -449,11 +458,7 @@ class MergeWithConflictsTest : MergeTest {
 
         # Try pulling back to the master and verify that the new commit gets
         # accepted.
-        runMawfs(StringArray!['addPeer', '-i', 'fs', 'clone',
-                              'localhost:9119'
-                              ]
-                 );
-        runMawfs(StringArray!['pull', '-i', 'fs', 'master']);
+        pullBack();
         assertEqual((makePath('fs')/'foo').readAll(), 'resolved');
     }
 }
@@ -467,6 +472,19 @@ class MergeNoConflictTest : MergeTest {
         masterFS := makePath('fs2')/'.mawfs'/'alt'/'127.0.0.1:12543:master';
         @assert(!masterFS.exists());
         orgFS := makePath('fs2')/'.mawfs'/'alt'/'merge:org';
+        assertEqual((makePath('fs2')/'.mawfs'/'branch').readAll(),
+                    'master'
+                    );
+        assertEqual((makePath('fs2')/'on_master').readAll(),
+                    'on master contents'
+                    );
+        assertEqual((makePath('fs2')/'on_slave').readAll(),
+                    'on slave contents'
+                    );
+
+        # Verify that we can pull into the main branch in the original
+        # instance.
+        pullBack();
         assertEqual((makePath('fs2')/'.mawfs'/'branch').readAll(),
                     'master'
                     );
