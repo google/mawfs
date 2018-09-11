@@ -25,7 +25,7 @@ import .alt ResidentBranches;
 import .blockstore Commit, Node, NodeStore, MODE_DIR;
 import .ciphers Cipher;
 import .cache CachedNode, Tree;
-import .merge LocalInstanceState, MergeState;
+import .merge LocalInstanceState, Merger, MergeState;
 import .path MAWFSPath;
 
 @import crack.ann define, interface;
@@ -308,6 +308,18 @@ class InstanceState {
     MergeState getPendingMerge() {
         @checkLock();
         return __pendingMerge;
+    }
+
+    ## Creates the Merger for the current merge state.  Throws
+    ## InvalidStateError if there is no pending merge.
+    Merger makeMerger() {
+        @checkLock();
+        if (!__pendingMerge)
+            throw InvalidStateError('No merge operation is pending.');
+        orgRoot := __branches.getBranchTree('merge:org').getRoot();
+        otherRoot :=
+            __branches.getBranchTree(__pendingMerge.otherBranch).getRoot();
+        return Merger(__tree.getRoot(), orgRoot, otherRoot, __pendingMerge);
     }
 
     ## Load the local instance state from the backing store.

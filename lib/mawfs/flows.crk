@@ -356,34 +356,23 @@ class MAWFSInstance @impl InstIFace {
     int resolve() {
         lock := __state.lock();
 
-        # Verify that there's a pending merge.
-        merge := __state.getPendingMerge();
-        if (!merge)
-            throw Exception('No merge operations is pending');
+        # Get the pending merge.
+        merger := __state.makeMerger();
 
         # XXX verify that the original branch is unchanged.
 
-        # Move all session ids from the journal of the other branch.
-        root := __state.getRoot().getCachedNode();
-        rootContext := root.getContext();
-        otherBranchTree := __state.getResidentBranchTree(merge.otherBranch);
-        @assert(otherBranchTree);
-        rootContext.copySessionIds(otherBranchTree.getContext());
-
         # Do a commit on the merge branch.
-        if (merge.otherCommit != merge.targetCommit)
-            root.commitTree(merge.otherCommit);
-        else
-            root.commitTree();
+        merger.commit();
 
         # Replace the original branch.
+        rootContext := merger.newRoot.getContext();
         __state.setHead(rootContext.getBaselineCommit());
         __state.getStore().deleteJournal(__state.getBranch());
 
         # Now we can just change the branch name of the root node context.
-        rootContext.setBranch(merge.targetBranch);
+        rootContext.setBranch(merger.orgBranch);
 
-        __cleanupMerge(merge);
+        __cleanupMerge(__state.getPendingMerge());
         __state.resetTree();
         return 0;
     }
@@ -394,7 +383,8 @@ class MAWFSInstance @impl InstIFace {
     int cancelMerge() {
         lock := __state.lock();
 
-        # Verify that there's a pending merge.
+        # Verify that there's a pending merge.  We don't do makeMerger() here
+        # because it's more expensive and unncessary.
         merge := __state.getPendingMerge();
         if (!merge)
             throw Exception('No merge operations is pending');

@@ -395,6 +395,26 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
         __orgChange = orgCtx.getLastChange();
     }
 
+    ## Restore the Merger from the merge state.  This is for use by
+    ## mawfs.inst.InstanceState.makeMerger().
+    oper init(CachedNode target, CachedNode org, CachedNode other,
+              MergeState mergeState) :
+        target = target,
+        org = org,
+        other = other {
+        orgBranch = mergeState.targetBranch;
+        branch = mergeState.mergeBranch;
+        __targetCommit = mergeState.targetCommit;
+        __otherCommit = mergeState.otherCommit;
+        __targetChange = mergeState.targetChange;
+        __otherChange = mergeState.otherChange;
+        orgBranch = mergeState.orgBranch;
+        __orgChange = mergeState.orgChange;
+
+        # In this case, the new root is the target root.
+        newRoot = target;
+    }
+
     ## Creates a new merge branch and converts "target" to it.
     ##
     ## This must be called before merge().  After it's completed, changes in
@@ -431,6 +451,20 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
             ctx.addChange(changeEntry.change);
     }
 
+    ## Do a commit on the target branch.
+    void commit() {
+        # Copy the session ids from the other context.
+        ctx := newRoot.getContext();
+        ctx.copySessionIds(other.getContext());
+        ctx.setBranch(orgBranch);
+
+        # Do a single parent or double-parent commit as appropriate.
+        if (__otherCommit == __targetCommit)
+            newRoot.commitTree();
+        else
+            newRoot.commitTree(__otherCommit);
+    }
+
     ## Performs the merge, returns a Merger object containing the details of
     ## the merge.
     ##
@@ -442,13 +476,7 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
         newRoot = outcome.get(target);
         if (!outcome.isa(Conflict)) {
             # There were no conflicts.  We can commit on the current branch.
-            ctx := newRoot.getContext();
-            ctx.copySessionIds(other.getContext());
-            ctx.setBranch(orgBranch);
-            if (__otherCommit == __targetCommit)
-                newRoot.commitTree();
-            else
-                newRoot.commitTree(__otherCommit);
+            commit();
             return this;
         }
         conflict = Conflict.cast(outcome);
