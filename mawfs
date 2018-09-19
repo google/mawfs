@@ -168,6 +168,8 @@ void usage() {
                 in host:port format.
             mawfs dbg_log <backing-dir> <branch>
                 Show a log of all changes in a branch.  Requires a password.
+            mawfs info
+                Show information about the instance.
         `;
 }
 
@@ -382,6 +384,8 @@ class CommandManager {
                 addr = '127.0.0.1' + addr.substr(7);
 
             return addr;
+        } else {
+            cerr `MAWFS instance $path defines no servers.\n`;
         }
         return null;
     }
@@ -578,6 +582,14 @@ class CommandManager {
             }
         }
     }
+
+    ## The "info" command.
+    void info() {
+        checkArgs(2, 'Usage: mawfs info\n');
+        server := getServer();
+        result := makeRPC(server).getProxy().getInfo();
+        cout `Mountpoint: $(result.mountpoint)\n`;
+    }
 }
 
 # The main function, which is a command dispatcher.
@@ -733,6 +745,8 @@ void main() {
             cm.addPeer();
         } else if (cmd == 'dbg_log') {
             cm.dbg_log();
+        } else if (cmd == 'info') {
+            cm.info();
         } else {
             cerr `Unknown command: $cmd\n`;
             usage();

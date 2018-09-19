@@ -68,6 +68,10 @@ class InstanceState {
     # Current backing directory.
     Path __backing;
 
+    # Current mountpoint.
+    Path __mountpoint;
+
+
     Cipher __cipher;
     NodeStore __store;
     Tree __tree;
@@ -161,7 +165,8 @@ class InstanceState {
 
     ## Returns a lock on the instance state.  Clients must retain this lock
     ## object for the duration of their session with InstanceState or any
-    ## objects managed by it.  Attempting to call
+    ## objects managed by it.  Attempting to call a function without the lock
+    ## will throw an InvalidStateError.
     MutexLock lock() {
         return __Lock(__mutex, this);
     }
@@ -169,6 +174,18 @@ class InstanceState {
     @define checkLock() {
         if (!__locked)
             throw InvalidStateError('Inatance not locked.');
+    }
+
+    ## Sets the current mountpoint.
+    void setMountpoint(Path mountpoint) {
+        @checkLock();
+        __mountpoint = mountpoint;
+    }
+
+    ## Gets the current mountpoint.
+    Path getMountpoint() {
+        @checkLock();
+        return __mountpoint;
     }
 
     ## Returns the backing directory.

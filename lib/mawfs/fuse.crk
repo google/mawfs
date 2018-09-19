@@ -19,7 +19,7 @@ import crack.cont.hashmap HashMap;
 import crack.enc.base64 altDecode, altEncode;
 import crack.ext._fuse fuse_main = main, get_context, DoubleTimeSpec,
     FuseConnInfo, FuseOperations, FuseFileInfo;
-import crack.fs Path;
+import crack.fs makePath, Path;
 import crack.io SeekableReader, SeekableWriter, SEEK_SET;
 import crack.lang Buffer, Exception, SystemError, WriteBuffer;
 import crack.logger debug, error, info;
@@ -446,10 +446,17 @@ int main(StringArray argv, InstanceState fs) {
     ops.rmdir = _rmdir;
     ops.unlink = _unlink;
 
-    # Create another link to the root object so we can safely exit.
+    # Lock the instance.
     # "if" is just sorcery for the lack of "with"
     if (lock := fs.lock()) {
+
+        # Create another link to the root object so we can safely exit.
         fs.getRoot().oper bind();
+
+        # This is incorrect, but it mostly works.  Assume argv[1] is the mount
+        # point.
+        if (argv.count() > 0)
+            fs.setMountpoint(makePath(argv[1]));
     }
     return fuse_main(argv.count(), argv.makePrimArray(), ops, fs);
 }

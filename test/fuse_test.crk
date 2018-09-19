@@ -17,8 +17,9 @@ import crack.cont.hashmap HashMap;
 import crack.fs cwd, makePath, Path;
 import crack.hash.sha256 SHA256;
 import crack.io cerr, FStr, SEEK_SET;
-import crack.lang Exception, ManagedBuffer;
-import crack.process Process, CRK_PROC_EXITED, CRK_PIPE_STDIN;
+import crack.lang AppendBuffer, Buffer, Exception, ManagedBuffer;
+import crack.process Process, ProcessHandler, ProcessHandlerImpl,
+    CRK_PROC_EXITED, CRK_PIPE_STDIN, CRK_PIPE_STDOUT;
 import crack.strutil StringArray;
 import crack.sys argv, exit;
 import crack.runtime open, close, sleep, O_RDONLY;
@@ -63,20 +64,40 @@ bool gotFailures;
     }
 
     ## Run the MAWFS command with 'args' and return the exit code.
-    int runMawfsRC(StringArray args) {
+    int runMawfsRC(StringArray args, AppendBuffer stdout) {
         cmd := StringArray![crackPath, './mawfs'];
         cmd.extend(args);
-        proc := Process(cmd, CRK_PIPE_STDIN);
+        pipeStdout := (stdout is null) ? 0 : CRK_PIPE_STDOUT;
+        proc := Process(cmd, CRK_PIPE_STDIN | pipeStdout);
         proc.putStdIn('TestPasswordDudeBestAsstwordFood');
         proc.closeStdIn();
-        return proc.run() & 0xff;
+
+        ProcessHandler handler;
+        if (pipeStdout) {
+            class MyProcessHandler : ProcessHandlerImpl {
+                oper init(AppendBuffer stdout) {
+                    outBuf = stdout;
+                }
+
+                void onOutData(Buffer buf) {
+                    outBuf.extend(buf)
+                }
+            }
+            handler = MyProcessHandler(stdout);
+        }
+
+        return proc.run(handler) & 0xff;
     }
 
+    int runMawfsRC(StringArray args) { return runMawfsRC(args) }
+
     ## Run the mawfs command, throw an exception if there was an error.
-    void runMawfs(StringArray args) {
-        if (runMawfsRC(args))
+    void runMawfs(StringArray args, AppendBuffer stdout) {
+        if (runMawfsRC(args, stdout))
             throw Exception('Failed in startup');
     }
+
+    void runMawfs(StringArray args) { runMawfs(args, null) }
 
     void startFS(String branch, String backing, String dir) {
         runMawfs(StringArray!['run', '-b', branch, '-l',
@@ -603,6 +624,20 @@ class AdminDirAfterFSyncTest : TestCase {
     }
 }
 register(AdminDirAfterFSyncTest());
+
+class InfoTest : TestCase {
+    void run() {
+        (makePath('backing')/'config/peers').writeAll('[server]\nport = 12543\n');
+        restartFS('master');
+
+        rootPath := cwd/'fs';
+        @assert((rootPath/'.mawfs').exists());
+        stdout := AppendBuffer(256);
+        runMawfs(StringArray!['info', '-i', rootPath.getFullName()], stdout);
+        assertEqual(stdout, FStr() `Mountpoint: $rootPath\n`);
+    }
+}
+register(InfoTest());
 
 runAllTests();
 

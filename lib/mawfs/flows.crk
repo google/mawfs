@@ -14,7 +14,7 @@ import .inst InstanceState;
 import .merge Merger, MergeState;
 import .peernet PeerNetwork;
 import .rawchunk GeneralCallback;
-import .rpc parseAddr;
+import .rpc parseAddr, InfoResponse;
 import .rpc InstIFace, MergeResult, MergeResponse;
 import .util findCommonAncestor;
 
@@ -454,5 +454,12 @@ class MAWFSInstance @impl InstIFace {
         @task(MAWFSInstance inst; String peerName; String peerAddr;, int,
               inst.addPeer(peerName, peerAddr));
         __pool.submit(MyTask(this, peerName, peerAddr, callback));
+    }
+
+    InfoResponse getInfo() {
+        resp := InfoResponse();
+        lock := __state.lock();
+        resp.mountpoint = __state.getMountpoint().getFullName();
+        return resp;
     }
 }

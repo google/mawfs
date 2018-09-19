@@ -123,6 +123,10 @@ class PeerDisconnectedError : Exception {}
         optional string peerName = 1;
         optional string peerAddr = 2;
     }
+
+    message InfoResponse {
+        optional string mountpoint = 1;
+    }
 }
 
 class MergeResult : MergeResponse {
@@ -147,6 +151,7 @@ class MergeResult : MergeResponse {
     @abstract void addPeer(String peerName, String peerAddr,
                            GeneralCallback[int] callback
                            );
+    @abstract InfoResponse getInfo();
 }
 
 InstIFace _inst;
@@ -470,6 +475,14 @@ class PeerProxy {
         req.peerAddr = peerAddr;
         __invoke('addPeer', req.toString());
     }
+
+    ## Get information about the instance.
+    InfoResponse getInfo() {
+        respData := __invoke('getInfo', '');
+        InfoResponse result = {};
+        readMessageFromString(result, respData);
+        return result;
+    }
 }
 
 ## Server-side RPC message context.
@@ -733,6 +746,15 @@ void addPeer(Context context, RPCMessage msg, CommHandler comm) {
                   );
 }
 
+void getInfo(Context context, RPCMessage msg, CommHandler comm) {
+    try {
+        info := _inst.getInfo();
+        context.writeResponse(comm, info, msg.id);
+    } catch (Exception ex) {
+        context.writeError(comm, ex.text, msg.id);
+    }
+}
+
 class PeerServiceCommFactory @impl CommHandlerFactory {
     MethodMap __methods = {};
     Context __context;
@@ -747,6 +769,7 @@ class PeerServiceCommFactory @impl CommHandlerFactory {
         __methods['resolve'] = MethodHandler.Wrap(resolve);
         __methods['cancelMerge'] = MethodHandler.Wrap(cancelMerge);
         __methods['addPeer'] = MethodHandler.Wrap(addPeer);
+        __methods['getInfo'] = MethodHandler.Wrap(getInfo);
     }
 
     CommHandler makeCommHandler(NewConnection conn) {
