@@ -89,7 +89,7 @@ bool gotFailures;
         return proc.run(handler) & 0xff;
     }
 
-    int runMawfsRC(StringArray args) { return runMawfsRC(args) }
+    int runMawfsRC(StringArray args) { return runMawfsRC(args, null) }
 
     ## Run the mawfs command, throw an exception if there was an error.
     void runMawfs(StringArray args, AppendBuffer stdout) {
