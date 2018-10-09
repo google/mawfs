@@ -6,8 +6,11 @@ import crack.logger.ctx Log;
 import crack.net InetAddress, Poller, PollEvent, PollEventCallback, Socket,
     SocketApd, AF_INET, SOCK_STREAM;
 import crack.net.comm2 Comm, CommListener, WaiterFor;
+import mawfs.aes_siv SIVCipher;
+import mawfs.ciphers sha256, Cipher;
 import mawfs.rawchunk GeneralCallback, JournalBlock, RawChunkReader;
-import mawfs.rpc Context, PeerProxy, PeerServiceCommFactory;
+import mawfs.rpc setInst, Context, InfoResponse, InstIFace, LoginError,
+    LoginState, MergeResponse, PeerProxy, PeerServiceCommFactory;
 
 @import crack.ann assert, impl;
 
@@ -47,21 +50,79 @@ class FakeChunkReader @impl RawChunkReader {
     }
 }
 
+class FakeInstance @impl InstIFace {
+    Cipher cipher;
+
+    oper init(Cipher cipher) : cipher = cipher {}
+
+    void pullBranch(String branch, String peer,
+                    GeneralCallback[String] callback
+                    ) {
+    }
+
+    void merge(String branch, GeneralCallback[MergeResponse] callback) {}
+
+    void resolve(GeneralCallback[int] callback) {}
+    void cancelMerge(GeneralCallback[int] callback) {}
+    void addPeer(String peerName, String peerAddr,
+                 GeneralCallback[int] callback
+                 ) {
+    }
+    InfoResponse getInfo() { return null }
+
+    LoginState answerChallenge(String challenge) {
+        class FakeLoginState : LoginState {
+            String expected;
+            oper init(String challenge, String response, String expected) :
+                expected = expected {
+
+                this.challenge = challenge;
+                this.response = response;
+            }
+
+            bool verifyResponse(String response) {
+                return response == expected;
+            }
+        }
+
+        decrypted := cipher.decrypt(challenge);
+        if (!decrypted)
+            throw LoginError('Invalid challenge');
+        response := cipher.encrypt(sha256(decrypted));
+        myChallenge := 'challenge';
+        expected := cipher.encrypt(sha256(myChallenge));
+        return FakeLoginState(cipher.encrypt(myChallenge), response,
+                              expected
+                              );
+    }
+
+    bool validNonce(String nonce) {
+        return nonce == 'nonce';
+    }
+}
+
+
 class RPCTestBed {
 
     Comm comm;
     Log log;
+    Context context;
 
     ## Server port number.
     int port;
 
+    Cipher cipher = SIVCipher(sha256('weak password'), null);
+
     void startServer() {
         portCallback := PortCollectorCallback();
-        context := Context(FakeChunkReader());
+        context = Context(FakeChunkReader());
+        context.authenticated = true;
         listener := CommListener(log, PeerServiceCommFactory(context));
         listener.addSocketInitCallback(portCallback);
         comm.startServer(InetAddress(127, 0, 0, 1, 0), listener, true);
         port = portCallback.waiter.getResult();
+
+        setInst(FakeInstance(cipher));
     }
 
     void setUp() {
@@ -101,6 +162,47 @@ class RPCTestBed {
         @assert(peer.getFile('filename') == 'contents');
     }
 
+    void testPeerLogin() {
+        context.authenticated = false;
+        peer := PeerProxy.make(comm, Log(log, 'client'),
+                               FStr() `127.0.0.1:$port`);
+        peer.login(cipher);
+        @assert(context.authenticated);
+    }
+
+    void testFailingPeerLogin() {
+        context.authenticated = false;
+        peer := PeerProxy.make(comm, Log(log, 'client'),
+                               FStr() `127.0.0.1:$port`);
+        try {
+            peer.login(SIVCipher(sha256('wrong password'), null));
+            @assert(false);
+        } catch (LoginError ex) {
+        }
+        @assert(!context.authenticated);
+    }
+
+    void testUserLogin() {
+        context.authenticated = false;
+        peer := PeerProxy.make(comm, Log(log, 'client'),
+                               FStr() `127.0.0.1:$port`);
+        peer.login('nonce');
+        @assert(context.authenticated);
+    }
+
+    void testFailedUserLogin() {
+        context.authenticated = false;
+        peer := PeerProxy.make(comm, Log(log, 'client'),
+                               FStr() `127.0.0.1:$port`);
+        try {
+            peer.login('badnonce');
+            @assert(false);
+        } catch (LoginError ex) {
+        }
+        @assert(!context.authenticated);
+        context.authenticated = true;
+    }
+
     void tearDown() {
         comm.stop();
     }
@@ -113,6 +215,10 @@ try {
     testbed.testGetHead();
     testbed.testReadJournal();
     testbed.testGetFile();
+    testbed.testPeerLogin();
+    testbed.testFailingPeerLogin();
+    testbed.testUserLogin();
+    testbed.testFailedUserLogin();
 } catch (Exception ex) {
     testbed.tearDown();
     throw ex;

@@ -10,12 +10,14 @@ import crack.threads Mutex, MutexLock, Queue, Thread;
 
 import .blockstore ChunkStore, Commit;
 import .cache Cache, NodeContext;
+import .ciphers sha256, Cipher;
+import .entropy getEntropySource;
 import .inst InstanceState;
 import .merge Merger, MergeState;
 import .peernet PeerNetwork;
 import .rawchunk GeneralCallback;
-import .rpc parseAddr, InfoResponse;
-import .rpc InstIFace, MergeResult, MergeResponse;
+import .rpc parseAddr, InfoResponse, InstIFace, LoginError, LoginState,
+    MergeResult, MergeResponse;
 import .util findCommonAncestor;
 
 @import crack.ann assert, cvars, define, impl;
@@ -461,5 +463,47 @@ class MAWFSInstance @impl InstIFace {
         lock := __state.lock();
         resp.mountpoint = __state.getMountpoint().getFullName();
         return resp;
+    }
+
+    LoginState answerChallenge(String challenge) {
+        cipher := __state.getCipher();
+
+        # Provide a response to the client's challenge.
+        decryptedChallenge := cipher.decrypt(challenge);
+        if (!decryptedChallenge)
+            throw LoginError('Invalid challenge password');
+        response := cipher.encrypt(sha256(decryptedChallenge));
+
+        # Create our own challenge.
+        myChallenge := getEntropySource().getString(32);
+        expectedResponse := sha256(myChallenge);
+        myChallenge = cipher.encrypt(myChallenge);
+
+        class MyLoginState : LoginState {
+            String __expectedResponse;
+            Cipher __cipher;
+
+            oper init(String challenge, String response,
+                      String expectedResponse,
+                      Cipher cipher
+                      ) :
+                __expectedResponse = expectedResponse,
+                __cipher = cipher {
+
+                this.challenge = challenge;
+                this.response = response;
+            }
+
+            bool verifyResponse(String response) {
+                return __cipher.decrypt(response) == __expectedResponse;
+            }
+        }
+
+        return MyLoginState(myChallenge, response, expectedResponse, cipher);
+    }
+
+    bool validNonce(String nonce) {
+        # XXX implement.
+        return false;
     }
 }

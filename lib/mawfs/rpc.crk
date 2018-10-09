@@ -14,7 +14,10 @@ import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
 import crack.rawptr RawPtr;
 import crack.regex Regex;
 import crack.serial SerialReader, SerialWriter;
-import mawfs.rawchunk GeneralCallback, JournalBlock, RawChunkReader;
+
+import .ciphers Cipher, sha256;
+import .entropy getEntropySource;
+import .rawchunk GeneralCallback, JournalBlock, RawChunkReader;
 
 @import crack.ann cvars, impl, interface, struct;
 @import crack.protobuf.ann  protobuf;
@@ -127,6 +130,36 @@ class PeerDisconnectedError : Exception {}
     message InfoResponse {
         optional string mountpoint = 1;
     }
+
+    message LoginRequest {
+
+        ## Sent for the first request of a p2p login,  Contains an encrypted
+        ## random string.
+        optional string challenge = 1;
+
+        ## Sent for the second request of a p2p login.  Contains the SHA256
+        ## digest of the server's decrypted challenge string.
+        optional string response = 2;
+
+        ## Sent during the login request from a client with access to the
+        ## local filesystem.  Consists of a secret obtained from the special
+        ## .mawfs/otp file.
+        optional string nonce = 3;
+    }
+
+    message LoginResponse {
+        ## Sent in response to the first request of a p2p login.  Contains the
+        ## SHA256 hash of the client's decrypted challenge string.
+        optional string response = 1;
+
+        ## Sent in response to the first request of a p2p login.  Contains an
+        ## encrypted random string for the client to respond to.
+        optional string challenge = 2;
+
+        # Sent in response to an invalid login attempt (the challenge string
+        # was not encrypted correctly).
+        optional string error = 3;
+    }
 }
 
 class MergeResult : MergeResponse {
@@ -135,6 +168,24 @@ class MergeResult : MergeResponse {
         this.commit = commit;
         conflict = conflicts;
     }
+}
+
+## Stores information about a pending login challenge.
+@abstract class LoginState {
+
+    ## The challenge string to be sent to the client.
+    String challenge;
+
+    ## The response to the client's challenge.
+    String response;
+
+    ## Returns true if 'response' is a valid response to our challenge.
+    @abstract bool verifyResponse(String response);
+}
+
+## Thrown when something goes wrong in the login flow.
+class LoginError : Exception {
+    oper init(String message) : Exception(message) {}
 }
 
 @interface InstIFace {
@@ -152,6 +203,13 @@ class MergeResult : MergeResponse {
                            GeneralCallback[int] callback
                            );
     @abstract InfoResponse getInfo();
+
+    ## Responds to a login challenge from a client.
+    @abstract LoginState answerChallenge(String challenge);
+
+    ## Returns true if 'nonce' is a valid nonce provided from the instance
+    ## filesystem.
+    @abstract bool validNonce(String nonce);
 }
 
 InstIFace _inst;
@@ -483,12 +541,60 @@ class PeerProxy {
         readMessageFromString(result, respData);
         return result;
     }
+
+    ## Login to the instance as a peer.  This does the complete handshake
+    ## required to do login.
+    ## 'cipher' must be the current instance cipher.
+    void login(Cipher cipher) {
+        req := LoginRequest();
+        challenge := getEntropySource().getString(32);
+        req.challenge = cipher.encrypt(challenge);
+        respData := __invoke('login', req.toString());
+        LoginResponse resp = {};
+        readMessageFromString(resp, respData);
+        if (resp.error)
+            throw LoginError(resp.error);
+
+        # If we get here, we passed the first phase.  Verify the response.
+        if (cipher.decrypt(resp.response) != sha256(challenge)) {
+            __log.error `Invalid response from login`;
+            throw LoginError('Invalid response received from peer.');
+        }
+
+        ## Send back a response to the peer's challenge.
+        req.challenge = null;
+        req.response = cipher.encrypt(sha256(cipher.decrypt(resp.challenge)));
+        respData = __invoke('login', req.toString());
+        readMessageFromString(resp, respData);
+        if (resp.error)
+            throw LoginError(resp.error);
+    }
+
+    ## Login from a user agent with access to the mounted filesystem.  The
+    ## 'nonce' comes from the contents of the .mawfs/otp file.
+    ##
+    ## Note that 'nonce' is not sent encrypted: this should not be used to
+    ## login to a remote system on an unencrypted connection, otherwise the
+    ## connection could be MITMed.
+    void login(String nonce) {
+        req := LoginRequest();
+        req.nonce = nonce;
+        respData := __invoke('login', req.toString());
+        resp := LoginResponse();
+        readMessageFromString(resp, respData);
+        if (resp.error)
+            throw LoginError(resp.error);
+    }
 }
 
 ## Server-side RPC message context.
 class Context {
     Log log;
     RawChunkReader reader;
+    LoginState loginState;
+
+    ## Gets set to true when the client has completed authentication.
+    bool authenticated;
 
     oper init(RawChunkReader reader) : reader = reader {}
 
@@ -519,7 +625,22 @@ class Context {
 # Mapping from method name to method processing function.  In addition to a
 # context, a method handler accepts a string containing the serialized request
 # and an AppendBuffer into which to write the serialized response.
-alias MethodHandler = Functor3[void, Context, RPCMessage, CommHandler];
+alias _FuncWrapper = Functor3[void, Context, RPCMessage, CommHandler].Wrap;
+class MethodHandler : _FuncWrapper {
+
+    ## Set to true if authentication isn't required.
+    bool noauth;
+
+    oper init(function[void, Context, RPCMessage, CommHandler] func) :
+        _FuncWrapper(func) {
+    }
+
+    oper init(function[void, Context, RPCMessage, CommHandler] func,
+              bool noauth) :
+        _FuncWrapper(func),
+        noauth = noauth {
+    }
+}
 alias MethodMap = HashMap[String, MethodHandler];
 
 ## Handles communication from an RPC client.
@@ -546,8 +667,15 @@ class ClientHandler @impl UserHandler {
         if (handler) {
             try {
                 comm.log.debug `calling handler for $(msg.method)`;
-                handler(__context, msg, comm);
-                return;
+# TODO: reintroduce this as soon as peernet supports auth.
+#                if (!__context.authenticated && !handler.noauth) {
+#                    comm.log.error I`Access denied to method $(msg.method): \
+#                                     requires auth`;
+#                    error = FStr() I`Access denied, auth required.`;
+#                } else {
+                    handler(__context, msg, comm);
+                    return;
+#                }
             } catch (Exception ex) {
                 error = FStr() `$ex`;
             }
@@ -755,21 +883,59 @@ void getInfo(Context context, RPCMessage msg, CommHandler comm) {
     }
 }
 
+void login(Context context, RPCMessage msg, CommHandler comm) {
+    req := LoginRequest();
+    readMessageFromString(req, msg.request);
+    try {
+        if (req.challenge) {
+            # Phase 1 request, p2p challenge.  Write response, send our own
+            # challenge.
+            context.loginState = _inst.answerChallenge(req.challenge);
+            resp := LoginResponse();
+            resp.response = context.loginState.response;
+            resp.challenge = context.loginState.challenge;
+            context.writeResponse(comm, resp, msg.id);
+            return;
+        } else if (req.response) {
+            # Phase 2 request, p2p reaponse.  Verify response to our challenge.
+            if (!context.loginState)
+                throw LoginError('Response received before challenge!');
+            if (!context.loginState.verifyResponse(req.response))
+                throw LoginError('Incorrect login response.');
+        } else if (req.nonce) {
+            # Client side nonce verification.  Just verify the nonce.
+            if (!_inst.validNonce(req.nonce))
+                throw LoginError('Invalid nonce.');
+        } else {
+            throw LoginError('Invalid login request.');
+        }
+    } catch (LoginError ex) {
+        resp := LoginResponse();
+        resp.error = ex.text;
+        context.writeResponse(comm, resp, msg.id);
+        return;
+    }
+
+    context.authenticated = true;
+    context.writeResponse(comm, LoginResponse(), msg.id);
+}
+
 class PeerServiceCommFactory @impl CommHandlerFactory {
     MethodMap __methods = {};
     Context __context;
 
     oper init(Context context) : __context = context {
-        __methods['getObject'] = MethodHandler.Wrap(getObject);
-        __methods['getHead'] = MethodHandler.Wrap(getHead);
-        __methods['getJournalBlock'] = MethodHandler.Wrap(getJournalBlock);
-        __methods['getFile'] = MethodHandler.Wrap(getFile);
-        __methods['pullBranch'] = MethodHandler.Wrap(pullBranch);
-        __methods['merge'] = MethodHandler.Wrap(merge);
-        __methods['resolve'] = MethodHandler.Wrap(resolve);
-        __methods['cancelMerge'] = MethodHandler.Wrap(cancelMerge);
-        __methods['addPeer'] = MethodHandler.Wrap(addPeer);
-        __methods['getInfo'] = MethodHandler.Wrap(getInfo);
+        __methods['getObject'] = MethodHandler(getObject);
+        __methods['getHead'] = MethodHandler(getHead);
+        __methods['getJournalBlock'] = MethodHandler(getJournalBlock);
+        __methods['getFile'] = MethodHandler(getFile);
+        __methods['pullBranch'] = MethodHandler(pullBranch);
+        __methods['merge'] = MethodHandler(merge);
+        __methods['resolve'] = MethodHandler(resolve);
+        __methods['cancelMerge'] = MethodHandler(cancelMerge);
+        __methods['addPeer'] = MethodHandler(addPeer);
+        __methods['getInfo'] = MethodHandler(getInfo);
+        __methods['login'] = MethodHandler(login, true);
     }
 
     CommHandler makeCommHandler(NewConnection conn) {

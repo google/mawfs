@@ -163,6 +163,12 @@ class InstanceState {
         resetTree();
     }
 
+    ## Get the instance's current cipher.  Does not require the lock, as the
+    ## cipher is efffectively immutable and is assigned at construction.
+    Cipher getCipher() {
+        return __cipher;
+    }
+
     ## Returns a lock on the instance state.  Clients must retain this lock
     ## object for the duration of their session with InstanceState or any
     ## objects managed by it.  Attempting to call a function without the lock

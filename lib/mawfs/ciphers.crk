@@ -19,6 +19,7 @@
 
 import crack.crypt.ssl.cipher EVP_aes_256_cbc, DecryptWriter, EncryptWriter;
 import crack.ext._ssl EVPCipher;
+import crack.hash.sha256 SHA256;
 import crack.io StringWriter;
 import crack.lang Buffer;
 
@@ -54,4 +55,13 @@ class AES256Cipher @impl Cipher {
         dec.close();
         return out.string();
     }
+}
+
+# This is the best place I can think of to put sha256.
+
+## Returns the SHA256 hash of a string.
+String sha256(String data) {
+    hasher := SHA256();
+    hasher.update(data);
+    return hasher.digest();
 }
