@@ -41,6 +41,7 @@ import crack.net.comm2 Comm;
 import crack.protobuf readMessageFromString;
 import crack.threads Mutex;
 
+import mawfs.aes_siv SIVCipher;
 import mawfs.blockstore hashFile, ChunkStore, FSInfo, Node, BLOCK_SIZE;
 import mawfs.cache sig;
 import mawfs.configstore ConfigStore;
@@ -188,11 +189,13 @@ class RPCCmd {
     Log __log;
     Comm __comm;
 
-    oper init(String addr) {
+    oper init(String addr, String authNonce) {
         __log = Log(cerrLogger, 'client');
         __comm = Comm(__log);
         __comm.start();
         __proxy = PeerProxy.make(__comm, __log, addr);
+        if (__proxy)
+            __proxy.login(authNonce);
     }
 
     oper del() {
@@ -205,13 +208,6 @@ class RPCCmd {
         localName := __proxy.pullBranch(branch, peer);
         cerr `Branch loaded into $localName\n`;
     }
-}
-
-RPCCmd makeRPC(String addr) {
-    cmd := RPCCmd(addr);
-    if (!cmd.getProxy())
-        throw Abort(FStr() `Unable to connect to $addr`);
-    return cmd;
 }
 
 String readPassword() {
@@ -434,6 +430,14 @@ class CommandManager {
         return server;
     }
 
+    RPCCmd getRPC() {
+        addr := getServer();
+        cmd := RPCCmd(addr, 'nonce');
+        if (!cmd.getProxy())
+            throw Abort(FStr() `Unable to connect to $addr`);
+        return cmd;
+    }
+
     ## The "clone" command.
     void clone() {
         checkArgs(4, 'Usage: mawfs clone <peer-address> <backing-dir>\n');
@@ -443,10 +447,11 @@ class CommandManager {
         # Need to share all of this code with 'pull'.
         peerAddr := parsePeerAddr(getServer(args[2]));
         password := readPassword();
+        tempCipher := SIVCipher(password, null);
 
         # Only need a raw chunk reader if we're running a server, so we
         # can give it a null.
-        net := PeerNetwork(null);
+        net := PeerNetwork(null, tempCipher);
         net.addPeer(peerAddr);
 
         # If there's no params file, get one.
@@ -501,11 +506,7 @@ class CommandManager {
         checkArgsAtLeast(3, "Usage: mawfs pull <branch> [peer]\n");
         setLogLevel(DEBUG);
 
-        server := getServer();
-
-        makeRPC(server).pullBranch(args[2],
-                                   (args.count() > 3) ? args[3] : null
-                                   );
+        getRPC().pullBranch(args[2], (args.count() > 3) ? args[3] : null);
     }
 
     ## The "merge" command.
@@ -513,8 +514,7 @@ class CommandManager {
         checkArgs(3, "Usage: mawfs merge <branch>\n");
         setLogLevel(DEBUG);
 
-        server := getServer();
-        result := makeRPC(server).getProxy().merge(args[2]);
+        result := getRPC().getProxy().merge(args[2]);
         if (result.commit)
             cout `committed: $(sig(result.commit))\n`;
         else {
@@ -529,24 +529,21 @@ class CommandManager {
     void resolve() {
         checkArgs(2, "Usage: mawfs resolve\n");
         setLogLevel(DEBUG);
-        server := getServer();
-        makeRPC(server).getProxy().resolve();
+        getRPC().getProxy().resolve();
         cout `Resolve completed successfully\n`;
     }
 
     ## The "cancelMerge" command.
     void cancelMerge() {
         checkArgs(2, 'Usage: mawfs cancelMerge\n');
-        server := getServer();
-        makeRPC(server).getProxy().cancelMerge();
+        getRPC().getProxy().cancelMerge();
         cout `Merge cancelled\n`;
     }
 
     ## THe "addPeer" command.
     void addPeer() {
         checkArgs(4, 'Usage: mawfs addPeer <peer-name> <peer-addr>');
-        server := getServer();
-        makeRPC(server).getProxy().addPeer(args[2], args[3]);
+        getRPC().getProxy().addPeer(args[2], args[3]);
     }
 
     void dbg_log() {
@@ -586,8 +583,7 @@ class CommandManager {
     ## The "info" command.
     void info() {
         checkArgs(2, 'Usage: mawfs info\n');
-        server := getServer();
-        result := makeRPC(server).getProxy().getInfo();
+        result := getRPC().getProxy().getInfo();
         cout `Mountpoint: $(result.mountpoint)\n`;
     }
 }
@@ -685,7 +681,7 @@ void main() {
                 }
 
                 void start() {
-                    __net = PeerNetwork(__chunkReader);
+                    __net = PeerNetwork(__chunkReader, instState.getCipher());
                     __net.configure(__config);
                     setInst(MAWFSInstance(instState, __net));
                     __net.storeServersIn(instState);

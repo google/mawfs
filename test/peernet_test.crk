@@ -21,6 +21,8 @@ import crack.net Address;
 import crack.net.comm2 Comm;
 import crack.logger.ctx Log;
 import crack.sys exit;
+import mawfs.aes_siv SIVCipher;
+import mawfs.ciphers sha256;
 import mawfs.params ParamInfo;
 import mawfs.peernet Peer, PeerNetwork;
 import mawfs.rawchunk JournalBlock;
@@ -28,12 +30,6 @@ import mawfs.rpc PeerProxy;
 import mawfs.testutil FakeEntropySource;
 
 @import crack.ann assert;
-
-String sha256(String data) {
-    hasher := SHA256();
-    hasher.update(data);
-    return hasher.digest();
-}
 
 class FakeProxy : PeerProxy {
     Array[JournalBlock] results;
@@ -78,8 +74,8 @@ class TestBed {
 
     void setUp() {
         __resetTempDir();
-        net = PeerNetwork(null);
-        peer := Peer(null, null, null);
+        net = PeerNetwork(null, SIVCipher(sha256('test test'), null));
+        peer := Peer(null, null, null, null);
         peer.setProxy(FakeProxy(getJournalBlockResults));
         net.addPeer(peer);
     }

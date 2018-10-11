@@ -667,15 +667,14 @@ class ClientHandler @impl UserHandler {
         if (handler) {
             try {
                 comm.log.debug `calling handler for $(msg.method)`;
-# TODO: reintroduce this as soon as peernet supports auth.
-#                if (!__context.authenticated && !handler.noauth) {
-#                    comm.log.error I`Access denied to method $(msg.method): \
-#                                     requires auth`;
-#                    error = FStr() I`Access denied, auth required.`;
-#                } else {
+                if (!__context.authenticated && !handler.noauth) {
+                    comm.log.error I`Access denied to method $(msg.method): \
+                                     requires auth`;
+                    error = FStr() I`Access denied, auth required.`;
+                } else {
                     handler(__context, msg, comm);
                     return;
-#                }
+                }
             } catch (Exception ex) {
                 error = FStr() `$ex`;
             }

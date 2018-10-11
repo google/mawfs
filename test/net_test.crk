@@ -74,7 +74,7 @@ class PeerInfo {
 
         # Create the peer network.
         chunkReader := cs.getRawChunkReader(mutex);
-        peerNet = PeerNetwork(chunkReader);
+        peerNet = PeerNetwork(chunkReader, cipher);
 
         # Set up a remote reader.
         cs.setRemoteReader(RemoteReaderImpl(peerNet));
@@ -159,6 +159,7 @@ class PeerInfo {
         comm = Comm(log);
         comm.start();
         proxy = PeerProxy.make(comm, log, InetAddress(127, 0, 0, 1, getPort()));
+        proxy.login(slave.cipher);
     }
 
     void tearDown() {

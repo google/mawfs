@@ -64,12 +64,14 @@ bool gotFailures;
     }
 
     ## Run the MAWFS command with 'args' and return the exit code.
-    int runMawfsRC(StringArray args, AppendBuffer stdout) {
+    int runMawfsWithStdinRC(StringArray args, AppendBuffer stdout,
+                            String stdin
+                            ) {
         cmd := StringArray![crackPath, './mawfs'];
         cmd.extend(args);
         pipeStdout := (stdout is null) ? 0 : CRK_PIPE_STDOUT;
         proc := Process(cmd, CRK_PIPE_STDIN | pipeStdout);
-        proc.putStdIn('TestPasswordDudeBestAsstwordFood');
+        proc.putStdIn(stdin);
         proc.closeStdIn();
 
         ProcessHandler handler;
@@ -87,6 +89,12 @@ bool gotFailures;
         }
 
         return proc.run(handler) & 0xff;
+    }
+
+    int runMawfsRC(StringArray args, AppendBuffer stdout) {
+        return runMawfsWithStdinRC(args, stdout,
+                                   'TestPasswordDudeBestAsstwordFood'
+                                   );
     }
 
     int runMawfsRC(StringArray args) { return runMawfsRC(args, null) }
@@ -638,6 +646,23 @@ class InfoTest : TestCase {
     }
 }
 register(InfoTest());
+
+## Test a clone with an invalid password.
+class AuthFailCloneTest : DoubleInstanceTest {
+    void run() {
+        # Start up a server on port 12543
+        (makePath('backing')/'config/peers').writeAll('[server]\nport = 12543\n');
+        (makePath('fs')/'foo').writeAll('test file contents');
+        restartFS('master');
+        rc := runMawfsWithStdinRC(
+            StringArray!['clone', 'localhost:12543', 'backing2'],
+            null,
+            'BaddPassword'
+        );
+        @assert(rc);
+    }
+}
+register(AuthFailCloneTest());
 
 runAllTests();
 

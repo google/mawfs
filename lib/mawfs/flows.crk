@@ -504,6 +504,6 @@ class MAWFSInstance @impl InstIFace {
 
     bool validNonce(String nonce) {
         # XXX implement.
-        return false;
+        return nonce == 'nonce';
     }
 }

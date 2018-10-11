@@ -16,6 +16,7 @@ import mawfs.rawchunk RawChunkReader;
 import mawfs.rpc parseAddr, Context, PeerDisconnectedError, PeerProxy,
     PeerServiceCommFactory;
 
+import .ciphers Cipher;
 import .inst InstanceState;
 import .params ParamInfo;
 
@@ -31,17 +32,22 @@ class Peer {
     Comm __comm;
     Log __log;
     PeerProxy __proxy;
+    Cipher __cipher;
 
-    oper init(Comm comm, Log log, Address addr) :
+    oper init(Comm comm, Log log, Address addr, Cipher cipher) :
         addr = addr,
         __comm = comm,
-        __log = log {
+        __log = log,
+        __cipher = cipher {
     }
 
     ## Returns the peer proxy, creating it if necessary.
     PeerProxy getProxy() {
-        if (!__proxy)
+        if (!__proxy) {
             __proxy = PeerProxy.make(__comm, __log, addr);
+            if (__proxy)
+                __proxy.login(__cipher);
+        }
         return __proxy;
     }
 
@@ -71,9 +77,11 @@ class PeerNetwork {
     RawChunkReader __chunkReader;
     Array[Peer] __peers = {};
     Array[String] __serverAddrs = {};
+    Cipher __cipher;
 
-    oper init(RawChunkReader chunkReader) :
-        __chunkReader = chunkReader {
+    oper init(RawChunkReader chunkReader, Cipher cipher) :
+        __chunkReader = chunkReader,
+        __cipher = cipher {
 
         __log = Log(cerrLogger, 'peernet');
         __comm = Comm(__log);
@@ -93,7 +101,10 @@ class PeerNetwork {
     }
 
     void addPeer(Address addr) {
-        __peers.append(Peer(__comm, Log(__log, FStr() `peer-$addr`), addr));
+        __peers.append(Peer(__comm, Log(__log, FStr() `peer-$addr`), addr,
+                            __cipher
+                            )
+                       );
     }
 
     ## A a new peer object constructed by the user (intended for testing).
