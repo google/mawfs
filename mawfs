@@ -55,7 +55,7 @@ import mawfs.rawchunk RawChunkReader;
 import mawfs.rpc parseAddr, setInst, ExtendedAddress, PeerProxy;
 import mawfs.util traverse;
 
-@import crack.ann impl;
+@import crack.ann impl, struct;
 
 import 'libc.so.6' fsync;
 int fsync(int fd);
@@ -194,8 +194,17 @@ class RPCCmd {
         __comm = Comm(__log);
         __comm.start();
         __proxy = PeerProxy.make(__comm, __log, addr);
-        if (__proxy)
-            __proxy.login(authNonce);
+        if (__proxy) {
+            nonce := authNonce;
+            if (!nonce) {
+                mountpoint := __proxy.getMountpoint();
+                noncePath := makePath(mountpoint)/'.mawfs/inst/nonce';
+                if (noncePath.exists())
+                    nonce = noncePath.readAll();
+            }
+
+            __proxy.login(nonce);
+        }
     }
 
     oper del() {
@@ -367,7 +376,14 @@ class CommandManager {
         cerr `"mawfs run $rootDir <mount-point>" to begin using it.\n`;
     }
 
-    @static String __getServerFromDir(Path path) {
+    @struct ServerAndNonce {
+        String server;
+
+        ## May be null if the server was not obtained from a directory.
+        String nonce;
+    }
+
+    @static ServerAndNonce __getServerFromDir(Path path) {
         serversFile := path/'.mawfs/inst/servers';
         if (!serversFile.exists())
             return null;
@@ -379,7 +395,10 @@ class CommandManager {
             if (addr.startsWith('0.0.0.0'))
                 addr = '127.0.0.1' + addr.substr(7);
 
-            return addr;
+            noncePath := path/'.mawfs/inst/nonce';
+            nonce := (noncePath).exists() ? noncePath.readAll() : null;
+
+            return ServerAndNonce(addr, nonce);
         } else {
             cerr `MAWFS instance $path defines no servers.\n`;
         }
@@ -388,7 +407,7 @@ class CommandManager {
 
     ## Get a server address from the specified name.  'name' can either be a
     ## directory or an explicit hostname:port address.
-    String getServer(String name) {
+    ServerAndNonce getServer(String name) {
         # Got one.  Is it a directory?
         if ((path := makePath(name)).isDir()) {
             return __getServerFromDir(path);
@@ -396,10 +415,11 @@ class CommandManager {
 
         # If it wasn't a directory or didn't contain a server address, try
         # treating it as an address.
-        return name;
+        return ServerAndNonce(name, null);
     }
 
-    ## Get the instance server address. The rules are:
+    ## Get the instance server address and (possibly) the auth nonce. The
+    ## rules are:
     ##    if there is a -i (or --instance) argument:
     ##        if it is a directory, and contains a non-empty
     ##              .mawfs/inst/servers file:
@@ -409,30 +429,30 @@ class CommandManager {
     ##        return the first address in the file.
     ##    else:
     ##        return null
-    String getServer() {
-        String server;
+    ServerAndNonce getServer() {
+        ServerAndNonce result;
 
         # Now we need to find the address of the instances we're connecting to.
         # First check for an instance flag.
         inst := opts.getString('instance');
         if (inst) {
-            server = getServer(inst);
+            result = getServer(inst);
         } else {
-            server = __getServerFromDir(cwd);
+            result = __getServerFromDir(cwd);
         }
 
-        if (!server) {
+        if (!result) {
             cerr I`You must either call this from a MAWFS filesystem directory
                    or specify an instance directory or address using the -i flag.
                    `;
             exit(1);
         }
-        return server;
+        return result;
     }
 
     RPCCmd getRPC() {
         addr := getServer();
-        cmd := RPCCmd(addr, 'nonce');
+        cmd := RPCCmd(addr.server, addr.nonce);
         if (!cmd.getProxy())
             throw Abort(FStr() `Unable to connect to $addr`);
         return cmd;
@@ -445,7 +465,7 @@ class CommandManager {
         initBackingStore(args[3]);
 
         # Need to share all of this code with 'pull'.
-        peerAddr := parsePeerAddr(getServer(args[2]));
+        peerAddr := parsePeerAddr(getServer(args[2]).server);
         password := readPassword();
         tempCipher := SIVCipher(password, null);
 

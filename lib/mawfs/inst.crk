@@ -26,6 +26,7 @@ import .blockstore Commit, Node, NodeStore, MODE_DIR;
 import .ciphers Cipher;
 import .cache CachedNode, Tree;
 import .merge LocalInstanceState, Merger, MergeState;
+import .nonces NonceManager;
 import .path MAWFSPath;
 
 @import crack.ann define, interface;
@@ -80,8 +81,10 @@ class InstanceState {
     String __branch;
     UserModule __userModule;
 
+    NonceManager __nonceMan = {};
+
     # Instance wide information files.  See setInfoFile() below.
-    InfoFiles __infoFiles = {};
+    InfoFiles __infoFiles;
 
     # Resident branches.  These are the branches that are accessible through
     # the .mawfs/alt directory.  They can be created by the user with a
@@ -158,7 +161,8 @@ class InstanceState {
         __cipher = cipher,
         __store = store,
         __branch = branch,
-        __userModule = userModule {
+        __userModule = userModule,
+        __infoFiles = InfoFiles(__nonceMan) {
 
         resetTree();
     }
@@ -167,6 +171,12 @@ class InstanceState {
     ## cipher is efffectively immutable and is assigned at construction.
     Cipher getCipher() {
         return __cipher;
+    }
+
+    ## Get the instance's NonceManager.  Does not require the lock, as the
+    ## nonce manager has its own lock and is assigned at construction.
+    NonceManager getNonceManager() {
+        return __nonceMan;
     }
 
     ## Returns a lock on the instance state.  Clients must retain this lock

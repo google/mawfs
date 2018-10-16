@@ -1,0 +1,51 @@
+
+import mawfs.entropy setEntropySource;
+import mawfs.nonces NonceManager;
+import mawfs.testutil PseudoRandomEntropySource;
+import test.unittest register, runAllTests, Test, TestFailure;
+
+@import crack.ann assert;
+
+setEntropySource(PseudoRandomEntropySource());
+
+@abstract class TestBase : Test {
+    NonceManager nm;
+    void setUp() {
+        nm = NonceManager();
+    }
+}
+
+class BasicTest : TestBase {
+    void run() {
+        nonce := nm.get();
+        @assert(nm.redeem(nonce));
+        @assert(!nm.redeem(nonce));
+    }
+}
+register(BasicTest());
+
+class BadNonce : TestBase {
+    void run() {
+        @assert(!nm.redeem('badnonce'));
+    }
+}
+register(BadNonce());
+
+## Verify that multiple nonces can remain outstanding and be removed in random
+## order.
+class MultiNonce : TestBase {
+    void run() {
+        n1 := nm.get();
+        n2 := nm.get();
+        n3 := nm.get();
+        @assert(nm.redeem(n3));
+        @assert(!nm.redeem(n3));
+        @assert(nm.redeem(n1));
+        @assert(!nm.redeem(n1));
+        @assert(nm.redeem(n2));
+        @assert(!nm.redeem(n2));
+    }
+}
+register(MultiNonce());
+
+runAllTests();

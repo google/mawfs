@@ -503,7 +503,6 @@ class MAWFSInstance @impl InstIFace {
     }
 
     bool validNonce(String nonce) {
-        # XXX implement.
-        return nonce == 'nonce';
+        return __state.getNonceManager().redeem(nonce);
     }
 }

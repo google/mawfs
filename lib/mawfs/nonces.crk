@@ -1,0 +1,50 @@
+
+import crack.cont.array Array;
+import crack.threads Mutex, MutexLock;
+import .entropy getEntropySource;
+
+const MAX_NONCES := 12;
+
+## Manages a set of "nonce" tokens, which are randomly generated and can be
+## redeedmed only once.
+##
+## These are intended to be used for the user authentication mechanism: they
+## allow a user with access to the FUSE mounted filesystem to obtain a token
+## allowing them to authenticate against the socket interface.
+##
+## Instances are threadsafe.
+class NonceManager {
+
+    ## The currently active nonces.  We keep a set of these around to avoid
+    ## a race condition where a client gets a nonce but then another client
+    ## gets a nonce before the first can redeem theirs.
+    Array[String] __nonces = {};
+    Mutex __mutex = {};
+
+    ## Returns a new nonce and records it for future redemption.
+    String get() {
+        lock := MutexLock(__mutex);
+        result := getEntropySource().getString(32);
+        __nonces.append(result);
+
+        # Clean up expired nonces.
+        if (__nonces.count() > MAX_NONCES)
+            __nonces.delete(0);
+
+        return result;
+    }
+
+    ## "Redeems" a nonce, returning true if the nonce is valid and removing it
+    ## from the set of available nonces.
+    bool redeem(String nonce) {
+        import crack.logger info;
+        lock := MutexLock(__mutex);
+        for (cur :on __nonces) {
+            if (cur.elem() == nonce) {
+                __nonces.delete(cur.index);
+                return true;
+            }
+        }
+        return false;
+    }
+}

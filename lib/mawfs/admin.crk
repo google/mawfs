@@ -26,6 +26,7 @@ import crack.logger debug;
 import crack.runtime ENOENT, ENOTDIR, EEXIST, EINVAL, S_IFDIR, S_IFREG, SEEK_CUR,
     SEEK_END, SEEK_SET;
 import mawfs.cache CachedNode;
+import .nonces NonceManager;
 import .path AdminDirFactory, MAWFSPath;
 
 @import crack.ann impl, interface;
@@ -307,6 +308,21 @@ class AltDir : AdminPath {
 ## A dictionary of strings containing the contents of information files to be
 ## placed directly in the .mawfs directory.
 class InfoFiles : TreeMap[String, String] {
+
+    NonceManager __nonceMan;
+
+    oper init(NonceManager nonceMan) : __nonceMan = nonceMan {
+        # We stuff this into the tree-map specifically so that we can iterate
+        # over the set of elements,  Note that this will break if we ever
+        # acccess the "val" attribute of the item during iteration.
+        this['nonce'] = '';
+    }
+
+    String get(String key, String default) {
+        return key == 'nonce' ? __nonceMan.get() :
+                                TreeMap[String, String].get(key, default);
+    }
+
     @fieldset_accessors(InfoFiles);
 }
 

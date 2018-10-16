@@ -129,6 +129,8 @@ class PeerDisconnectedError : Exception {}
 
     message InfoResponse {
         optional string mountpoint = 1;
+        # Note: if we add anything else to this we need to copy getInfo()
+        # (below) to getMountpoint(), which just returns the mountpoint.
     }
 
     message LoginRequest {
@@ -542,6 +544,14 @@ class PeerProxy {
         return result;
     }
 
+    ## Get the current mountpoint (a subset of getInfo()).
+    String getMountpoint() {
+        respData := __invoke('getMountpoint', '');
+        InfoResponse result = {};
+        readMessageFromString(result, respData);
+        return result.mountpoint;
+    }
+
     ## Login to the instance as a peer.  This does the complete handshake
     ## required to do login.
     ## 'cipher' must be the current instance cipher.
@@ -934,6 +944,8 @@ class PeerServiceCommFactory @impl CommHandlerFactory {
         __methods['cancelMerge'] = MethodHandler(cancelMerge);
         __methods['addPeer'] = MethodHandler(addPeer);
         __methods['getInfo'] = MethodHandler(getInfo);
+        # getMountpoint is just getInfo with "noauth".
+        __methods['getMountpoint'] = MethodHandler(getInfo, true);
         __methods['login'] = MethodHandler(login, true);
     }
 
