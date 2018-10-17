@@ -478,6 +478,7 @@ class CommandManager {
         paramInfo := net.pullParams(rootDir, password);
         if (!paramInfo) {
             cerr `No peers found.\n`;
+            makePath(args[3]).deleteTree();
             exit(1);
         }
         store := ChunkStore(rootDir, FSInfo(paramInfo.cipher));
