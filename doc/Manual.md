@@ -40,7 +40,7 @@ To start a server listening on 1.2.3.4:1234:
 ```
     [server]
     iface = 1.2.3.4
-    port = 1.2.3.4
+    port = 1234
 ```
 
 Configuring Peers
