@@ -407,7 +407,8 @@ def info():
 @command
 def backing_dir():
     """Print out the backing direcctory for an instance."""
-    backing = get_backing_dir(os.path.abspath(get_instance().mountpoint))
+    path = get_instance().mountpoint
+    backing = get_backing_dir(os.path.abspath(path))
     check_backing_exists(backing, path)
     print(backing)
 
