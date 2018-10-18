@@ -257,8 +257,11 @@ def get_instance():
             raise Abort('You must specify an instance (-i <instance>) for '
                         'this command.')
     elif os.path.isdir(instance):
-        server = get_server_from_dir(instance)
-        processed_instance = Instance(server, get_mountpoint(server))
+        try:
+            server = get_server_from_dir(instance)
+        except Abort:
+            server = None
+        processed_instance = Instance(server, os.path.abspath(instance))
     else:
         # Assume it is an address.
         processed_instance = Instance(instance, get_mountpoint(instance))
