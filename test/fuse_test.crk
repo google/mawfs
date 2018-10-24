@@ -428,6 +428,27 @@ register(CloneTest());
                  );
         runMawfs(StringArray!['pull', '-i', 'fs', 'master']);
     }
+
+    void verifyJournalWorks() {
+        # Now verify that modifications still work.
+        (makePath('fs2')/'on_master').appender().write(' - yo!');
+        (makePath('fs2')/'on_slave').writeAll('new slave contents');
+        (makePath('fs2')/'alpha').makeDir();
+        (makePath('fs2')/'zulu').makeDir();
+        (makePath('fs2')/'zulu/test').writeAll('zulu test');
+        restartSlaveFS('master');
+        assertEqual((makePath('fs2')/'on_master').readAll(),
+                    'on master contents - yo!'
+                    );
+        assertEqual((makePath('fs2')/'on_slave').readAll(),
+                    'new slave contents'
+                    );
+        @assert((makePath('fs2')/'alpha').exists());
+        @assert((makePath('fs2')/'zulu').exists());
+        assertEqual((makePath('fs2')/'zulu/test').readAll(),
+                    'zulu test'
+                    );
+    }
 }
 
 class MergeWithConflictsTest : MergeTest {
@@ -489,6 +510,8 @@ class MergeWithConflictsTest : MergeTest {
         # accepted.
         pullBack();
         assertEqual((makePath('fs')/'foo').readAll(), 'resolved');
+
+        verifyJournalWorks();
     }
 }
 register(MergeWithConflictsTest());
@@ -501,6 +524,16 @@ class MergeNoConflictTest : MergeTest {
         masterFS := makePath('fs2')/'.mawfs'/'alt'/'127.0.0.1:12543:master';
         @assert(!masterFS.exists());
         orgFS := makePath('fs2')/'.mawfs'/'alt'/'merge:org';
+        @assert(!orgFS.exists());
+
+        # Shouldn't have a merge branch in the refs.
+        branches := StringArray();
+        for (child :in (makePath('backing2')/'refs').children()) {
+            branches.append(child.getName());
+        }
+        branches.sort();
+        assertEqual(branches, StringArray!['127.0.0.1:12543:master', 'master']);
+
         assertEqual((makePath('fs2')/'.mawfs'/'branch').readAll(),
                     'master'
                     );
@@ -524,6 +557,7 @@ class MergeNoConflictTest : MergeTest {
                     'on slave contents'
                     );
 
+        verifyJournalWorks();
     }
 }
 register(MergeNoConflictTest());
@@ -551,6 +585,9 @@ class CancelMergeTest : MergeTest {
         @assert(!(mawfsDir/'alt').children());
         assertEqual((mawfsDir/'branch').readAll(), 'master');
         @assert(!(makePath('fs2')/'local_change').exists());
+
+        (makePath('fs2')/'on_master').writeAll('on master contents');
+        verifyJournalWorks();
     }
 }
 register(CancelMergeTest());

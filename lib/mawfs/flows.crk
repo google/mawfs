@@ -307,7 +307,8 @@ class MAWFSInstance @impl InstIFace {
         org := findCommonAncestor(target, other);
 
         # Attempt the merge.
-        result := Merger(target, org, other).merge();
+        merger := Merger(target, org, other);
+        result := merger.merge();
 
         # Install the new root node in the instance.
         __state.setRoot(result.newRoot);
@@ -327,7 +328,18 @@ class MAWFSInstance @impl InstIFace {
 
             return MergeResult(result.branch, null, conflict);
         } else {
+            # Merged with no conflicts.  Clean up.
+
+            # Remove the resident branch for the branch we merged.
             __state.removeResidentBranch(branch);
+
+            # Remove the temporary "merge branch" from the backing store.
+            ctx := __state.getRoot().getCachedNode().getContext();
+            ctx.removeBranch(merger.branch);
+
+            # Our tree is currently bogus, reset it.
+            __state.resetTree();
+
             commit := result.newRoot.getContext().getBaselineCommit();
             return MergeResult(null, commit, null);
         }
