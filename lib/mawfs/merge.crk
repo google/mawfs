@@ -23,7 +23,7 @@ import crack.lang cmp, makeHashVal, AppendBuffer;
 import crack.logger info;
 import crack.protobuf Field, Message, ProtoWriter;
 import crack.strutil StringArray;
-import mawfs.cache sig, CachedNode, Head;
+import mawfs.cache getPosixTime, sig, CachedNode, Head;
 
 @import crack.ann assert, impl, struct;
 @import crack.protobuf.ann protobuf;
@@ -210,7 +210,7 @@ class Mutation : Outcome {
 
     void apply(CachedNode parent, String name, Conflict parentConflicts) {
         clone := replacement.copy(parent.getContext());
-        parent.addChild(name, clone);
+        parent.addChild(name, clone, getPosixTime());
     }
 
     CachedNode get(CachedNode target) {

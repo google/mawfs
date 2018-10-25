@@ -75,7 +75,7 @@ class CommonAncestorTest : RepoTest {
         # commits.  The other scenarios should be tested above.
         t0 := Tree(store, 'master');
         root0 := t0.getRoot();
-        root0.addChild('first', makeFile(ctx, 'first'));
+        root0.addChild('first', makeFile(ctx, 'first'), 0);
         t0.commit();
 
         # Fork the other branch, before any other changes.
@@ -83,13 +83,13 @@ class CommonAncestorTest : RepoTest {
 
         t1 := Tree(store, 'master');
         root1 := t1.getRoot();
-        root1.addChild('foo', makeFile(ctx, 'foo'));
+        root1.addChild('foo', makeFile(ctx, 'foo'), 0);
         t1.commit();
 
         # Duplicate this branch into another.
         t2 := Tree(store, 'other');
         root2 := t2.getRoot();
-        root2.addChild('bar', makeFile(ctx, 'bar'));
+        root2.addChild('bar', makeFile(ctx, 'bar'), 0);
         t2.commit();
 
         @import crack.ann assert;

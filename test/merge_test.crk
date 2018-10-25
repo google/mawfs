@@ -138,9 +138,9 @@ class CommonChangeTest : MergeTest {
     void run() {
         org := makeDirNode();
         a := makeDirNode();
-        a.addChild('new', makeFileNode('new contents'));
+        a.addChild('new', makeFileNode('new contents'), 0);
         b := makeDirNode();
-        b.addChild('new', makeFileNode('new contents'));
+        b.addChild('new', makeFileNode('new contents'), 0);
         @assert(merge3(a, org, b) == UNCHANGED);
         @assert(a.getChild('new').getContents() == 'new contents');
     }
@@ -153,23 +153,23 @@ class DirMergeTest : MergeTest {
         target := makeDirNode();
         other := makeDirNode();
 
-        org.addChild('unchanged', makeFileNode('unchanged'));
-        target.addChild('unchanged', makeFileNode('unchanged'));
-        other.addChild('unchanged', makeFileNode('unchanged'));
+        org.addChild('unchanged', makeFileNode('unchanged'), 0);
+        target.addChild('unchanged', makeFileNode('unchanged'), 0);
+        other.addChild('unchanged', makeFileNode('unchanged'), 0);
 
-        target.addChild('targetAdd', makeFileNode('targetAdd'));
-        other.addChild('otherAdd', makeFileNode('otherAdd'));
+        target.addChild('targetAdd', makeFileNode('targetAdd'), 0);
+        other.addChild('otherAdd', makeFileNode('otherAdd'), 0);
 
-        target.addChild('conflicted', makeFileNode('conflicted'));
-        other.addChild('conflicted', makeFileNode('how you doing!'));
+        target.addChild('conflicted', makeFileNode('conflicted'), 0);
+        other.addChild('conflicted', makeFileNode('how you doing!'), 0);
 
         targetSub := makeDirNode();
-        target.addChild('sub', targetSub);
+        target.addChild('sub', targetSub, 0);
         otherSub := makeDirNode();
-        other.addChild('sub', otherSub);
+        other.addChild('sub', otherSub, 0);
 
-        targetSub.addChild('conflicted', makeFileNode('conflicted'));
-        otherSub.addChild('conflicted', makeFileNode('hehheh! Hippo party!'));
+        targetSub.addChild('conflicted', makeFileNode('conflicted'), 0);
+        otherSub.addChild('conflicted', makeFileNode('hehheh! Hippo party!'), 0);
 
         result := merge3(target, org, other);
         assertEqual(target.getChild('unchanged').getContents(), 'unchanged');
@@ -187,17 +187,17 @@ register(DirMergeTest());
 class FileDeletedTest : MergeTest {
     void run() {
         org := makeDirNode();
-        org.addChild('deleted', makeFileNode('deleted'));
-        org.addChild('dir', subdir := makeDirNode());
-        subdir.addChild('deletd', makeFileNode('deleted'));
+        org.addChild('deleted', makeFileNode('deleted'), 0);
+        org.addChild('dir', subdir := makeDirNode(), 0);
+        subdir.addChild('deletd', makeFileNode('deleted'), 0);
 
         a := makeDirNode();
-        a.addChild('deleted', makeFileNode('deleted'));
-        a.addChild('dir', subdir = makeDirNode());
-        subdir.addChild('deletd', makeFileNode('deleted'));
+        a.addChild('deleted', makeFileNode('deleted'), 0);
+        a.addChild('dir', subdir = makeDirNode(), 0);
+        subdir.addChild('deletd', makeFileNode('deleted'), 0);
 
         b := makeDirNode();
-        b.addChild('dir', subdir = makeDirNode());
+        b.addChild('dir', subdir = makeDirNode(), 0);
 
         result := merge3(a, org, b);
         a = result.get(a);
@@ -211,14 +211,14 @@ register(FileDeletedTest());
 class DeleteVersusModifiedTest : MergeTest {
     void run() {
         org := makeDirNode();
-        org.addChild('deleted', makeFileNode('deleted'));
-        org.addChild('modified', makeFileNode('modified'));
+        org.addChild('deleted', makeFileNode('deleted'), 0);
+        org.addChild('modified', makeFileNode('modified'), 0);
 
         a := makeDirNode();
-        a.addChild('modified', makeFileNode('new stuff!!'));
+        a.addChild('modified', makeFileNode('new stuff!!'), 0);
 
         b := makeDirNode();
-        b.addChild('deleted', makeFileNode('new stuff!!'));
+        b.addChild('deleted', makeFileNode('new stuff!!'), 0);
 
         result := merge3(a, org, b);
         if (conflict := Conflict.cast(result, null)) {
@@ -240,14 +240,14 @@ register(DeleteVersusModifiedTest());
 class FileAddedInOther : MergeTest {
     void run() {
         org := makeDirNode();
-        org.addChild('dir', makeDirNode());
+        org.addChild('dir', makeDirNode(), 0);
 
         a := makeDirNode();
-        a.addChild('dir', makeDirNode());
+        a.addChild('dir', makeDirNode(), 0);
 
         b := makeDirNode();
-        b.addChild('dir', sub := makeDirNode());
-        sub.addChild('foo', makeFileNode('this is foo'));
+        b.addChild('dir', sub := makeDirNode(), 0);
+        sub.addChild('foo', makeFileNode('this is foo'), 0);
         result := merge3(a, org, b);
         a = result.get(a);
         assertEqual(a.getChild('dir').getChild('foo').getContents(),
@@ -265,9 +265,9 @@ register(FileAddedInOther());
         MergeTest.setUp();
         org = makeDirNode();
         a = makeDirNode();
-        a.addChild('foo', makeFileNode('this is foo'));
+        a.addChild('foo', makeFileNode('this is foo'), 0);
         b = makeDirNode(ctx2);
-        b.addChild('bar', makeFileNode(ctx2, 'this is bar'));
+        b.addChild('bar', makeFileNode(ctx2, 'this is bar'), 0);
     }
 
     void checkTree(CachedNode root) {
@@ -292,8 +292,8 @@ register(CommitOnSuccessfulMerge());
 ## reflects the mergeable contents of the two child trees.
 class MergeBranchAfterConflicts : FooBarTest {
     void run() {
-        a.addChild('conflict', makeFileNode('version for a'));
-        b.addChild('conflict', makeFileNode(ctx2, 'version for b'));
+        a.addChild('conflict', makeFileNode('version for a'), 0);
+        b.addChild('conflict', makeFileNode(ctx2, 'version for b'), 0);
 
         merge := Merger(a, org, b).merge();
         a = merge.newRoot;

@@ -22,6 +22,7 @@ import crack.process Process, ProcessHandler, ProcessHandlerImpl,
     CRK_PROC_EXITED, CRK_PIPE_STDIN, CRK_PIPE_STDOUT;
 import crack.strutil StringArray;
 import crack.sys argv, exit;
+import crack.time Time;
 import crack.runtime open, close, sleep, O_RDONLY;
 
 import mawfs.params ParamInfo;
@@ -700,6 +701,28 @@ class AuthFailCloneTest : DoubleInstanceTest {
     }
 }
 register(AuthFailCloneTest());
+
+## Test setting/getting time attributes.
+class TimeTest : TestCase {
+
+    void checkTimes(int32 t) {
+        @assert((cwd/'fs/myfile').getModTime() >= t);
+        @assert((cwd/'fs/mydir').getModTime() >= t);
+        @assert((cwd/'fs/opened').getModTime() >= t);
+    }
+
+    void run() {
+        t := Time.now().secs;
+        (cwd/'fs/myfile').writeAll('here is some data');
+        (cwd/'fs/mydir').makeDir();
+        writer := (cwd/'fs/opened').writer();
+
+        checkTimes(t);
+        restartFS('master');
+        checkTimes(t);
+    }
+}
+register(TimeTest());
 
 runAllTests();
 

@@ -22,9 +22,10 @@ import crack.ext._fuse fuse_main = main, get_context, DoubleTimeSpec,
 import crack.fs makePath, Path;
 import crack.io SeekableReader, SeekableWriter, SEEK_SET;
 import crack.lang Buffer, Exception, SystemError, WriteBuffer;
-import crack.logger debug, error, info;
-import crack.runtime free, memcpy, Stat, EACCES, EEXIST, EINVAL, ENOENT,
-    ENOTDIR, O_APPEND, O_CREAT, O_RDONLY, O_RDWR, O_WRONLY, S_IFDIR, S_IFREG;
+import crack.logger debug, error, info, warn;
+import crack.runtime free, memcpy, Stat, TimeVal, EACCES, EEXIST, EINVAL,
+    ENOENT, ENOTDIR, O_APPEND, O_CREAT, O_RDONLY, O_RDWR, O_WRONLY, S_IFDIR,
+    S_IFREG;
 import crack.strutil split, StringArray;
 import crack.threads Mutex, MutexLock;
 import mawfs.path MAWFSPath;
@@ -112,6 +113,7 @@ int _getattr(byteptr path, Stat stbuf)
             stbuf.st_uid = stat.st_uid;
             stbuf.st_gid = stat.st_gid;
             stbuf.st_size = p.getSize();
+            stbuf.st_mtime = p.getModTime();
             return 0;
         } else {
             return -ENOENT;
@@ -346,7 +348,23 @@ int _chown(byteptr path, int uid, int gid) {
 
 int _utimens(byteptr path, DoubleTimeSpec times) {
     info `in utimens($path, times)`;
-    # We don't currently have support for this at just about any level.
+    try {
+        ctx := Context.get();
+        p := ctx.getPath(path);
+        if (!p || !p.exists())
+            return -ENOENT;
+        timesArr := array[TimeVal](times);
+        if (timesArr[1].secs == p.getModTime())
+            return 0;
+        if (mp := MAWFSPath.cast(p, null)) {
+            mp.setModTime(timesArr[1].secs);
+        } else {
+            warn `$path is not a MAWFSPath`;
+        }
+    } catch (Exception ex) {
+        error `utimens: $ex`;
+        return -EINVAL;
+    }
     return 0;
 }
 

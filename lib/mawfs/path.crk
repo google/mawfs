@@ -24,8 +24,9 @@ import crack.lang Buffer, Exception, FieldSet, InvalidArgumentError,
     InvalidStateError, WriteBuffer, SystemError;
 import crack.logger debug;
 import crack.runtime S_IFDIR, S_IFREG;
+import crack.time Time;
 import mawfs.blockstore Node, MODE_DIR, MODE_EXE;
-import mawfs.cache CachedNode;
+import mawfs.cache getPosixTime, CachedNode;
 
 @import crack.ann impl, implements, interface;
 @import crack.fieldset_ann fieldset_accessors;
@@ -202,7 +203,7 @@ class MAWFSPath : RWPath {
 
     void delete() {
         __checkMutable();
-        __parent.__rep.deleteChild(__name);
+        __parent.__rep.deleteChild(__name, getPosixTime());
         __rep.releaseExtRef();
         __rep = null;
     }
@@ -219,7 +220,15 @@ class MAWFSPath : RWPath {
         return FStr() `$(__parent ? __parent.getFullName() : '')/$__name`;
     }
 
-    int getModTime() { return 0 }
+    int getModTime() {
+        __checkExists();
+        return __rep.getTime();
+    }
+
+    void setModTime(int32 time) {
+        __checkMutable();
+        __rep.setTime(time);
+    }
 
     int getMode() { return 0 }
 
@@ -273,9 +282,11 @@ class MAWFSPath : RWPath {
             throw SystemError(FStr() `$(getFullName()) already exists`);
         }
 
+        time := getPosixTime();
         node := Node();
         node.mode = MODE_DIR;
-        __rep = __parent.__rep.addChild(__name, node);
+        node.time = time;
+        __rep = __parent.__rep.addChild(__name, node, time);
         __rep.addExtRef();
     }
 
@@ -293,11 +304,14 @@ class MAWFSPath : RWPath {
                 throw SystemError(FStr() I`Can not write to directory \
                                            $(getFullName())`
                                   );
-            __rep.resize(0);
+            __rep.resize(0, getPosixTime());
         } else if (__parent) {
             # Create a new node.
             parentRep := __parent.__rep;
-            __rep = parentRep.addChild(__name, Node());
+            time := getPosixTime();
+            node := Node();
+            node.time = time;
+            __rep = parentRep.addChild(__name, node, time);
             __rep.addExtRef();
         } else {
             # The root path should have been created with a cached node.
@@ -311,15 +325,15 @@ class MAWFSPath : RWPath {
     void truncate(uint64 newSize) {
         __checkMutable();
         __checkExists();
-        __rep.resize(newSize);
+        __rep.resize(newSize, getPosixTime());
     }
 
     void moveTo(Path other) {
         __checkMutable();
         o := MAWFSPath.cast(other);
         newParent := o.__parent;
-        __parent.__rep.deleteChild(__name);
-        newParent.__rep.addChild(other.getName(), __rep);
+        __parent.__rep.deleteChild(__name, getPosixTime());
+        newParent.__rep.addChild(other.getName(), __rep, getPosixTime());
         o.__rep = __rep;
         __rep = null;
     }
@@ -352,7 +366,7 @@ class MAWFSPath : RWPath {
             throw InvalidStateError(
                 FStr() `File $(getFullName()) is a directory.`);
 
-        __rep.write(pos, data);
+        __rep.write(pos, data, getPosixTime());
     }
 
     void read(uint pos, WriteBuffer data) {

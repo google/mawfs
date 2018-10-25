@@ -57,23 +57,29 @@ const int32
     ## contains;
     ## -   node or digest
     ## -   name (add_child is only applied to a directory)
+    ## -   time (optional)
     CHANGE_ADD_CHILD = 1,
 
-    ## Delete a child (contains a name).
+    ## Delete a child (contains a name and optionally a time).
     CHANGE_DELETE_CHILD = 2,
 
     ## Write data to node contents (respecting all current rules about file
-    ## size, layout etc).  Contains pos and data.
+    ## size, layout etc).  Contains pos and data and (optionally) time.
     CHANGE_WRITE = 3,
 
-    ## Resize node contents.  Contains newSize.
+    ## Resize node contents.  Contains newSize and (optionally) time.
     CHANGE_RESIZE = 4,
 
     ## Replace a child.
     ## -    path is the path to the parent.
     ## -    index is the index of the child within the parent.
     ## -    node or digest.
-    CHANGE_REPLACE_CHILD = 5;
+    ## -    time (optional)
+    CHANGE_REPLACE_CHILD = 5,
+
+    ## Set an attribute.
+    ## -    time (if provided) is the new mtime of the node.
+    CHANGE_SETATTR = 6;
 
 
 ## Return the size of a node.
@@ -112,6 +118,14 @@ uintz _getNodeSize(Node node) {
 ## string "null".
 String sig(String digest) {
     return digest ? altEncode(digest) : 'null';
+}
+
+## Returns the current time as seconds since the epoch.
+## This only lives in this module because it's convenient to the other mdoules
+## that use it.  Belongs in a module containing very general functions that
+## don't use anything else from mawfs, same as sig().
+int32 getPosixTime() {
+    return Time.now().secs;
 }
 
 class Cache {
@@ -1129,7 +1143,7 @@ class CachedNode {
 
     ## Internal add child method, which does everything but create a change
     ## record.
-    CachedNode __addChild(String name, CachedNode child) {
+    CachedNode __addChild(String name, CachedNode child, int32 time) {
         child.parent = this;
 
         CachedEntry entry = {Entry(), child, this};
@@ -1140,6 +1154,8 @@ class CachedNode {
         # Add the child.
         orgSize := __children.add(entry);
         node.size += (entry.entry.size = child.getSize()) - orgSize;
+        if (time)
+            node.time = time;
 
         # Mark the node and the entire ancestor chain as dirty.
         __markDirty();
@@ -1191,20 +1207,21 @@ class CachedNode {
 
     ## Add a new child which is a CachedNode.
     ## You should use this for adding children with cached descendants.
-    void addChild(String name, CachedNode child) {
+    void addChild(String name, CachedNode child, int32 time) {
         # If the child is dirty and has children, we have to go through and
         # replay each of the dirty children against the journal (this can
         # happen if a node is copied from another context).
         bool needsChildRecord =
             child.isDirty() && child.__populateChildren(false);
 
-        __addChild(name, child);
+        __addChild(name, child, time);
 
         # Record the change in the journal.
         change := Change();
         change.type = CHANGE_ADD_CHILD;
         change.name = name;
         change.node = child.node;
+        change.time = time;
         __recordChange(change);
 
         # Record the children against the journal.
@@ -1213,26 +1230,29 @@ class CachedNode {
     }
 
     ## Add a new child node with the specified name.
-    CachedNode addChild(String name, Node node) {
-        addChild(name, child := CachedNode(__ctx, null, node));
+    CachedNode addChild(String name, Node node, int32 time) {
+        addChild(name, child := CachedNode(__ctx, null, node), time);
         return child;
     }
 
     ## Delete the named child and return true, or return false if the child
     ## doesn't exist.
-    bool deleteChild(String name) {
+    bool deleteChild(String name, int32 time) {
         if (!__populateChildren(false))
             return false;
         child := __children.delete(name);
         if (!child)
             return false;
         node.size -= child.getSize();
+        if (time)
+            node.time = time;
         child.releaseNode();
 
         # Record the change.
         change := Change();
         change.type = CHANGE_DELETE_CHILD;
         change.name = name;
+        change.time = time;
         __recordChange(change);
         __markDirty();
 
@@ -1745,7 +1765,7 @@ class CachedNode {
 
     ## Delete a range of bytes from the file.  This should only be applied to
     ## the toplevel node of a file.
-    void deleteSpan(uint64 start, uint64 end) {
+    void deleteSpan(uint64 start, uint64 end, int32 time) {
         if (__deleteSpan(start, end)) {
             # We need to collapse a level.
             firstChild := __children[0].getNode();
@@ -1762,6 +1782,8 @@ class CachedNode {
             firstChild.__release();
         }
 
+        if (time)
+            node.time = time;
         __markDirty();
     }
 
@@ -1859,7 +1881,7 @@ class CachedNode {
     ## Write data to a file at 'pos'.
     ##
     ## This needs to be applied to the top node of the file.
-    void __write(uint64 pos, Buffer data) {
+    void __write(uint64 pos, Buffer data, int32 time) {
         class ListWriter @impl Writer {
             StringArray items = {};
 
@@ -1982,41 +2004,71 @@ class CachedNode {
             }
         }
 
+        if (time)
+            node.time = time;
         __markDirty();
     }
 
-    void write(uint64 pos, Buffer data) {
-        __write(pos, data);
+    ## If "time" is zero, it is ignored.
+    void write(uint64 pos, Buffer data, int32 time) {
+        __write(pos, data, time);
 
         change := Change();
         change.type = CHANGE_WRITE;
         @assert(pos < 0x100000000);
         change.pos = pos;
         change.data = String(data);
+        change.time = time;
         __recordChange(change);
     }
 
-    void __resize(uint64 newSize) {
-        if (newSize == node.size)
+    ## Set the node modification time.  Unlike all of the other functions, a
+    ## 'time' value of 0 is actually applied to the node, making this the only
+    ## way to set a node's time to 0.
+    void setTime(int32 time) {
+        if (time != node.time) {
+            node.time = time;
+            __markDirty();
+            change := Change();
+            change.type = CHANGE_SETATTR;
+            change.time = time;
+            __recordChange(change);
+        }
+    }
+
+    void __resize(uint64 newSize, int32 time) {
+        if (newSize == node.size) {
+            if (time && time != node.time) {
+                node.time = time;
+                __markDirty();
+            }
             return;
-        else if (newSize < node.size)
-            deleteSpan(newSize, node.size);
-        else
-            __write(newSize, '');
+        } else if (newSize < node.size) {
+            deleteSpan(newSize, node.size, time);
+        } else {
+            __write(newSize, '', time);
+        }
     }
 
     ## Resize contents to the specified size.  Truncate the node if less than
     ## the existing size, pad with zeroes if greater than the existing size.
     ## Returns false if unable to accomodate.
-    bool resize(uint64 newSize) {
-        __resize(newSize);
+    ## If "time" is zero, it is ignored.
+    bool resize(uint64 newSize, int32 time) {
+        __resize(newSize, time);
 
         change := Change();
         change.type = CHANGE_RESIZE;
         change.newSize = newSize;
+        change.time = time;
         __recordChange(change);
 
         return true;
+    }
+
+    ## Returns the node modification time.
+    int32 getTime() {
+        return node.time;
     }
 
     ## Commit all outstanding changes in the tree.  Returns the new digest.
@@ -2078,6 +2130,10 @@ class CachedNode {
                 out ` write\n`;
             } else if (change.type == CHANGE_RESIZE) {
                 out ` resize to $(change.newSize)`;
+            } else if (change.type == CHANGE_SETATTR) {
+                out ` change attributes: `;
+                if (change.time)
+                    out `time = $(change.time),`;
             }
         }
 
@@ -2114,7 +2170,9 @@ class CachedNode {
     ## taken for use by a new CachedNode without cloning.
     void __applyChange(Change change) {
         if (change.type == CHANGE_ADD_CHILD) {
-            __addChild(change.name, CachedNode(__ctx, null, change.node));
+            __addChild(change.name, CachedNode(__ctx, null, change.node),
+                       change.time
+                       );
         } else if (change.type == CHANGE_REPLACE_CHILD) {
             node := change.node ? change.node :
                                   __ctx.getNode(change.digest).clone();
@@ -2126,11 +2184,18 @@ class CachedNode {
                 throw InvalidStateError(
                     FStr() `replaying delete: can't delete child $(change.name)`
                 );
+            if (change.time)
+                node.time = change.time;
             __markDirty();
         } else if (change.type == CHANGE_WRITE) {
-            __write(uint64(change.pos), change.data);
+            __write(uint64(change.pos), change.data, change.time);
         } else if (change.type == CHANGE_RESIZE) {
-            __resize(uint64(change.newSize));
+            __resize(uint64(change.newSize), change.time);
+        } else if (change.type == CHANGE_SETATTR) {
+            if (change.time) {
+                node.time = change.time;
+                __markDirty();
+            }
         } else {
             error `Unrecognized change type $(change.type)`;
         }
@@ -2508,7 +2573,7 @@ NodeWriter _makeWriteFile(NodeContext ctx) {
         oper init(NodeContext ctx) : node = CachedNode(ctx, null, Node()) {}
 
         void write(Buffer data) {
-            node.write(pos, data);
+            node.write(pos, data, 0);
             pos += data.size;
         }
 
@@ -2553,7 +2618,7 @@ class OrphanContext : NodeContext._OrphanContextBase {
     bool shouldCommit() { return false }
 
     void addOrphan(CachedNode node) {
-        root.addChild(FStr() `$(uintz(node))`, node);
+        root.addChild(FStr() `$(uintz(node))`, node, 0);
     }
 }
 
