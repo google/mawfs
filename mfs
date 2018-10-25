@@ -530,7 +530,7 @@ def add_peer(peer_name, peer_addr):
 
 def main(args):
     global instance
-    opts, args = getopt.getopt(args[1:], 'i:')
+    opts, args = getopt.gnu_getopt(args[1:], 'i:')
     for opt, val in opts:
         if opt == '-i':
             instance = val
