@@ -607,6 +607,43 @@ class CommandManager {
         result := getRPC().getProxy().getInfo();
         cout `Mountpoint: $(result.mountpoint)\n`;
     }
+
+    ## The "verify" command.
+    void verify() {
+        checkArgs(3, 'Usage: mawfs verify <backing-dir>\n');
+
+        backingDir := makePath(argv[2]);
+        objectsDir := backingDir/'objects';
+        failed := false;
+        if (!objectsDir.exists()) {
+            cerr `No "objects" dir found\n`;
+            failed = true;
+        } else {
+
+            # Verify the checksums on all chunks.
+            for (file :in objectsDir.children()) {
+                if (sig(hashFile(file)) != file.getName()) {
+                    cerr `$file has an invalid signature\n`;
+                    failed = true;
+                }
+            }
+
+            # Verify that all refs point to existing chunks.
+            for (file :in (backingDir/'refs').children()) {
+                if (!(objectsDir/file.readAll()).exists()) {
+                    cerr `Missing chunk for ref $(file.getName())\n`;
+                    failed = true;
+                }
+            }
+        }
+
+        if (failed) {
+            cerr `Some validations failed.\n`;
+            exit(1);
+        } else {
+            cerr `Directory $backingDir looks good.\n`;
+        }
+    }
 }
 
 # The main function, which is a command dispatcher.
@@ -764,6 +801,8 @@ void main() {
             cm.dbg_log();
         } else if (cmd == 'info') {
             cm.info();
+        } else if (cmd == 'verify') {
+            cm.verify();
         } else {
             cerr `Unknown command: $cmd\n`;
             usage();

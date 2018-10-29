@@ -528,6 +528,12 @@ def add_peer(peer_name, peer_addr):
     run_mawfs('addPeer', '-i', get_instance().get_descriptor(), peer_name,
               peer_addr)
 
+@command
+def verify():
+    """Verify chunks and references in the backing dir."""
+    backing_dir = get_backing_dir(get_instance().mountpoint)
+    return run_mawfs('verify', backing_dir)
+
 def main(args):
     global instance
     opts, args = getopt.gnu_getopt(args[1:], 'i:')
