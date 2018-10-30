@@ -84,7 +84,7 @@ const int
         ## top-level file nodes and directory nodes.
         optional int32 mode = 5;
 
-        ## Time in seconds since the epoch.
+        ## Last modification time in seconds since the epoch.
         optional int32 time = 6;
 
 # Recursively defined protobufs don't seem to work.  And anyway, we really
