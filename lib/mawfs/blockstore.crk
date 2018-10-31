@@ -22,7 +22,7 @@ import crack.hash Hash;
 import crack.hash.sha256 SHA256;
 import crack.io Formatter, StringReader, SEEK_SET;
 import crack.lang cmp, makeHashVal, AppendBuffer, Buffer, Exception,
-    InvalidArgumentError, ManagedBuffer, SystemError;
+    FreeBase, InvalidArgumentError, ManagedBuffer, SystemError;
 import crack.logger debug;
 import crack.serial SerialReader, SerialWriter;
 import crack.runtime ENOENT;
@@ -86,10 +86,6 @@ const int
 
         ## Last modification time in seconds since the epoch.
         optional int32 time = 6;
-
-# Recursively defined protobufs don't seem to work.  And anyway, we really
-# to store the digests of the elements, not the nodes themselves.
-#        repeated Node elems = 4;
     }
 
     ## A commit.  These objects track the history of an entire filesystem.
@@ -327,12 +323,32 @@ class Session {
     ## Get the node at the given digest, null if it's not currently stored.
     @abstract Node getNode(String digest);
 
+    ## Mix-in to allow status to be passed back with persisted objects.
+    class ChunkStatus : FreeBase {
+        ## Set to true if the node was loaded from a remote source.
+        bool remote;
+    }
+
+    ## Bundles a node and status information.
+    class NodeAndStatus : Node, ChunkStatus {}
+
+    ## Get the node at the given digest and information on where we got it
+    ## from, null iif it's not currently stored.
+    @abstract NodeAndStatus getNodeAndStatus(String digest);
+
     ## Stores a Commit, returns its digest.
     @abstract String storeCommit(Commit commit);
 
     ## Retrieves a commit object from its digest, null if it's not currently
     ## stored.
     @abstract Commit getCommit(String digest);
+
+    ## Bundles a Commit and status information.
+    class CommitAndStatus : Commit, ChunkStatus {}
+
+    ## Retrieves a commit object and status information from its digest, null
+    ## if it's not currently stored.
+    @abstract CommitAndStatus getCommitAndStatus(String digest);
 
     ## Returns the digest of the head commit of a given branch.   Returns
     ## null if the branch is not defined.
@@ -507,12 +523,9 @@ class ChunkStore @impl NodeStore {
 
     void setRemoteReader(RemoteReader remote) { __remote = remote }
 
-    ## Loads and returns the chunk with the specified digest, returns null if
-    ## the chunk doesn't exist in the store.
-    ##
-    ## Verifies the chunk digest on read, throws BadDigestError if it doesn't
-    ## match.
-    Chunk load(String digest) {
+    ## Returns the chunk for the digest or null.
+    ## status is nullable, if provided status is assigned.
+    Chunk __loadChunk(String digest, ChunkStatus status) {
         path := __dir/'objects'/altEncode(digest);
         Reader src;
         String remoteContents;
@@ -535,8 +548,31 @@ class ChunkStore @impl NodeStore {
         if (remoteContents) {
             path.parent().makeDirs();
             path.writeAll(remoteContents);
+            if (!(status is null))
+                status.remote = true;
+        } else if (!(status is null)) {
+            status.remote = false;
         }
         return result;
+    }
+
+    ## Loads the chunk with the specified digest into 'msg' and returns true,
+    ## returns false if the chunk doesn't exist in the store.
+    ##
+    ## Verifies the chunk digest on read, throws BadDigestError if it doesn't
+    ## match.
+    Chunk load(String digest) {
+        return __loadChunk(digest, null);
+    }
+
+    ## Load the chunk from 'digest' into 'msg'.
+    ## status is nullable, used to pass back remote/local status if defined.
+    bool __load(String digest, Message msg, ChunkStatus status) {
+        chunk := __loadChunk(digest, status);
+        if (!chunk)
+            return false;
+        readMessageFromString(msg, chunk.contents);
+        return true;
     }
 
     Path __objectsDir() {
@@ -564,13 +600,13 @@ class ChunkStore @impl NodeStore {
     }
 
     Node getNode(String digest) {
-        chunk := load(digest);
-        if (!chunk)
-            return null;
-
         Node node = {};
-        readMessageFromString(node, chunk.contents);
-        return node;
+        return __load(digest, node, null) ? node : null;
+    }
+
+    NodeAndStatus getNodeAndStatus(String digest) {
+        NodeAndStatus node = {};
+        return __load(digest, node, node) ? node : null;
     }
 
     ## Stores the node, returns its digest.
@@ -587,13 +623,13 @@ class ChunkStore @impl NodeStore {
     }
 
     Commit getCommit(String digest) {
-        chunk := load(digest);
-        if (!chunk)
-            return null;
-
         Commit commit = {};
-        readMessageFromString(commit, chunk.contents);
-        return commit;
+        return __load(digest, commit, null) ? commit : null;
+    }
+
+    CommitAndStatus getCommitAndStatus(String digest) {
+        CommitAndStatus commit = {};
+        return __load(digest, commit, commit) ? commit : null;
     }
 
     String storeCommit(Commit commit) {

@@ -1,11 +1,12 @@
 
+import crack.cont.hashmap HashMap;
 import crack.fs makePath, cwd;
-import crack.io cerr;
+import crack.io cerr, StringWriter;
 import crack.lang Exception;
 import crack.sys argv;
-import mawfs.blockstore Change, ChunkStore, FSInfo;
+import mawfs.blockstore Change, ChunkStore, Commit, FSInfo, Node, RemoteReader;
 
-@import crack.ann assert;
+@import crack.ann assert, impl;
 
 # Change directory to the parent of this file.
 cwd.set(makePath(argv[0]).parent().parent());
@@ -14,10 +15,19 @@ testRoot := makePath('blockstore_test');
 if (testRoot.exists())
     testRoot.deleteTree();
 
+
+class FakeRemoteReader @impl RemoteReader {
+    HashMap[String, String] data = {};
+    String getContents(String digest) {
+        return data.get(digest);
+    }
+}
+
 try {
 
     testRoot.makeDirs();
-    store := ChunkStore(testRoot, FSInfo('01234567890123456789012345678901'));
+    fsInfo := FSInfo('01234567890123456789012345678901');
+    store := ChunkStore(testRoot, fsInfo);
 
     # Verify that a branch starts out as null and with an empty journal.
     @assert(store.getHead('master') is null);
@@ -53,6 +63,46 @@ try {
     @assert(!store.getJournalSize('foo'));
     for (change :in store.makeJournalIter('foo'))
         cerr `Got change in deleted journal!\n`;
+
+    rr := FakeRemoteReader();
+    store.setRemoteReader(rr);
+
+    node := Node();
+    node.contents = 'foo was here';
+
+    nodeDigest := store.storeNode(node);
+    commit := Commit();
+    commit.root = nodeDigest;
+    commitDigest := store.storeCommit(commit);
+
+    nodeAndStatus := store.getNodeAndStatus(nodeDigest);
+    @assert(!nodeAndStatus.remote);
+    @assert(nodeAndStatus == node);
+    commitAndStatus := store.getCommitAndStatus(commitDigest);
+    @assert(!commitAndStatus.remote);
+    @assert(commitAndStatus == commit);
+
+    node = Node();
+    node.contents = 'I am bar';
+    tmp := StringWriter();
+    nodeDigest = fsInfo.writeChunk(tmp, node.toString());
+    rr.data[nodeDigest] = tmp.string();
+    commit = Commit();
+    commit.root = nodeDigest;
+    tmp = StringWriter();
+    commitDigest = fsInfo.writeChunk(tmp, commit.toString());
+    rr.data[commitDigest] = tmp.string();
+    nodeAndStatus = store.getNodeAndStatus(nodeDigest);
+    @assert(nodeAndStatus.remote);
+    @assert(nodeAndStatus == node);
+    commitAndStatus = store.getCommitAndStatus(commitDigest);
+    @assert(commitAndStatus.remote);
+    @assert(commitAndStatus == commit);
+
+    commit = Commit();
+
+
+
 
     cerr `ok\n`;
 

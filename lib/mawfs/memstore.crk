@@ -65,13 +65,22 @@ class MemNodeStore @impl NodeStore {
         return chunk.digest;
     }
 
-    Node getNode(String digest) {
+    @final bool __load(String digest, Message msg) {
         serialized := __objs.get(digest);
         if (serialized is null)
-            return null;
-        Node result = {};
-        readMessageFromString(result, serialized);
-        return result;
+            return false;
+        readMessageFromString(msg, serialized);
+        return true;
+    }
+
+    Node getNode(String digest) {
+        Node node = {};
+        return __load(digest, node) ? node : null;
+    }
+
+    NodeAndStatus getNodeAndStatus(String digest) {
+        NodeAndStatus node = {};
+        return __load(digest, node) ? node : null;
     }
 
     String storeCommit(Commit commit) {
@@ -79,12 +88,13 @@ class MemNodeStore @impl NodeStore {
     }
 
     Commit getCommit(String digest) {
-        serialized := __objs.get(digest);
-        if (serialized is null)
-            return null;
-        Commit result = {};
-        readMessageFromString(result, serialized);
-        return result;
+        Commit commit = {};
+        return __load(digest, commit) ? commit : null;
+    }
+
+    CommitAndStatus getCommitAndStatus(String digest) {
+        CommitAndStatus commit = {};
+        return __load(digest, commit) ? commit : null;
     }
 
     void setHead(String branch, String head) {
