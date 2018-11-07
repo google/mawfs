@@ -1,0 +1,15 @@
+#!/bin/sh
+# Run the crack/mawfs docker image with all of the correct options.
+# Mounts the effective user's home directory as /mnt.
+
+if [ -n "$1" ]; then
+    echo "HOME=$1"
+    HOME_OPTS="-v $1:/mnt -e HOME=/mnt"
+else
+    echo -e "\033[33mNo home directory specified, backing directories will be
+created in the container.  Remember to \"commit\" if you want to keep them!\033[0m"
+fi
+
+docker run --device /dev/fuse --cap-add SYS_ADMIN \
+    --security-opt apparmor:unconfined \
+    $HOME_OPTS -ti crack/mawfs /bin/bash
