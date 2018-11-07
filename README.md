@@ -3,11 +3,15 @@ MAWFS - A Personal Encrypted Distributed Filesystem
 ===================================================
 
 MAWFS aims to be an encrypted, distributed, branching filesystem.  It is
-currently very much in development, but still somewhat usable in that it
-preseents a FUSE filesystem around an encrypted backing store.
+currently in early beta.  You can create an encrypted filesystem and
+replicate with merging among a set of peers.
 
-MAWFS is written in [Crack.](http://crack-lang.org)  If you want to play with
-it, you'll need to install crack 1.3.
+If you want to play with it, the easiest way to do so is to pull the docker
+image `crack/mawfs` from docker hub.  Alternately, you can build from source.
+
+MAWFS is written in [Crack.](http://crack-lang.org).  If you want to build it
+from source, you'll need at least Crack 1.4, and preferably HEAD on the master
+branch, to do so.
 
 Usage Example
 -------------
@@ -34,24 +38,28 @@ This code is still likely to have a few bugs in it and we will likely
 introduce incompatibilities, so it is not recommended that you use MAWFS
 for anything important yet.
 
-Current Status and Ultimate Goal
---------------------------------
+Current Status
+--------------
 
-The system currently presents a FUSE based filesystem that stores its data as
-encrypted, content addressable objects in a backing store.  There is a
-git-like commit history that records the state of the filesystem at a sequence
-of points in its history and an unencrypted branch file in the backing store
-that points to the latest commit for the branch (the "branch head").
+The system is currently in early beta.  While it is largely usable for
+experimental purposes, you are advised against relying on the security and
+integrity of the system at this time.
 
-The backing store also contains a journal file consisting of a sequence of
-mutations to the filesystem since the last commit.  This journal is erased
-upon performing the next commit, which is simply an "fsync" applied to the
-root directory that can be performed using the "mawfs commit" command.
+If you do use it for anything important, you are encouraged to make local
+backups and perform regular verification.  You are also encouraged to
+[subscribe to the mailing list](https://groups.google.com/forum/#!forum/mawfs-dev)
+to stay notified of any security issues that emerge.
 
-The eventual goal is to provide a system (ideally interoperable with IPFS and
-Peergos, see below) that allows a MAWFS filesystem to be automatically
-replicated across multiple peers.  Since peers can be used offline, and
-therefore can diverge, we will also support user directed conflict resolution.
+Bug reports and code contribuutions gladly accepted.  Please sign Google's
+[Contributor License
+Agreement](https://groups.google.com/forum/#!forum/mawfs-dev) before sending
+any pull requests.
+
+Contacts
+--------
+
+-   [Mailing List](https://groups.google.com/forum/#!forum/mawfs-dev)
+    mawfs-dev@googlegroups.com
 
 Related Projects
 ----------------
