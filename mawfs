@@ -52,7 +52,7 @@ import mawfs.inst InstanceState, UserModule;
 import mawfs.params ParamInfo;
 import mawfs.peernet PeerNetwork, RemoteReaderImpl;
 import mawfs.rawchunk RawChunkReader;
-import mawfs.rpc parseAddr, setInst, ExtendedAddress, PeerProxy;
+import mawfs.rpc parseAddr, setInst, ExtendedAddress, PeerProxy, TRAVERSE_FULL;
 import mawfs.util traverse;
 
 @import crack.ann impl, struct;
@@ -644,6 +644,12 @@ class CommandManager {
             cerr `Directory $backingDir looks good.\n`;
         }
     }
+
+    ## The "traverse" command.
+    void traverse() {
+        checkArgs(3, 'Usage: mawfs traverse <branch>');
+        getRPC().getProxy().traverse(args[2], TRAVERSE_FULL);
+    }
 }
 
 # The main function, which is a command dispatcher.
@@ -803,6 +809,8 @@ void main() {
             cm.info();
         } else if (cmd == 'verify') {
             cm.verify();
+        } else if (cmd == 'traverse') {
+            cm.traverse();
         } else {
             cerr `Unknown command: $cmd\n`;
             usage();

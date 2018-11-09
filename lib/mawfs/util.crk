@@ -49,6 +49,12 @@ void traverse(NodeStore store, Commit commit) {
             traverse(store, parentCommit);
         }
     }
+
+    # Pull journal info if there is any.
+    if (commit.journalInfo) {
+        journalInfo := store.getNode(commit.journalInfo);
+        traverse(store, journalInfo);
+    }
 }
 
 class _CommitFinder {

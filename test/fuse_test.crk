@@ -23,7 +23,7 @@ import crack.process Process, ProcessHandler, ProcessHandlerImpl,
 import crack.strutil StringArray;
 import crack.sys argv, exit;
 import crack.time Time;
-import crack.runtime open, close, sleep, O_RDONLY;
+import crack.runtime open, close, random, sleep, srandom, O_RDONLY;
 
 import mawfs.params ParamInfo;
 import test.unittest register, runAllTests, Test, TestFailure;
@@ -356,6 +356,12 @@ register(ParamsTest());
 @abstract class DoubleInstanceTest : TestCase {
     Path backing2, fs2;
 
+    ## Clone and start the slave.
+    void initSlave() {
+        runMawfs(StringArray!['clone', 'localhost:12543', 'backing2']);
+        startFS('master', 'backing2', 'fs2');
+    }
+
     void setUp() {
         backing2 = makePath('backing2');
         fs2 = makePath('fs2');
@@ -625,13 +631,13 @@ register(RestoreStateTest());
 
 ## Verify that we can still run things with a missing peer.
 class MissingPeerTest : DoubleInstanceTest {
+
     void run() {
         # Move the master to port 12543, clone it to the slave and start the
         # slave.
         (makePath('backing')/'config/peers').writeAll('[server]\nport = 12543\n');
         restartFS('master');
-        runMawfs(StringArray!['clone', 'localhost:12543', 'backing2']);
-        startFS('master', 'backing2', 'fs2');
+        initSlave();
 
         # Shut down both, verify that we can bring up the slave (the slave has
         # the master as its peer).
@@ -723,6 +729,74 @@ class TimeTest : TestCase {
     }
 }
 register(TimeTest());
+
+class TraversalTest : DoubleInstanceTest {
+    Path fsRoot;
+
+    void setUp() {
+        fsRoot = cwd/'fs';
+        DoubleInstanceTest.setUp();
+    }
+
+    void addBigFile() {
+        filename := FStr() `$(random())`;
+        file := (fsRoot/filename).writer();
+        const BUF_SIZE := 71912;
+        buf := AppendBuffer(BUF_SIZE);
+        for (int i = 0; i < BUF_SIZE; ++i)
+            buf.append(byte(random()));
+    }
+
+    void commit() {
+        runMawfs(StringArray!['commit', fsRoot.getFullName()]);
+    }
+
+    void populate() {
+        srandom(0x58f28595);
+        fsRoot := cwd/'fs';
+        addBigFile();
+        commit();
+        addBigFile();
+        commit();
+        addBigFile();
+        commit();
+    }
+
+    ## Return the list of file names in the object directory (in lexical sort
+    ## order).
+    StringArray getObjects(Path root) {
+        objects := StringArray();
+        for (child :in (root/'objects').children())
+            objects.append(child.getName());
+        objects.sort();
+        return objects;
+    }
+
+    void run() {
+        (makePath('backing')/'config/peers').writeAll('[server]\nport = 12543\n');
+        restartFS('master');
+        initSlave();
+        populate();
+        runMawfs(StringArray!['pull', '-i', 'localhost:9119', 'master']);
+
+        # Get the objects in the slave backing directory.
+        objects := getObjects(backing2);
+
+        # Restart the slave to clear the memory cache.
+        restartSlaveFS('master');
+
+        # Traverse.
+        runMawfs(StringArray!['-i', 'localhost:9119', 'traverse', 'master']);
+
+        # Verify that we've got all of the objects back and then some.
+        newObjects := getObjects(backing2);
+        @assert(objects.count() < newObjects.count());
+
+        masterObjects := getObjects(cwd/'backing');
+        assertEqual(newObjects, masterObjects);
+    }
+}
+register(TraversalTest());
 
 runAllTests();
 

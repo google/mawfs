@@ -162,7 +162,16 @@ class PeerDisconnectedError : Exception {}
         # was not encrypted correctly).
         optional string error = 3;
     }
+
+    message TraverseRequest {
+        optional string branch = 1;
+        optional int32 algo = 2;
+    }
 }
+
+const int
+    ## Try to traverse every node and commit in the branch.
+    TRAVERSE_FULL = 0;
 
 class MergeResult : MergeResponse {
     oper init(String mergeBranch, String commit, Array[String] conflicts) {
@@ -205,6 +214,10 @@ class LoginError : Exception {
                            GeneralCallback[int] callback
                            );
     @abstract InfoResponse getInfo();
+    @abstract void traverse(String branch, int algo,
+                            GeneralCallback[int] callback
+                            );
+
 
     ## Responds to a login challenge from a client.
     @abstract LoginState answerChallenge(String challenge);
@@ -542,6 +555,14 @@ class PeerProxy {
         InfoResponse result = {};
         readMessageFromString(result, respData);
         return result;
+    }
+
+    ## Traverse all nodes in branch.  See TRAVERSE_* constants above.
+    void traverse(String branch, int algo) {
+        req := TraverseRequest();
+        req.branch = branch;
+        req.algo = int32(algo);
+        __invoke('traverse', req.toString());
     }
 
     ## Get the current mountpoint (a subset of getInfo()).
@@ -892,6 +913,14 @@ void getInfo(Context context, RPCMessage msg, CommHandler comm) {
     }
 }
 
+void traverse(Context context, RPCMessage msg, CommHandler comm) {
+    req := TraverseRequest();
+    readMessageFromString(req, msg.request);
+    _inst.traverse(req.branch, req.algo,
+                   EmptyResponseCallback(context, comm, msg.id)
+                   );
+}
+
 void login(Context context, RPCMessage msg, CommHandler comm) {
     req := LoginRequest();
     readMessageFromString(req, msg.request);
@@ -944,6 +973,7 @@ class PeerServiceCommFactory @impl CommHandlerFactory {
         __methods['cancelMerge'] = MethodHandler(cancelMerge);
         __methods['addPeer'] = MethodHandler(addPeer);
         __methods['getInfo'] = MethodHandler(getInfo);
+        __methods['traverse'] = MethodHandler(traverse);
         # getMountpoint is just getInfo with "noauth".
         __methods['getMountpoint'] = MethodHandler(getInfo, true);
         __methods['login'] = MethodHandler(login, true);
