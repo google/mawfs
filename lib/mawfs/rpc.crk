@@ -171,7 +171,11 @@ class PeerDisconnectedError : Exception {}
 
 const int
     ## Try to traverse every node and commit in the branch.
-    TRAVERSE_FULL = 0;
+    TRAVERSE_FULL = 0,
+
+    ## Traverse until we arrive at chunks that have already been recorded as
+    ## fully traversed.
+    TRAVERSE_DELTA = 1;
 
 class MergeResult : MergeResponse {
     oper init(String mergeBranch, String commit, Array[String] conflicts) {

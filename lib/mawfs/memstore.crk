@@ -22,8 +22,8 @@ import crack.io StringWriter;
 import crack.lang Exception;
 import crack.logger debug;
 import crack.protobuf readMessageFromString, Message, ProtoWriter;
-import mawfs.blockstore Change, ChangeEntry, Chunk, Commit, JournalIter,
-    Node, NodeStore, RemoteReader, Session;
+import mawfs.blockstore Change, ChangeEntry, Chunk, ChunkSet, Commit,
+    JournalIter, Node, NodeStore, RemoteReader, Session;
 
 @import crack.ann impl;
 
@@ -178,4 +178,6 @@ class MemNodeStore @impl NodeStore {
             __sessions[branch] = ses = Session();
         return ses;
     }
+
+    ChunkSet getTraversed() { return null }
 }

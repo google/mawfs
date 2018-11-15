@@ -762,20 +762,23 @@ class TraversalTest : DoubleInstanceTest {
         commit();
     }
 
+    StringArray getFiles(Path dir) {
+        files := StringArray();
+        for (child :in dir.children())
+            files.append(child.getName());
+        files.sort();
+        return files;
+    }
+
     ## Return the list of file names in the object directory (in lexical sort
     ## order).
-    StringArray getObjects(Path root) {
-        objects := StringArray();
-        for (child :in (root/'objects').children())
-            objects.append(child.getName());
-        objects.sort();
-        return objects;
-    }
+    StringArray getObjects(Path root) { return getFiles(root/'objects') }
 
     void run() {
         (makePath('backing')/'config/peers').writeAll('[server]\nport = 12543\n');
         restartFS('master');
         initSlave();
+        clonedNodes := getFiles(backing2/'traversed');
         populate();
         runMawfs(StringArray!['pull', '-i', 'localhost:9119', 'master']);
 
@@ -794,6 +797,32 @@ class TraversalTest : DoubleInstanceTest {
 
         masterObjects := getObjects(cwd/'backing');
         assertEqual(newObjects, masterObjects);
+
+        # Verify that the "traversed" directory is empty.
+        assertEqual(getFiles(backing2/'traversed'), clonedNodes);
+
+        # Do another traversal, this time create the database of nodes that
+        # have been fully traversed.
+        runMawfs(StringArray!['-i', 'localhost:9119', 'traverse', 'master',
+                              '-t', 'delta']);
+        assertEqual(getFiles(backing2/'traversed'), newObjects);
+
+        # Add some new stuff to master.
+        addBigFile();
+        commit();
+
+        runMawfs(StringArray!['pull', '-i', 'localhost:9119', 'master']);
+        objects = getObjects(backing2);
+        masterObjects = getObjects(cwd/'backing');
+        @assert(objects.count() < masterObjects.count());
+
+        runMawfs(StringArray!['traverse', '-i', 'localhost:9119', '-t',
+                              'delta', 'master'
+                              ]
+                 );
+        objects = getObjects(backing2);
+        assertEqual(objects, masterObjects);
+        assertEqual(getFiles(backing2/'traversed'), objects);
     }
 }
 register(TraversalTest());

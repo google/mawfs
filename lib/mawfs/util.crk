@@ -6,7 +6,7 @@ import crack.lang InvalidResourceError;
 import crack.enc.base64 altEncode;
 import crack.io FStr;
 
-import .blockstore Commit, Node, NodeStore;
+import .blockstore ChunkSet, Commit, Node, NodeStore;
 import .cache makeCachedNode, CachedNode, NodeContext;
 
 @import crack.ann assert;
@@ -16,45 +16,63 @@ class NodeNotFound : InvalidResourceError {
     oper init(String message) : InvalidResourceError(message) {}
 }
 
-void traverse(NodeStore store, Node node) {
+void traverse(NodeStore store, Node node, ChunkSet traversed);
+
+## Traverse The entire tree of nodes starting with the Node identified by
+## 'digest'.
+## traversed: nullable.  If present, it is the set of nodes that have been
+## completely traversed. Digests are added to this set after traversal.
+void traverseNode(NodeStore store, String digest, ChunkSet traversed) {
+    if (traversed && traversed.has(digest))
+        return;
+    node := store.getNode(digest);
+    if (!node)
+        throw NodeNotFound(FStr() `Missing node $(altEncode(digest))`);
+    traverse(store, node, traversed);
+    if (traversed)
+        traversed.add(digest);
+}
+
+## traversed: nullable.  The set of nodes that have been completely traversed.
+## Digests are added to this set after traversal.
+void traverse(NodeStore store, Node node, ChunkSet traversed) {
     if (node.children) {
-        for (child :in node.children) {
-            childNode := store.getNode(child.hash);
-            if (!childNode)
-                throw NodeNotFound(
-                    FStr() `Missing node $(altEncode(child.hash))`
-                );
-            traverse(store, childNode);
-        }
+        for (child :in node.children)
+            traverseNode(store, child.hash, traversed);
     }
+}
+
+void traverse(NodeStore store, Commit commit, ChunkSet traversed);
+
+## Traverse The entire tree starting with the Commit identified by 'digest'.
+## traversed: nullable.  If present, it is the set of nodes that have been
+## completely traversed. Digests are added to this set after traversal.
+void traverseCommit(NodeStore store, String digest, ChunkSet traversed) {
+    if (traversed && traversed.has(digest))
+        return;
+    commit := store.getCommit(digest);
+    if (!commit)
+        throw NodeNotFound(FStr() `Missing commit $(altEncode(digest))`);
+    traverse(store, commit, traversed);
+    if (traversed)
+        traversed.add(digest);
 }
 
 ## Traverse the entire node tree from 'commit'.  This is useful mainly for its
 ## side-effects (such as verifying that the tree is intact or copying the
 ## entire tree from another node).
-void traverse(NodeStore store, Commit commit) {
-    root := store.getNode(commit.root);
-    if (!root)
-        throw NodeNotFound(FStr() `Missing node $(altEncode(commit.root))`);
-    traverse(store, root);
+void traverse(NodeStore store, Commit commit, ChunkSet traversed) {
+    traverseNode(store, commit.root, traversed);
 
     # TODO: deal with the places where these merge.
     if (commit.parent) {
-        for (parent :in commit.parent) {
-            parentCommit := store.getCommit(parent);
-            if (!parentCommit)
-                throw NodeNotFound(
-                    FStr() `Missing commit $(altEncode(parent))`
-                );
-            traverse(store, parentCommit);
-        }
+        for (parent :in commit.parent)
+            traverseCommit(store, parent, traversed);
     }
 
     # Pull journal info if there is any.
-    if (commit.journalInfo) {
-        journalInfo := store.getNode(commit.journalInfo);
-        traverse(store, journalInfo);
-    }
+    if (commit.journalInfo)
+        traverseNode(store, commit.journalInfo, traversed);
 }
 
 class _CommitFinder {

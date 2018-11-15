@@ -306,6 +306,16 @@ class Session {
     @abstract String getContents(String digest);
 }
 
+## A set of Nodes and Commits ("chunks", or rather, of chunk digests).
+@interface ChunkSet {
+
+    ## Add the digest to the node set.
+    @abstract void add(String digest);
+
+    ## Returns true if the set includes the digest.
+    @abstract bool has(String digest);
+}
+
 ## Interface for a node store.
 @interface NodeStore {
 
@@ -405,6 +415,11 @@ class Session {
         return RepoInfo(rootDigest, commitDigest);
     }
 
+
+    ## Returns the set of nodes that are known to be traversed.  A block store
+    ## may choose not to implement this, in which case it should return null.
+    ## May return null.
+    @abstract ChunkSet getTraversed();
 }
 
 class FSRawChunkReader @impl RawChunkReader {
@@ -756,6 +771,27 @@ class ChunkStore @impl NodeStore {
     ## the system.  It may be null if coordination is not an issue.
     RawChunkReader getRawChunkReader(Mutex mutex) {
         return FSRawChunkReader(__dir, mutex, this);
+    }
+
+    ## Implements a chunk set as a directory full of file names.
+    class TraversedChunkDB @impl ChunkSet {
+        Path __dir;
+
+        oper init(Path backing) : __dir = backing/'traversed' {}
+
+        bool has(String digest) {
+            return (__dir/altEncode(digest)).exists();
+        }
+
+        void add(String digest) {
+            if (!__dir.exists())
+                __dir.makeDir();
+            (__dir/altEncode(digest)).writeAll('');
+        }
+    }
+
+    ChunkSet getTraversed() {
+        return TraversedChunkDB(__dir);
     }
 
     ## Store an entire directory in the blockstore.  Returns its digest.

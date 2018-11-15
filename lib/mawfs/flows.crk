@@ -17,8 +17,8 @@ import .merge Merger, MergeState;
 import .peernet PeerNetwork;
 import .rawchunk GeneralCallback;
 import .rpc parseAddr, InfoResponse, InstIFace, LoginError, LoginState,
-    MergeResult, MergeResponse, TRAVERSE_FULL;
-import .util findCommonAncestor, traverse;
+    MergeResult, MergeResponse, TRAVERSE_DELTA, TRAVERSE_FULL;
+import .util findCommonAncestor, traverseCommit;
 
 @import crack.ann assert, cvars, define, impl;
 
@@ -455,7 +455,9 @@ class MAWFSInstance @impl InstIFace {
                 FStr() `head commit for branch $branch could not be loaded`
             );
         if (algo == TRAVERSE_FULL)
-            traverse(store, commit);
+            traverseCommit(store, headDigest, null);
+        else if (algo == TRAVERSE_DELTA)
+            traverseCommit(store, headDigest, store.getTraversed());
         else
             throw InvalidArgumentError(FStr() `Unknown traversal type $algo`);
         return 0;
