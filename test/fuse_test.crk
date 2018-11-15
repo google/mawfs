@@ -780,7 +780,10 @@ class TraversalTest : DoubleInstanceTest {
         initSlave();
         clonedNodes := getFiles(backing2/'traversed');
         populate();
-        runMawfs(StringArray!['pull', '-i', 'localhost:9119', 'master']);
+        runMawfs(StringArray!['pull', '-i', 'localhost:9119', '-t', 'none',
+                              'master'
+                              ]
+                 );
 
         # Get the objects in the slave backing directory.
         objects := getObjects(backing2);
@@ -811,7 +814,10 @@ class TraversalTest : DoubleInstanceTest {
         addBigFile();
         commit();
 
-        runMawfs(StringArray!['pull', '-i', 'localhost:9119', 'master']);
+        runMawfs(StringArray!['pull', '-i', 'localhost:9119', '-t', 'none',
+                              'master'
+                              ]
+                 );
         objects = getObjects(backing2);
         masterObjects = getObjects(cwd/'backing');
         @assert(objects.count() < masterObjects.count());

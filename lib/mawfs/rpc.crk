@@ -170,6 +170,11 @@ class PeerDisconnectedError : Exception {}
 }
 
 const int
+    ## No traversal.  Note that this is different from the other traversal
+    ## types, in that it is dealt with on the client side and is therefore
+    ## never sent over an RPC.  However, we include it here for completeness.
+    TRAVERSE_NONE = -1,
+
     ## Try to traverse every node and commit in the branch.
     TRAVERSE_FULL = 0,
 
