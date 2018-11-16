@@ -1,10 +1,13 @@
 
-import mawfs.blockstore Commit;
+import crack.cont.hashmap HashMap;
+import mawfs.blockstore ChunkSet, Commit, Entry, Node;
 import mawfs.cache NodeContext, Tree;
 import mawfs.memstore MemNodeStore;
-import mawfs.util findCommonAncestor, findCommonCommit;
+import mawfs.util findCommonAncestor, findCommonCommit, traverseCommit;
 import test.repoutil RepoTest;
 import test.unittest register, runAllTests, Test;
+
+@import crack.ann assert, impl;
 
 ## Commit builder.
 class CB {
@@ -99,5 +102,81 @@ class CommonAncestorTest : RepoTest {
     }
 }
 register(CommonAncestorTest());
+
+class MemChunkSet @impl ChunkSet {
+    HashMap[String, bool] __map = {};
+    void add(String digest) {
+        __map[digest] = true;
+    }
+
+    bool has(String digest) {
+        return __map.get(digest, false);
+    }
+
+    int count() { return __map.count() }
+}
+
+class TrackingNodeStore : MemNodeStore {
+    HashMap[String, bool] pulled = {};
+    MemChunkSet __traversed = {};
+
+    oper init(MemChunkSet traversed) : __traversed = traversed {}
+
+    Node getNode(String digest) {
+        pulled[digest] = true;
+        return MemNodeStore.getNode(digest);
+    }
+
+    Commit getCommit(String digest) {
+        pulled[digest] = true;
+        return MemNodeStore.getCommit(digest);
+    }
+
+    ChunkSet getTraversed() { return __traversed }
+}
+
+class TraversalTest : Test {
+    void run() {
+        traversed := MemChunkSet();
+        store := TrackingNodeStore(traversed);
+
+        # Store initial commit.
+        node := Node();
+        rootDigest := store.storeNode(node);
+        commitDigest := store.storeCommit(CB().root(rootDigest).build());
+
+        # Traverse it.
+        traverseCommit(store, commitDigest, store.getTraversed());
+
+        # Should have the node and the commit in the traversed set.
+        @assert(traversed.has(rootDigest));
+        @assert(traversed.has(commitDigest));
+        @assert(traversed.count() == 2);
+
+        # Add a new commit and node.
+        node = Node();
+        child := Entry();
+        child.hash = rootDigest;
+        node.children_append(child);
+        rootDigest = store.storeNode(node);
+        commitDigest = store.storeCommit(
+            CB![commitDigest].root(rootDigest).build()
+        );
+        store.pulled.clear();
+        traverseCommit(store, commitDigest, traversed);
+
+        # verify that we've only pulled the new chunks.
+        @assert(store.pulled.count() == 2);
+        @assert(store.pulled.hasKey(commitDigest));
+        @assert(store.pulled.hasKey(rootDigest));
+
+        # Verify that we've traversed all the chunks (we'll assume that the
+        # old ones are still there).
+        @assert(traversed.count() == 4);
+        @assert(traversed.has(commitDigest));
+        @assert(traversed.has(rootDigest));
+    }
+}
+register(TraversalTest());
 
 runAllTests();

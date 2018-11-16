@@ -52,8 +52,9 @@ import mawfs.inst InstanceState, UserModule;
 import mawfs.params ParamInfo;
 import mawfs.peernet PeerNetwork, RemoteReaderImpl;
 import mawfs.rawchunk RawChunkReader;
-import mawfs.rpc parseAddr, setInst, ExtendedAddress, PeerProxy;
-import mawfs.util traverse;
+import mawfs.rpc parseAddr, setInst, ExtendedAddress, PeerProxy,
+    TRAVERSE_DELTA, TRAVERSE_FULL, TRAVERSE_NONE;
+import mawfs.util traverseCommit;
 
 @import crack.ann impl, struct;
 
@@ -313,6 +314,15 @@ opts := CmdOptions![
     Option('overwrite', 'o', 'overwrite existing backing directoory', null,
            CMD_BOOL
            ),
+    Option('traverse-type', 't',
+           I'Traversal algorithm for "traverse" or "pull" command. Valid
+             values are "full" or "delta" (or "none" in the case of a pull).
+             For the "traverse" command, the default is "full".  For all
+             other commands the default is "delta"',
+
+           null,
+           CMD_STR
+           ),
 ];
 
 class CommandManager {
@@ -458,6 +468,32 @@ class CommandManager {
         return cmd;
     }
 
+    ## Returns the traversal type extracted from the "traverse" argument and
+    ## converted to an integer.
+    ##
+    ## isTraverseCommand: True if this is being called from the traverse
+    ##    command, in which case "none" is not a valid option.
+    int getTraverseType(bool isTraverseCommand, int default) {
+        algoStr := opts.getString('traverse-type');
+        if (algoStr == 'full') {
+            return TRAVERSE_FULL;
+        } else if (algoStr == 'delta') {
+            return TRAVERSE_DELTA;
+        } else if (algoStr == 'none') {
+            if (isTraverseCommand)
+                throw Abort('A traverse algorithm of "none" is not valid for '
+                            'the traverse command.'
+                            );
+            return TRAVERSE_NONE;
+        } else if (algoStr != null) {
+            throw Abort(
+                FStr() I`Unknown traversal type $algoStr.  Types are \
+                         "full" and "delta".`
+            );
+        }
+        return default;
+    }
+
     ## The "clone" command.
     void clone() {
         checkArgs(4, 'Usage: mawfs clone <peer-address> <backing-dir>\n');
@@ -490,8 +526,7 @@ class CommandManager {
         net.pullJournal(rootDir, 'master', false);
 
         cerr `getting head\n`;
-        head := store.getCommit(master);
-        traverse(store, head);
+        traverseCommit(store, master, store.getTraversed());
 
         cerr `writing master...\n`;
         refsDir := rootDir/'refs';
@@ -526,8 +561,13 @@ class CommandManager {
     void pull() {
         checkArgsAtLeast(3, "Usage: mawfs pull <branch> [peer]\n");
         setLogLevel(DEBUG);
+        branch := args[2];
 
-        getRPC().pullBranch(args[2], (args.count() > 3) ? args[3] : null);
+        rpc := getRPC();
+        rpc.pullBranch(branch, (args.count() > 3) ? args[3] : null);
+        traverseType := getTraverseType(false, TRAVERSE_DELTA);
+        if (traverseType != TRAVERSE_NONE)
+            rpc.getProxy().traverse(branch, traverseType);
     }
 
     ## The "merge" command.
@@ -643,6 +683,13 @@ class CommandManager {
         } else {
             cerr `Directory $backingDir looks good.\n`;
         }
+    }
+
+    ## The "traverse" command.
+    void traverse() {
+        checkArgs(3, 'Usage: mawfs traverse <branch>');
+        algo := getTraverseType(true, TRAVERSE_FULL);
+        getRPC().getProxy().traverse(args[2], algo);
     }
 }
 
@@ -803,6 +850,8 @@ void main() {
             cm.info();
         } else if (cmd == 'verify') {
             cm.verify();
+        } else if (cmd == 'traverse') {
+            cm.traverse();
         } else {
             cerr `Unknown command: $cmd\n`;
             usage();

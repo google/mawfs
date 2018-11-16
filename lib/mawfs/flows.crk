@@ -4,7 +4,7 @@ import crack.cont.array Array;
 import crack.fs Path;
 import crack.functor Functor0;
 import crack.io FStr;
-import crack.lang Exception;
+import crack.lang Exception, InvalidArgumentError, InvalidResourceError;
 import crack.logger debug, error, info;
 import crack.threads Mutex, MutexLock, Queue, Thread;
 
@@ -17,8 +17,8 @@ import .merge Merger, MergeState;
 import .peernet PeerNetwork;
 import .rawchunk GeneralCallback;
 import .rpc parseAddr, InfoResponse, InstIFace, LoginError, LoginState,
-    MergeResult, MergeResponse;
-import .util findCommonAncestor;
+    MergeResult, MergeResponse, TRAVERSE_DELTA, TRAVERSE_FULL;
+import .util findCommonAncestor, traverseCommit;
 
 @import crack.ann assert, cvars, define, impl;
 
@@ -437,6 +437,32 @@ class MAWFSInstance @impl InstIFace {
         return 0;
     }
 
+    ## Traverse all commits and nodes in the specified branch.  This is
+    ## mainly used to pull chunks from a peer, but also serves to verify that
+    ## all nodes are valid and present.
+    ##
+    ## There are several different traversal algorithms, see the TRAVERSE_*
+    ## constants in mawfs.rpc. 'branch' is a branch name.
+    int traverse(String branch, int algo) {
+        lock := __state.lock();
+        store := __state.getStore();
+        headDigest := store.getHead(branch);
+        if (!headDigest)
+            throw InvalidResourceError(FStr() `branch $branch does not exist`);
+        commit := store.getCommit(headDigest);
+        if (!commit)
+            throw InvalidResourceError(
+                FStr() `head commit for branch $branch could not be loaded`
+            );
+        if (algo == TRAVERSE_FULL)
+            traverseCommit(store, headDigest, null);
+        else if (algo == TRAVERSE_DELTA)
+            traverseCommit(store, headDigest, store.getTraversed());
+        else
+            throw InvalidArgumentError(FStr() `Unknown traversal type $algo`);
+        return 0;
+    }
+
     ## RPC service for pullBranch.  Starts the call off in a new thread.
     void pullBranch(String name, String peer,
                     GeneralCallback[String] callback
@@ -516,5 +542,11 @@ class MAWFSInstance @impl InstIFace {
 
     bool validNonce(String nonce) {
         return __state.getNonceManager().redeem(nonce);
+    }
+
+    void traverse(String branch, int algo, GeneralCallback[int] callback) {
+        @task(MAWFSInstance inst; String branch; int algo;, int,
+              inst.traverse(branch, algo));
+        __pool.submit(MyTask(this, branch, algo, callback));
     }
 }

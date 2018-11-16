@@ -23,7 +23,7 @@ import crack.process Process, ProcessHandler, ProcessHandlerImpl,
 import crack.strutil StringArray;
 import crack.sys argv, exit;
 import crack.time Time;
-import crack.runtime open, close, sleep, O_RDONLY;
+import crack.runtime open, close, random, sleep, srandom, O_RDONLY;
 
 import mawfs.params ParamInfo;
 import test.unittest register, runAllTests, Test, TestFailure;
@@ -356,6 +356,12 @@ register(ParamsTest());
 @abstract class DoubleInstanceTest : TestCase {
     Path backing2, fs2;
 
+    ## Clone and start the slave.
+    void initSlave() {
+        runMawfs(StringArray!['clone', 'localhost:12543', 'backing2']);
+        startFS('master', 'backing2', 'fs2');
+    }
+
     void setUp() {
         backing2 = makePath('backing2');
         fs2 = makePath('fs2');
@@ -625,13 +631,13 @@ register(RestoreStateTest());
 
 ## Verify that we can still run things with a missing peer.
 class MissingPeerTest : DoubleInstanceTest {
+
     void run() {
         # Move the master to port 12543, clone it to the slave and start the
         # slave.
         (makePath('backing')/'config/peers').writeAll('[server]\nport = 12543\n');
         restartFS('master');
-        runMawfs(StringArray!['clone', 'localhost:12543', 'backing2']);
-        startFS('master', 'backing2', 'fs2');
+        initSlave();
 
         # Shut down both, verify that we can bring up the slave (the slave has
         # the master as its peer).
@@ -724,209 +730,107 @@ class TimeTest : TestCase {
 }
 register(TimeTest());
 
+class TraversalTest : DoubleInstanceTest {
+    Path fsRoot;
+
+    void setUp() {
+        fsRoot = cwd/'fs';
+        DoubleInstanceTest.setUp();
+    }
+
+    void addBigFile() {
+        filename := FStr() `$(random())`;
+        file := (fsRoot/filename).writer();
+        const BUF_SIZE := 71912;
+        buf := AppendBuffer(BUF_SIZE);
+        for (int i = 0; i < BUF_SIZE; ++i)
+            buf.append(byte(random()));
+    }
+
+    void commit() {
+        runMawfs(StringArray!['commit', fsRoot.getFullName()]);
+    }
+
+    void populate() {
+        srandom(0x58f28595);
+        fsRoot := cwd/'fs';
+        addBigFile();
+        commit();
+        addBigFile();
+        commit();
+        addBigFile();
+        commit();
+    }
+
+    StringArray getFiles(Path dir) {
+        files := StringArray();
+        for (child :in dir.children())
+            files.append(child.getName());
+        files.sort();
+        return files;
+    }
+
+    ## Return the list of file names in the object directory (in lexical sort
+    ## order).
+    StringArray getObjects(Path root) { return getFiles(root/'objects') }
+
+    void run() {
+        (makePath('backing')/'config/peers').writeAll('[server]\nport = 12543\n');
+        restartFS('master');
+        initSlave();
+        clonedNodes := getFiles(backing2/'traversed');
+        populate();
+        runMawfs(StringArray!['pull', '-i', 'localhost:9119', '-t', 'none',
+                              'master'
+                              ]
+                 );
+
+        # Get the objects in the slave backing directory.
+        objects := getObjects(backing2);
+
+        # Restart the slave to clear the memory cache.
+        restartSlaveFS('master');
+
+        # Traverse.
+        runMawfs(StringArray!['-i', 'localhost:9119', 'traverse', 'master']);
+
+        # Verify that we've got all of the objects back and then some.
+        newObjects := getObjects(backing2);
+        @assert(objects.count() < newObjects.count());
+
+        masterObjects := getObjects(cwd/'backing');
+        assertEqual(newObjects, masterObjects);
+
+        # Verify that the "traversed" directory is empty.
+        assertEqual(getFiles(backing2/'traversed'), clonedNodes);
+
+        # Do another traversal, this time create the database of nodes that
+        # have been fully traversed.
+        runMawfs(StringArray!['-i', 'localhost:9119', 'traverse', 'master',
+                              '-t', 'delta']);
+        assertEqual(getFiles(backing2/'traversed'), newObjects);
+
+        # Add some new stuff to master.
+        addBigFile();
+        commit();
+
+        runMawfs(StringArray!['pull', '-i', 'localhost:9119', '-t', 'none',
+                              'master'
+                              ]
+                 );
+        objects = getObjects(backing2);
+        masterObjects = getObjects(cwd/'backing');
+        @assert(objects.count() < masterObjects.count());
+
+        runMawfs(StringArray!['traverse', '-i', 'localhost:9119', '-t',
+                              'delta', 'master'
+                              ]
+                 );
+        objects = getObjects(backing2);
+        assertEqual(objects, masterObjects);
+        assertEqual(getFiles(backing2/'traversed'), objects);
+    }
+}
+register(TraversalTest());
+
 runAllTests();
-
-/*
-String readNode(Node node, int pos, int size) {
-    ManagedBuffer buf = {size};
-    BlockIter iter = {node};
-    iter.setPos(pos);
-    iter.read(buf);
-    return String(buf, true);
-}
-
-int writeNode(Node node, int pos, Buffer data) {
-    BlockIter iter = {node};
-    iter.setPos(pos);
-    return iter.write(data);
-}
-
-Stat copyStat(Stat other) {
-    if (other is null)
-        return null;
-    Stat result = Stat();
-    result.st_dev = other.st_dev;
-    result.st_ino = other.st_ino;
-    result.st_mode = other.st_mode;
-    result.st_nlink = other.st_nlink;
-    result.st_uid = other.st_uid;
-    result.st_gid = other.st_gid;
-    result.st_rdev = other.st_rdev;
-    result.st_blksize = other.st_blksize;
-    result.st_blocks = other.st_blocks;
-    result.st_atime = other.st_atime;
-    result.st_mtime = other.st_mtime;
-    result.st_ctime = other.st_ctime;
-
-    return result;
-}
-
-class Info {
-    String filename;
-    Stat stat;
-
-    oper init(String filename, Stat stat) :
-        filename = filename,
-        stat = copyStat(stat) {
-    }
-
-    oper del() {
-        free(stat);
-    }
-}
-
-Entry e(String filename) {
-    result := Entry();
-    result.name = filename;
-    return result;
-}
-
-Array[Info] filled = {};
-
-int filler(voidptr buf, byteptr filename, Stat stat, uintz something) {
-    filled.append(Info(String(filename), stat));
-    return 0;
-}
-
-###### BEGIN TESTS
-
-if (true) {
-    node := Node();
-    node.contents = 'this is a test';
-
-    iter := BlockIter(node);
-    @assert(readNode(node, 0, 4) == 'this');
-    @assert(readNode(node, 5, 4) == 'is a');
-    @assert(readNode(node, 10, 10) == 'test');
-}
-
-if (true) {
-    node := Node();
-    node.children = Array[Entry]![e('foo'), e('bar')];
-    node.contents = 'this is some data';
-
-    MAWFSNode fuseNode = {MemNodeStore(), node};
-    @assert(!fuseNode.readdir(null, null, filler, 0, null));
-    @assert(filled[0].filename == '.');
-    @assert(filled[1].filename == '..');
-    @assert(filled[2].filename == 'foo');
-    @assert(filled[3].filename == 'bar');
-    @assert(filled[3].stat.st_mode == 040777);
-
-    ManagedBuffer buf = {64};
-    @assert(fuseNode.read(null, buf.buffer, buf.cap, 0, null) == 17);
-    buf.size = 17;
-    @assert(String(buf, true) == 'this is some data');
-}
-
-if (true) {
-    node := Node();
-    MAWFSNode fuseNode = {MemNodeStore(), node};
-
-    @assert(writeNode(node, 0, 'some data') == 9);
-    @assert(readNode(node, 0, 9) == 'some data');
-    @assert(writeNode(node, 5, 'pig') == 3);
-    @assert(readNode(node, 0, 1024) == 'some piga');
-}
-
-if (true) {
-    MAWFSNode fs = {MemNodeStore(), Node()};
-    ManagedBuffer buf = {8};
-    Context ctx = {'/foo', fs};
-
-    data := 'data';
-    @assert(fs.write(ctx, data.buffer, data.size, 0, null) == 4);
-    @assert(fs.write(ctx, data.buffer, data.size, 4, null) == 4);
-    @assert((buf.size = fs.read(ctx, buf.buffer, 3, 0, null)) == 3);
-    @assert(buf == 'dat');
-    @assert((buf.size = fs.read(ctx, buf.buffer, 10, 3, null)) == 5);
-    @assert(buf == 'adata');
-}
-
-# Creating files.
-if (true) {
-    nodeStore := MemNodeStore();
-    root := Node();
-    nodeStore.storeRoot(nodeStore.storeNode(root)); # {store,get}Root() obsolete
-    MAWFSNode fs = {nodeStore, root};
-    Context ctx = {'/foo', fs};
-    @assert(fs.create(ctx, 0, null) == 0);
-    children := root.children;
-    @assert(children.count() == 1);
-    @assert(children[0].name = 'foo');
-    @assert(!nodeStore.getNode(children[0].hash).mode);
-
-    # Verify that we can reproduce this from the node store.
-    root = nodeStore.getRoot(); # {store,get}Root() obsolete
-    children = root.children;
-    @assert(children.count() == 1);
-    @assert(children[0].name == 'foo');
-
-    # Verify that we overwrite the existing child and don't add a new one.
-    # (I'm not sure this behavior is correct, I think it might be appropriate
-    # to make this case an error and require a truncate).
-    @assert(fs.create(ctx, 0, null) == 0);
-    @assert(children.count() == 1);
-    @assert(children[0].name = 'foo');
-}
-
-# Create nested file.
-if (true) {
-    nodeStore := MemNodeStore();
-    root := Node();
-    nodeStore.storeRoot(nodeStore.storeNode(root)); # {store,get}Root() obsolete
-    MAWFSNode fs = {nodeStore, root};
-    Context ctx = {'/foo', fs};
-
-    @assert(fs.mkdir(ctx, 0) == 0);
-    children := root.children;
-    @assert(children.count() == 1);
-    @assert(children[0].name == 'foo');
-
-    foo := ctx.lookUp();
-    ctx = Context('/foo/bar', fs);
-    @assert(foo.create(ctx, 0, null) == 0);
-
-    # Read back all the way from the node store.
-    root = nodeStore.getRoot(); # {store,get}Root() obsolete
-    children = root.children;
-    @assert(children.count() == 1);
-    @assert(children[0].name == 'foo');
-
-    dirNode := nodeStore.getNode(children[0].hash);
-    @assert(dirNode.mode == MODE_DIR);
-
-    children = dirNode.children;
-    @assert(children.count() == 1);
-    @assert(children[0].name == 'bar');
-}
-
-# Truncate.
-if (true) {
-    nodeStore := MemNodeStore();
-    root := Node();
-    nodeStore.storeRoot(nodeStore.storeNode(root)); # {store,get}Root() obsolete
-    MAWFSNode fs = {nodeStore, root};
-    Context ctx = {'/foo', fs};
-
-    @assert(fs.create(ctx, 0, null) == 0);
-    text := 'this is text';
-    foo := ctx.lookUp();
-    @assert(foo.write(ctx, text.buffer, text.size, 0, null));
-    @assert(foo.truncate(ctx, 4) == 0);
-
-    root = nodeStore.getRoot(); # {store,get}Root() obsolete
-    fs.setRep(root);
-    ManagedBuffer temp = {10};
-    foo = ctx.lookUp();
-    rc := temp.size = foo.read(ctx, temp.buffer, temp.cap, 0, null);
-    @assert(foo.read(ctx, temp.buffer, temp.cap, 0, null) == 4);
-
-    foo.truncate(ctx, 0);
-    root = nodeStore.getRoot(); # {store,get}Root() obsolete
-    fs.setRep(root);
-    foo = ctx.lookUp();
-    rc = temp.size = foo.read(ctx, temp.buffer, temp.cap, 0, null);
-    @assert(foo.read(ctx, temp.buffer, temp.cap, 0, null) == 0);
-}
-*/
