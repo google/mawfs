@@ -1,6 +1,6 @@
 
 import mawfs.entropy setEntropySource;
-import mawfs.nonces NonceManager;
+import mawfs.nonces NonceManager, NONCE_SIZE;
 import mawfs.testutil PseudoRandomEntropySource;
 import test.unittest register, runAllTests, Test, TestFailure;
 
@@ -47,5 +47,15 @@ class MultiNonce : TestBase {
     }
 }
 register(MultiNonce());
+
+class RedeemPrefix : TestBase {
+    void run() {
+        nonce := nm.get();
+        size := NONCE_SIZE / 2;
+        assertEqual(nm.redeemPrefix(nonce.substr(0, size)), nonce.substr(size));
+        assertEqual(nm.redeemPrefix(nonce.substr(0, size)), null);
+    }
+}
+register(RedeemPrefix());
 
 runAllTests();
