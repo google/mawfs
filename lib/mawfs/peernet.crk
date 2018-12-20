@@ -9,12 +9,13 @@ import crack.lang Buffer, Exception;
 import crack.logger cerrLogger, DEBUG, ERROR, INFO, FATAL, WARN;
 import crack.logger.ctx Log;
 import crack.net Address, InetAddress;
-import crack.net.comm2 Comm;
+import crack.net.comm2 Comm, ConnectionFactory;
+import crack.net.ssl SSLContext;
 import mawfs.blockstore RemoteReader;
 import mawfs.configstore ConfigStore;
 import mawfs.rawchunk RawChunkReader;
 import mawfs.rpc parseAddr, Context, PeerDisconnectedError, PeerProxy,
-    PeerServiceCommFactory;
+    PeerServiceConnectionFactory;
 
 import .ciphers Cipher;
 import .inst InstanceState;
@@ -33,18 +34,23 @@ class Peer {
     Log __log;
     PeerProxy __proxy;
     Cipher __cipher;
+    SSLContext __sslCtx;
 
-    oper init(Comm comm, Log log, Address addr, Cipher cipher) :
+    ## sslCtx: nullable. if present, use ssl.
+    oper init(Comm comm, Log log, Address addr, Cipher cipher,
+              SSLContext sslCtx
+              ) :
         addr = addr,
         __comm = comm,
         __log = log,
-        __cipher = cipher {
+        __cipher = cipher,
+        __sslCtx = sslCtx {
     }
 
     ## Returns the peer proxy, creating it if necessary.
     PeerProxy getProxy() {
         if (!__proxy) {
-            __proxy = PeerProxy.make(__comm, __log, addr);
+            __proxy = PeerProxy.make(__comm, __log, addr, __sslCtx);
             if (__proxy)
                 __proxy.login(__cipher);
         }
@@ -78,6 +84,7 @@ class PeerNetwork {
     Array[Peer] __peers = {};
     Array[String] __serverAddrs = {};
     Cipher __cipher;
+    SSLContext __sslCtx;
 
     oper init(RawChunkReader chunkReader, Cipher cipher) :
         __chunkReader = chunkReader,
@@ -88,11 +95,17 @@ class PeerNetwork {
         __comm.start();
     }
 
+    void setSSLContext(SSLContext sslCtx) {
+        __sslCtx = sslCtx;
+    }
+
     void addServer(Address addr) {
         context := Context(__chunkReader);
-        factory := PeerServiceCommFactory(context);
+        ConnectionFactory factory = PeerServiceConnectionFactory(context);
         __log.info `starting server on $addr`;
         try {
+            if (__sslCtx)
+                factory = __sslCtx.makeConnectionFactory(factory);
             __comm.startServer(addr, factory, true);
             __serverAddrs.append(FStr() `$addr`);
         } catch (Exception ex) {
@@ -102,7 +115,8 @@ class PeerNetwork {
 
     void addPeer(Address addr) {
         __peers.append(Peer(__comm, Log(__log, FStr() `peer-$addr`), addr,
-                            __cipher
+                            __cipher,
+                            __sslCtx
                             )
                        );
     }

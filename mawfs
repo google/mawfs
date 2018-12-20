@@ -201,7 +201,7 @@ class RPCCmd {
         __log = Log(cerrLogger, 'client');
         __comm = Comm(__log);
         __comm.start();
-        __proxy = PeerProxy.make(__comm, __log, addr);
+        __proxy = PeerProxy.make(__comm, __log, addr, null);
         if (__proxy) {
             nonce := authNonce;
             if (!nonce) {

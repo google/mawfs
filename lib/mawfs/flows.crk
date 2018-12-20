@@ -1,6 +1,7 @@
 ## High-level workflows.
 
 import crack.cont.array Array;
+import crack.enc.base64 altDecode, altEncode;
 import crack.fs Path;
 import crack.functor Functor0;
 import crack.io FStr;
@@ -14,6 +15,7 @@ import .ciphers sha256, Cipher;
 import .entropy getEntropySource;
 import .inst InstanceState;
 import .merge Merger, MergeState;
+import .nonces NONCE_SIZE;
 import .peernet PeerNetwork;
 import .rawchunk GeneralCallback;
 import .rpc parseAddr, InfoResponse, InstIFace, LoginError, LoginState,
@@ -542,6 +544,23 @@ class MAWFSInstance @impl InstIFace {
 
     bool validNonce(String nonce) {
         return __state.getNonceManager().redeem(nonce);
+    }
+
+    String getPSK(String identity) {
+        if (identity.startsWith('L')) {
+            # Local identity.  Should be the first half of a registered nonce.
+            # If it's not, we construct a random PSK to deny entry.
+            const size := NONCE_SIZE / 2;
+            psk := __state.getNonceManager().redeemPrefix(identity.substr(size));
+            return (psk is null) ? getEntropySource().getString(size) : psk;
+        } else {
+            # Remote peer identity.  First character should be 'P' and the
+            # PSK should be the encrypted hash of the decoded, decrypted
+            # identity.
+            cipher := __state.getCipher();
+            nonce := cipher.decrypt(altDecode(identity.substr(1)));
+            return cipher.encrypt(sha256(nonce));
+        }
     }
 
     void traverse(String branch, int algo, GeneralCallback[int] callback) {

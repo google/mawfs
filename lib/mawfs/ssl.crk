@@ -1,0 +1,72 @@
+# Copyright 2016 Google Inc. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import crack.ext._ssl SSL;
+import crack.io cerr;
+import crack.net.comm2 Comm;
+import crack.net.ssl SSLContext;
+import crack.runtime memcpy;
+import mawfs.rpc InstIFace;
+
+uint min(uint a, uint b) {
+    return a > b ? b : a;
+}
+
+# There are two kinds of PSK identity:
+# - for peers, the identity is 'P' + an encrypted, alt-base64 nonce and the
+#   PSK is the encrypted SHA256 hash of the nonce.  A peer may reuse its
+#   identity and PSK for all connections.  We assume that the actual PSK is
+#   never exposed by the TLS protocol.
+# - for local users, the identity is 'L' + the beginning of the alt-base64
+#   encoded nonce obtained from the filesystem and the PSK is the remaining
+#   portion of that nonce.
+
+InstIFace _inst;
+String _identity, _psk;
+
+uint clientCB(SSL ssl, byteptr hint, byteptr identity,
+              uint max_identity_length,
+              byteptr psk,
+              uint max_psk_length
+              ) {
+    memcpy(identity, _identity.buffer,
+           min(_identity.size, max_identity_length)
+           );
+    identity[max_identity_length - 1] = 0;
+    pskSize := min(uint(_psk.size), uint(max_psk_length));
+    memcpy(psk, _psk.buffer, pskSize);
+    return pskSize;
+}
+
+uint serverCB(SSL ssl, byteptr identity, byteptr psk, uint max_psk_length) {
+    pskString := _inst.getPSK(String(identity));
+    pskSize := min(pskString.size, max_psk_length);
+    memcpy(psk, pskString.buffer, pskSize);
+    return pskSize;
+}
+
+## Create an SSL context for our PSK implementation.
+##
+## Note that this stores the identity and psk in global variables: these are
+## only used on the client side.
+SSLContext makeSSLContext(InstIFace inst, Comm comm, String identity,
+                          String psk
+                          ) {
+    _inst = inst;
+    _identity = identity;
+    _psk = psk;
+    return SSLContext.make(clientCB, serverCB, comm);
+}
+
+

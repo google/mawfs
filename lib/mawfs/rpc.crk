@@ -8,12 +8,13 @@ import crack.io cerr, Formatter, FStr, StringWriter, Reader;
 import crack.lang cmp, makeHashVal, AppendBuffer, Exception, WriteBuffer;
 import crack.logger.ctx Log;
 import crack.net resolve, Address, InetAddress;
-import crack.net.comm2 Comm, CommHandler, CommHandlerFactory, NewConnection,
-    SyncCommProxy, UserHandler, WaiterFor;
+import crack.net.comm2 Comm, Connection, ConnectionFactory, NewConnection,
+    UserHandler, WaiterFor;
 import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
 import crack.rawptr RawPtr;
 import crack.regex Regex;
 import crack.serial SerialReader, SerialWriter;
+import crack.net.ssl SSLContext;
 
 import .ciphers Cipher, sha256;
 import .entropy getEntropySource;
@@ -234,6 +235,9 @@ class LoginError : Exception {
     ## Returns true if 'nonce' is a valid nonce provided from the instance
     ## filesystem.
     @abstract bool validNonce(String nonce);
+
+    ## Returns the PSK for a given identity.
+    @abstract String getPSK(String identity);
 }
 
 InstIFace _inst;
@@ -267,7 +271,7 @@ class _Handler @impl UserHandler {
     _BufferSerialReader __reader;
     HashMap[int, RPCWaiter] __waiters = {};
 
-    void process(CommHandler comm) {
+    void process(Connection comm) {
         if (!__reader)
             __reader = _BufferSerialReader(comm.inBuf);
 
@@ -284,7 +288,7 @@ class _Handler @impl UserHandler {
         }
     }
 
-    void terminate(CommHandler comm) {
+    void terminate(Connection comm) {
         # Close all of the open connections.
         for (waiter :in __waiters) {
             RPCMessage response = {};
@@ -355,9 +359,10 @@ ExtendedAddress parseAddr(String addr) {
 ## the peer is connected.  Does not automatically reconnect.
 class PeerProxy {
     Comm __comm;
-    SyncCommProxy __proxy;
+    Connection __proxy;
     Log __log;
     int32 __lastId;
+    SSLContext __sslCtx;
 
     void __invalidateProxy() {
         __proxy = null;
@@ -369,7 +374,7 @@ class PeerProxy {
 
         oper init(Log log) : log = log {}
 
-        void terminate(CommHandler comm) {
+        void terminate(Connection comm) {
             if (owner)
                 owner.__invalidateProxy();
             _Handler.terminate(comm);
@@ -380,13 +385,17 @@ class PeerProxy {
 
     _PeerProxyHandler __handler;
 
-    oper init(Comm comm, Log log, SyncCommProxy proxy,
-              _PeerProxyHandler handler
+
+    ## sslCtx: nullable.  If present, use SSL.
+    oper init(Comm comm, Log log, Connection proxy,
+              _PeerProxyHandler handler,
+              SSLContext sslCtx
               ) :
         __comm = comm,
         __log = log,
         __proxy = proxy,
-        __handler = handler {
+        __handler = handler,
+        __sslCtx = sslCtx {
     }
 
     oper del() {
@@ -399,14 +408,15 @@ class PeerProxy {
     }
 
     @static
-    PeerProxy __makeCommProxy(Comm comm, Log log, Address addr) {
+    PeerProxy __makeConnection(Comm comm, Log log, Address addr,
+                               SSLContext sslCtx
+                               ) {
         log.info `connecting to $addr`;
         try {
-            proxy := comm.getSyncProxy(addr,
-                                       handler := _PeerProxyHandler(log)
-                                       );
-
-            result := PeerProxy(comm, log, proxy, handler);
+            handler := _PeerProxyHandler(log);
+            proxy := sslCtx ? sslCtx.connect(addr, handler) :
+                              comm.connect(addr, handler);
+            result := PeerProxy(comm, log, proxy, handler, sslCtx);
             handler.owner = RawPtr[PeerProxy](result);
             return result;
         } catch (Exception ex) {
@@ -416,14 +426,14 @@ class PeerProxy {
     }
 
     @static
-    PeerProxy make(Comm comm, Log log, String addr) {
+    PeerProxy make(Comm comm, Log log, String addr, SSLContext sslCtx) {
         a := parseAddr(addr);
-        return __makeCommProxy(comm, log, a);
+        return __makeConnection(comm, log, a, sslCtx);
     }
 
     @static
-    PeerProxy make(Comm comm, Log log, Address addr) {
-        return __makeCommProxy(comm, log, addr);
+    PeerProxy make(Comm comm, Log log, Address addr, SSLContext sslCtx) {
+        return __makeConnection(comm, log, addr, sslCtx);
     }
 
     ## Test constructor.
@@ -639,7 +649,7 @@ class Context {
     oper init(RawChunkReader reader) : reader = reader {}
 
     ## Utility function for writing a response message.
-    void writeResponse(CommHandler comm, Message response, int32 requestId) {
+    void writeResponse(Connection comm, Message response, int32 requestId) {
         RPCMessage reply = {};
         reply.id = requestId;
         reply.response = response ? response.toString() : null;
@@ -650,7 +660,7 @@ class Context {
         log.debug I`sent to poller thread: $(reply.toString().getRepr())`;
     }
 
-    void writeError(CommHandler comm, String errorMessage, int32 requestId) {
+    void writeError(Connection comm, String errorMessage, int32 requestId) {
         RPCMessage reply = {};
         reply.id = requestId;
         reply.error = errorMessage;
@@ -665,17 +675,17 @@ class Context {
 # Mapping from method name to method processing function.  In addition to a
 # context, a method handler accepts a string containing the serialized request
 # and an AppendBuffer into which to write the serialized response.
-alias _FuncWrapper = Functor3[void, Context, RPCMessage, CommHandler].Wrap;
+alias _FuncWrapper = Functor3[void, Context, RPCMessage, Connection].Wrap;
 class MethodHandler : _FuncWrapper {
 
     ## Set to true if authentication isn't required.
     bool noauth;
 
-    oper init(function[void, Context, RPCMessage, CommHandler] func) :
+    oper init(function[void, Context, RPCMessage, Connection] func) :
         _FuncWrapper(func) {
     }
 
-    oper init(function[void, Context, RPCMessage, CommHandler] func,
+    oper init(function[void, Context, RPCMessage, Connection] func,
               bool noauth) :
         _FuncWrapper(func),
         noauth = noauth {
@@ -699,7 +709,7 @@ class ClientHandler @impl UserHandler {
         __context = context {
     }
 
-    void process(CommHandler comm, RPCMessage msg) {
+    void process(Connection comm, RPCMessage msg) {
         comm.log.debug `processing method $(msg.method)`;
         String error;
 
@@ -736,7 +746,7 @@ class ClientHandler @impl UserHandler {
         __context.writeError(comm, error, msg.id);
     }
 
-    void process(CommHandler comm) {
+    void process(Connection comm) {
         # Initialize the reader if we haven't done so.
         if (!reader)
             reader = _BufferSerialReader(comm.inBuf);
@@ -758,7 +768,7 @@ class ClientHandler @impl UserHandler {
         }
     }
 
-    void terminate(CommHandler comm) {
+    void terminate(Connection comm) {
         # TODO when the RPC client terminates, we want to close all active
         # tunnels for the client.
     }
@@ -768,12 +778,12 @@ class ClientHandler @impl UserHandler {
 
 # --- Server-side method implementation functions. ---
 
-void getObject(Context context, RPCMessage msg, CommHandler comm) {
+void getObject(Context context, RPCMessage msg, Connection comm) {
     GetObjectRequest req = {};
     readMessageFromString(req, msg.request);
 
     class ResponseCallback @impl GeneralCallback[String] {
-        @cvars {Context context; CommHandler comm; int32 requestId;}
+        @cvars {Context context; Connection comm; int32 requestId;}
         void oper call(String contents, Exception ex) {
             GetObjectResponse resp = {};
             resp.data = contents;
@@ -785,12 +795,12 @@ void getObject(Context context, RPCMessage msg, CommHandler comm) {
                                 ResponseCallback(context, comm, msg.id));
 }
 
-void getHead(Context context, RPCMessage msg, CommHandler comm) {
+void getHead(Context context, RPCMessage msg, Connection comm) {
     GetHeadRequest req = {};
     readMessageFromString(req, msg.request);
 
     class ResponseCallback @impl GeneralCallback[String] {
-        @cvars {Context context; CommHandler comm; int32 requestId;}
+        @cvars {Context context; Connection comm; int32 requestId;}
         void oper call(String digest, Exception ex) {
             GetHeadResponse resp = {};
             resp.digest = digest;
@@ -801,12 +811,12 @@ void getHead(Context context, RPCMessage msg, CommHandler comm) {
     context.reader.getHead(req.branch, ResponseCallback(context, comm, msg.id));
 }
 
-void getFile(Context context, RPCMessage msg, CommHandler comm) {
+void getFile(Context context, RPCMessage msg, Connection comm) {
     GetFileRequest req = {};
     readMessageFromString(req, msg.request);
 
     class ResponseCallback @impl GeneralCallback[String] {
-        @cvars {Context context; CommHandler comm; int32 requestId;}
+        @cvars {Context context; Connection comm; int32 requestId;}
         void oper call(String data, Exception ex) {
             GetFileResponse resp = {};
             resp.data = data;
@@ -818,12 +828,12 @@ void getFile(Context context, RPCMessage msg, CommHandler comm) {
                            ResponseCallback(context, comm, msg.id));
 }
 
-void getJournalBlock(Context context, RPCMessage msg, CommHandler comm) {
+void getJournalBlock(Context context, RPCMessage msg, Connection comm) {
     GetJournalBlockRequest req = {};
     readMessageFromString(req, msg.request);
 
     class ResponseCallback @impl GeneralCallback[JournalBlock] {
-        @cvars {Context context; CommHandler comm; int32 requestId;}
+        @cvars {Context context; Connection comm; int32 requestId;}
         void oper call(JournalBlock block, Exception ex) {
             GetJournalBlockResponse resp = {};
             resp.firstBlockDigest = block.firstBlockDigest;
@@ -838,12 +848,12 @@ void getJournalBlock(Context context, RPCMessage msg, CommHandler comm) {
                                    );
 }
 
-void pullBranch(Context context, RPCMessage msg, CommHandler comm) {
+void pullBranch(Context context, RPCMessage msg, Connection comm) {
     PullBranchRequest req = {};
     readMessageFromString(req, msg.request);
 
     class ResponseCallback @impl GeneralCallback[String] {
-        @cvars {Context context; CommHandler comm; int32 requestId;}
+        @cvars {Context context; Connection comm; int32 requestId;}
         void oper call(String localName, Exception ex) {
             # Pull-branch is handled asynchronously, so we have to check
             # the 'ex' argument.
@@ -863,12 +873,12 @@ void pullBranch(Context context, RPCMessage msg, CommHandler comm) {
                      ResponseCallback(context, comm, msg.id));
 }
 
-void merge(Context context, RPCMessage msg, CommHandler comm) {
+void merge(Context context, RPCMessage msg, Connection comm) {
     MergeRequest req = {};
     readMessageFromString(req, msg.request);
 
     class ResponseCallback @impl GeneralCallback[MergeResponse] {
-        @cvars {Context context; CommHandler comm; int32 requestId;}
+        @cvars {Context context; Connection comm; int32 requestId;}
         void oper call(MergeResponse resp, Exception ex) {
             # merge is handled asynchronously, so we have to check
             # the 'ex' argument.
@@ -886,7 +896,7 @@ void merge(Context context, RPCMessage msg, CommHandler comm) {
 ## Callback that can be used for RPCs that don't have a meaningful return
 ## value.
 class EmptyResponseCallback @impl GeneralCallback[int] {
-    @cvars {Context context; CommHandler comm; int32 requestId;}
+    @cvars {Context context; Connection comm; int32 requestId;}
     void oper call(int resp, Exception ex) {
         if (ex) {
             context.writeError(comm, ex.text, requestId);
@@ -896,15 +906,15 @@ class EmptyResponseCallback @impl GeneralCallback[int] {
     }
 }
 
-void resolve(Context context, RPCMessage msg, CommHandler comm) {
+void resolve(Context context, RPCMessage msg, Connection comm) {
     _inst.resolve(EmptyResponseCallback(context, comm, msg.id));
 }
 
-void cancelMerge(Context context, RPCMessage msg, CommHandler comm) {
+void cancelMerge(Context context, RPCMessage msg, Connection comm) {
     _inst.cancelMerge(EmptyResponseCallback(context, comm, msg.id));
 }
 
-void addPeer(Context context, RPCMessage msg, CommHandler comm) {
+void addPeer(Context context, RPCMessage msg, Connection comm) {
     req := AddPeerRequest();
     readMessageFromString(req, msg.request);
 
@@ -913,7 +923,7 @@ void addPeer(Context context, RPCMessage msg, CommHandler comm) {
                   );
 }
 
-void getInfo(Context context, RPCMessage msg, CommHandler comm) {
+void getInfo(Context context, RPCMessage msg, Connection comm) {
     try {
         info := _inst.getInfo();
         context.writeResponse(comm, info, msg.id);
@@ -922,7 +932,7 @@ void getInfo(Context context, RPCMessage msg, CommHandler comm) {
     }
 }
 
-void traverse(Context context, RPCMessage msg, CommHandler comm) {
+void traverse(Context context, RPCMessage msg, Connection comm) {
     req := TraverseRequest();
     readMessageFromString(req, msg.request);
     _inst.traverse(req.branch, req.algo,
@@ -930,7 +940,7 @@ void traverse(Context context, RPCMessage msg, CommHandler comm) {
                    );
 }
 
-void login(Context context, RPCMessage msg, CommHandler comm) {
+void login(Context context, RPCMessage msg, Connection comm) {
     req := LoginRequest();
     readMessageFromString(req, msg.request);
     try {
@@ -967,7 +977,7 @@ void login(Context context, RPCMessage msg, CommHandler comm) {
     context.writeResponse(comm, LoginResponse(), msg.id);
 }
 
-class PeerServiceCommFactory @impl CommHandlerFactory {
+class PeerServiceConnectionFactory @impl ConnectionFactory {
     MethodMap __methods = {};
     Context __context;
 
@@ -988,9 +998,9 @@ class PeerServiceCommFactory @impl CommHandlerFactory {
         __methods['login'] = MethodHandler(login, true);
     }
 
-    CommHandler makeCommHandler(NewConnection conn) {
+    Connection makeConnection(NewConnection conn) {
         conn.log.info `accepted connection from $(conn.accepted.addr)\n`;
         log := Log(conn.log, FStr() `server-client-$(conn.accepted.addr)`);
-        return CommHandler(log, ClientHandler(__methods, __context));
+        return Connection(log, ClientHandler(__methods, __context));
     }
 }

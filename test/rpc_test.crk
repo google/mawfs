@@ -1,16 +1,19 @@
 
 import crack.functor Functor1;
 import crack.io cerr, FStr;
-import crack.lang Exception;
+import crack.lang AssertionError, Exception;
 import crack.logger.ctx Log;
 import crack.net InetAddress, Poller, PollEvent, PollEventCallback, Socket,
     SocketApd, AF_INET, SOCK_STREAM;
-import crack.net.comm2 Comm, CommListener, WaiterFor;
+import crack.net.comm2 Comm, CommListener, ConnectionFactory, WaiterFor;
+import crack.net.ssl SSLContext;
+import crack.runtime exit;
 import mawfs.aes_siv SIVCipher;
 import mawfs.ciphers sha256, Cipher;
 import mawfs.rawchunk GeneralCallback, JournalBlock, RawChunkReader;
 import mawfs.rpc setInst, Context, InfoResponse, InstIFace, LoginError,
-    LoginState, MergeResponse, PeerProxy, PeerServiceCommFactory;
+    LoginState, MergeResponse, PeerProxy, PeerServiceConnectionFactory;
+import mawfs.ssl makeSSLContext;
 
 @import crack.ann assert, impl;
 
@@ -104,6 +107,13 @@ class FakeInstance @impl InstIFace {
     bool validNonce(String nonce) {
         return nonce == 'nonce';
     }
+
+    String getPSK(String identity) {
+        if (identity == 'identity')
+            return identity;
+        else
+            return 'invalid';
+    }
 }
 
 
@@ -112,17 +122,34 @@ class RPCTestBed {
     Comm comm;
     Log log;
     Context context;
+    bool ssl;
+    bool badPSK;
 
     ## Server port number.
     int port;
 
     Cipher cipher = SIVCipher(sha256('weak password'), null);
 
+    oper init(bool ssl) : ssl = ssl {}
+
+    SSLContext __getSSLContext() {
+        if (ssl)
+            return makeSSLContext(FakeInstance(cipher), comm,
+                                  badPSK ? 'invalid' : 'identity',
+                                  'identity'
+                                  );
+        else
+            return null;
+    }
+
     void startServer() {
         portCallback := PortCollectorCallback();
         context = Context(FakeChunkReader());
         context.authenticated = true;
-        listener := CommListener(log, PeerServiceCommFactory(context));
+        ConnectionFactory factory = PeerServiceConnectionFactory(context);
+        if (ssl)
+            factory = __getSSLContext().makeConnectionFactory(factory);
+        listener := CommListener(log, factory);
         listener.addSocketInitCallback(portCallback);
         comm.startServer(InetAddress(127, 0, 0, 1, 0), listener, true);
         port = portCallback.waiter.getResult();
@@ -139,19 +166,23 @@ class RPCTestBed {
 
     void testGetObject() {
         peer :=
-            PeerProxy.make(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`);
+            PeerProxy.make(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`,
+                           __getSSLContext());
+        @assert(peer);
         @assert(peer.getObject('foo') == 'from the chunk reader');
     }
 
     void testGetHead() {
         peer :=
-            PeerProxy.make(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`);
+            PeerProxy.make(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`,
+                           __getSSLContext());
         @assert(peer.getHead('master') == 'digest');
     }
 
     void testReadJournal() {
         peer :=
-            PeerProxy.make(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`);
+            PeerProxy.make(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`,
+                           __getSSLContext());
         jb := peer.getJournalBlock('digest', 'branch', 0);
         @assert(jb.firstBlockDigest == 'digest');
         @assert(jb.contents == 'branch contents');
@@ -163,14 +194,17 @@ class RPCTestBed {
 
     void testGetFile() {
         peer :=
-            PeerProxy.make(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`);
+            PeerProxy.make(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`,
+                           __getSSLContext());
         @assert(peer.getFile('filename') == 'contents');
     }
 
     void testPeerLogin() {
         context.authenticated = false;
         peer := PeerProxy.make(comm, Log(log, 'client'),
-                               FStr() `127.0.0.1:$port`);
+                               FStr() `127.0.0.1:$port`,
+                               __getSSLContext()
+                               );
         peer.login(cipher);
         @assert(context.authenticated);
     }
@@ -178,7 +212,9 @@ class RPCTestBed {
     void testFailingPeerLogin() {
         context.authenticated = false;
         peer := PeerProxy.make(comm, Log(log, 'client'),
-                               FStr() `127.0.0.1:$port`);
+                               FStr() `127.0.0.1:$port`,
+                               __getSSLContext()
+                               );
         try {
             peer.login(SIVCipher(sha256('wrong password'), null));
             @assert(false);
@@ -190,7 +226,9 @@ class RPCTestBed {
     void testUserLogin() {
         context.authenticated = false;
         peer := PeerProxy.make(comm, Log(log, 'client'),
-                               FStr() `127.0.0.1:$port`);
+                               FStr() `127.0.0.1:$port`,
+                               __getSSLContext()
+                               );
         peer.login('nonce');
         @assert(context.authenticated);
     }
@@ -198,7 +236,9 @@ class RPCTestBed {
     void testFailedUserLogin() {
         context.authenticated = false;
         peer := PeerProxy.make(comm, Log(log, 'client'),
-                               FStr() `127.0.0.1:$port`);
+                               FStr() `127.0.0.1:$port`,
+                               __getSSLContext()
+                               );
         try {
             peer.login('badnonce');
             @assert(false);
@@ -213,7 +253,7 @@ class RPCTestBed {
     }
 }
 
-testbed := RPCTestBed();
+testbed := RPCTestBed(false);
 testbed.setUp();
 try {
     testbed.testGetObject();
@@ -224,6 +264,23 @@ try {
     testbed.testFailingPeerLogin();
     testbed.testUserLogin();
     testbed.testFailedUserLogin();
+} catch (Exception ex) {
+    testbed.tearDown();
+    throw ex;
+}
+
+# Test SSL functionality.
+testbed = RPCTestBed(true);
+testbed.setUp();
+try {
+    testbed.testGetObject();
+
+    testbed.badPSK = true;
+    try {
+        testbed.testGetObject();
+        exit(1);
+    } catch (AssertionError ex) {
+    }
 } catch (Exception ex) {
     testbed.tearDown();
     throw ex;
