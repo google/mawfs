@@ -503,6 +503,7 @@ To start a server listening on all interfaces, port 9119:
 ```
 [server]
 enabled = true
+ssl = true
 ```
 
 To start a server listening on 9119 on localhost:
@@ -510,6 +511,7 @@ To start a server listening on 9119 on localhost:
 ```
 [server]
 iface = 127.0.0.1
+ssl = true
 ```
 
 To start a server listening on 1.2.3.4:1234:
@@ -518,7 +520,13 @@ To start a server listening on 1.2.3.4:1234:
 [server]
 iface = 1.2.3.4
 port = 1234
+ssl = true
 ```
+
+The "ssl" flag shown above enables SSL (TLS, actually) for the server socket.
+It should always be used for new installations unless for some reason an
+insecure connection is desired, in which case appropriate steps should be
+taken to secure the machine and port.
 
 Peer Configuration
 ------------------

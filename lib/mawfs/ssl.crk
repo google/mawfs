@@ -12,12 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import crack.enc.base64 altEncode;
 import crack.ext._ssl SSL;
 import crack.io cerr;
 import crack.net.comm2 Comm;
 import crack.net.ssl SSLContext;
 import crack.runtime memcpy;
-import mawfs.rpc InstIFace;
+
+import .ciphers sha256, Cipher;
+import .entropy getEntropySource;
+import .nonces NONCE_SIZE;
+import .rpc InstIFace;
 
 uint min(uint a, uint b) {
     return a > b ? b : a;
@@ -69,4 +74,18 @@ SSLContext makeSSLContext(InstIFace inst, Comm comm, String identity,
     return SSLContext.make(clientCB, serverCB, comm);
 }
 
+## Create a client using a cipher to generate the passkey.
+SSLContext makeClientSSLContext(Comm comm, Cipher cipher) {
+    id := getEntropySource().getString(16);
+    _identity = 'P' + altEncode(cipher.encrypt(id));
+    _psk = cipher.encrypt(sha256(id));
+    return SSLContext.make(clientCB, serverCB, comm);
+}
 
+## Create a client using 'nonce' as the passkey.
+SSLContext makeClientSSLContext(Comm comm, String nonce) {
+    const size := NONCE_SIZE / 2;
+    _identity = 'L' + altEncode(nonce.substr(0, size));
+    _psk = nonce.substr(size);
+    return SSLContext.make(clientCB, serverCB, comm);
+}

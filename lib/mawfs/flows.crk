@@ -551,7 +551,9 @@ class MAWFSInstance @impl InstIFace {
             # Local identity.  Should be the first half of a registered nonce.
             # If it's not, we construct a random PSK to deny entry.
             const size := NONCE_SIZE / 2;
-            psk := __state.getNonceManager().redeemPrefix(identity.substr(size));
+            psk := __state.getNonceManager().redeemPrefix(
+                altDecode(identity.substr(1))
+            );
             return (psk is null) ? getEntropySource().getString(size) : psk;
         } else {
             # Remote peer identity.  First character should be 'P' and the

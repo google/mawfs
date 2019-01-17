@@ -17,7 +17,8 @@ import crack.cont.hashmap HashMap;
 import crack.fs cwd, makePath, Path;
 import crack.hash.sha256 SHA256;
 import crack.io cerr, FStr, SEEK_SET;
-import crack.lang AppendBuffer, Buffer, Exception, ManagedBuffer;
+import crack.lang AppendBuffer, AssertionError, Buffer, Exception,
+    ManagedBuffer;
 import crack.process Process, ProcessHandler, ProcessHandlerImpl,
     CRK_PROC_EXITED, CRK_PIPE_STDIN, CRK_PIPE_STDOUT;
 import crack.strutil StringArray;
@@ -832,5 +833,30 @@ class TraversalTest : DoubleInstanceTest {
     }
 }
 register(TraversalTest());
+
+class SSLTest : TestCase {
+    bool useSSL() { return true }
+    void run() {
+        (makePath('backing')/'config/peers').writeAll(
+            '[server]\nport = 12543\nssl = true\n');
+        restartFS('master');
+        # Attempt to connect.
+        runMawfs(StringArray!['-i', 'fs', 'info']);
+# TODO: this won't work until we get unauthorized clients.
+#        runMawfs(StringArray!['-i', 'localhost:12543:ssl', 'info']);
+# TODO: the next test still hangs.
+#        try {
+#            runMawfs(StringArray!['-i', 'localhost:12543:tcp', 'info']);
+#            @assert(false &&
+#                    'No error doing normal TCP connection to SSL server.');
+#        } catch (Exception ex) {
+#            if (ex.isa(AssertionError))
+#                throw ex;
+#        }
+
+        # XXX also need to verify that a server can communicate to its peers.
+    }
+}
+register(SSLTest());
 
 runAllTests();

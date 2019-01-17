@@ -75,7 +75,7 @@ class TestBed {
     void setUp() {
         __resetTempDir();
         net = PeerNetwork(null, SIVCipher(sha256('test test'), null));
-        peer := Peer(null, null, null, null);
+        peer := Peer(null, null, null, null, null);
         peer.setProxy(FakeProxy(getJournalBlockResults));
         net.addPeer(peer);
     }

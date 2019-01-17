@@ -1,7 +1,7 @@
 
 import crack.functor Functor1;
 import crack.io cerr, FStr;
-import crack.lang AssertionError, Exception;
+import crack.lang AssertionError, Exception, InvalidArgumentError;
 import crack.logger.ctx Log;
 import crack.net InetAddress, Poller, PollEvent, PollEventCallback, Socket,
     SocketApd, AF_INET, SOCK_STREAM;
@@ -11,8 +11,9 @@ import crack.runtime exit;
 import mawfs.aes_siv SIVCipher;
 import mawfs.ciphers sha256, Cipher;
 import mawfs.rawchunk GeneralCallback, JournalBlock, RawChunkReader;
-import mawfs.rpc setInst, Context, InfoResponse, InstIFace, LoginError,
-    LoginState, MergeResponse, PeerProxy, PeerServiceConnectionFactory;
+import mawfs.rpc parseAddr, setInst, Context, InfoResponse, InstIFace,
+    LoginError, LoginState, MergeResponse, PeerProxy,
+    PeerServiceConnectionFactory;
 import mawfs.ssl makeSSLContext;
 
 @import crack.ann assert, impl;
@@ -250,6 +251,27 @@ class RPCTestBed {
 
     void tearDown() {
         comm.stop();
+    }
+}
+
+# Test parseAddr()
+if (true) {
+    addr := parseAddr('localhost:12345');
+    @assert(!addr.ssl);
+    @assert(addr.getPort() == 12345);
+
+    addr = parseAddr('localhost:12345:ssl');
+    @assert(addr.ssl);
+    @assert(addr.getPort() == 12345);
+
+    addr = parseAddr('localhost:12345:tcp');
+    @assert(!addr.ssl);
+    @assert(addr.getPort() == 12345);
+
+    try {
+        parseAddr('localhost:12345:bogus');
+        @assert(false && 'No exceptionn thrown for invalid proto');
+    } catch (InvalidArgumentError ex) {
     }
 }
 

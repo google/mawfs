@@ -55,6 +55,7 @@ import mawfs.peernet PeerNetwork, RemoteReaderImpl;
 import mawfs.rawchunk RawChunkReader;
 import mawfs.rpc parseAddr, setInst, ExtendedAddress, PeerProxy,
     TRAVERSE_DELTA, TRAVERSE_FULL, TRAVERSE_NONE;
+import mawfs.ssl makeClientSSLContext, makeSSLContext;
 import mawfs.util traverseCommit;
 
 @import crack.ann impl, struct;
@@ -197,12 +198,20 @@ class RPCCmd {
     Log __log;
     Comm __comm;
 
-    oper init(String addr, String authNonce) {
+    oper init(ExtendedAddress addr, String authNonce) {
         __log = Log(cerrLogger, 'client');
         __comm = Comm(__log);
         __comm.start();
-        __proxy = PeerProxy.make(__comm, __log, addr, null);
-        if (__proxy) {
+        __proxy = PeerProxy.make(__comm, __log, addr,
+                                 (authNonce && addr.ssl) ?
+                                     makeClientSSLContext(__comm,
+                                                          authNonce
+                                                          ) :
+                                      null
+                                 );
+
+        # If we connected but didn't authenticate over SSL, do a login.
+        if (__proxy && (!addr.ssl || !authNonce)) {
             nonce := authNonce;
             if (!nonce) {
                 mountpoint := __proxy.getMountpoint();
@@ -310,6 +319,12 @@ opts := CmdOptions![
     Option('logfile', 'l', 'logfile name', 'mawfs.log', CMD_STR),
     Option('branch', 'b', 'branch name', 'master', CMD_STR),
     Option('port', 'p', 'port number', '9119', CMD_INT),
+    Option('ssl', '',
+           I'enable ssl for a new instance (true, false or empty to use the
+           default value',
+           '',
+           CMD_STR
+           ),
     Option('iface', 'f',
            'Server interface to bind to.  This is only used by commands that '
            'create an instance ("create" and "clone") and only when the '
@@ -386,7 +401,7 @@ class CommandManager {
 
     ## Initialize the backing store and its config, giving an error if it
     ## doesn't exist.
-    void initBackingStore(String arg) {
+    void initBackingStore(String arg, bool defaultSSL) {
         rootDir = makePath(arg);
         if (rootDir.exists() && !opts.getBool('overwrite')) {
             cerr `Directory $rootDir already exists\n`;
@@ -396,11 +411,20 @@ class CommandManager {
         # Create a peer config if "port" is specified.
         if (port := opts.getString('port')) {
             String iface = opts.getString('iface');
+            bool ssl;
+            if (opts.getString('ssl') == 'true')
+                ssl = true;
+            else if (opts.getString('ssl') == 'false')
+                ssl = false;
+            else
+                ssl = defaultSSL;
+
             (rootDir/'config').makeDirs();
             StandardFormatter((rootDir/'config'/'peers').writer()) I`\
                 [server]
                 iface = $iface
                 port = $port
+                ssl = $ssl
                 `;
         }
     }
@@ -491,8 +515,9 @@ class CommandManager {
     }
 
     RPCCmd getRPC() {
-        addr := getServer();
-        cmd := RPCCmd(addr.server, addr.nonce);
+        serverAndNonce := getServer();
+        addr := parseAddr(serverAndNonce.server);
+        cmd := RPCCmd(addr, serverAndNonce.nonce);
         if (!cmd.getProxy())
             throw Abort(FStr() `Unable to connect to $addr`);
         return cmd;
@@ -527,16 +552,19 @@ class CommandManager {
     ## The "clone" command.
     void clone() {
         checkArgs(4, 'Usage: mawfs clone <peer-address> <backing-dir>\n');
-        initBackingStore(args[3]);
 
         # Need to share all of this code with 'pull'.
         peerAddr := parsePeerAddr(getServer(args[2]).server);
         password := readPassword();
         tempCipher := SIVCipher(password, null);
 
+        # Initialize backing store, use the peer's ssl setting as a default.
+        initBackingStore(args[3], peerAddr.ssl);
+
         # Only need a raw chunk reader if we're running a server, so we
         # can give it a null.
         net := PeerNetwork(null, tempCipher);
+        net.setSSLContext(makeClientSSLContext(net.getComm(), tempCipher));
         net.addPeer(peerAddr);
 
         # If there's no params file, get one.
@@ -579,7 +607,7 @@ class CommandManager {
     void create() {
         checkArgs(3, 'Usage: mawfs create <backing-dir>\n');
         cerr `port is $(opts.getInt('port'))\n`;
-        initBackingStore(args[2]);
+        initBackingStore(args[2], true);
         makeChunkStore();
         cerr I`MAWFS Cell created\n`;
         showRunInstructions();
@@ -812,8 +840,18 @@ void main() {
 
                 void start() {
                     __net = PeerNetwork(__chunkReader, instState.getCipher());
+                    mawfsInstance := MAWFSInstance(instState, __net);
+                    __net.setSSLContext(makeSSLContext(mawfsInstance,
+                                                       __net.getComm(),
+                                                       # XXX gotta do
+                                                       # something about
+                                                       # these nulls...
+                                                       null,
+                                                       null
+                                                       )
+                                        );
+                    setInst(mawfsInstance);
                     __net.configure(__config);
-                    setInst(MAWFSInstance(instState, __net));
                     __net.storeServersIn(instState);
 
                     # Set the remote reader from the peer net (note that we

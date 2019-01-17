@@ -5,7 +5,8 @@ import crack.cont.array Array;
 import crack.cont.hashmap HashMap;
 import crack.functor Functor3;
 import crack.io cerr, Formatter, FStr, StringWriter, Reader;
-import crack.lang cmp, makeHashVal, AppendBuffer, Exception, WriteBuffer;
+import crack.lang cmp, makeHashVal, AppendBuffer, Exception,
+    InvalidArgumentError, WriteBuffer;
 import crack.logger.ctx Log;
 import crack.net resolve, Address, InetAddress;
 import crack.net.comm2 Comm, Connection, ConnectionFactory, NewConnection,
@@ -14,7 +15,7 @@ import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
 import crack.rawptr RawPtr;
 import crack.regex Regex;
 import crack.serial SerialReader, SerialWriter;
-import crack.net.ssl SSLContext;
+import crack.net.ssl SSLConnection, SSLContext;
 
 import .ciphers Cipher, sha256;
 import .entropy getEntropySource;
@@ -313,14 +314,22 @@ class RemoteError : Exception {
 ## created that way).
 class ExtendedAddress : InetAddress {
     String __hostname;
-    oper init(String hostname, byte a, byte b, byte c, byte d, int port) :
+
+    ## True if this is an SSL address.
+    bool ssl;
+
+    oper init(String hostname, byte a, byte b, byte c, byte d, int port,
+              bool ssl
+              ) :
         InetAddress(a, b, c, d, port),
-        __hostname = hostname {
+        __hostname = hostname,
+        ssl = ssl {
     }
 
-    oper init(String hostname, uint32 addr, int port) :
+    oper init(String hostname, uint32 addr, int port, bool ssl) :
         InetAddress(addr, port),
-        __hostname = hostname {
+        __hostname = hostname,
+        ssl = ssl {
     }
 
     String getHostname() { return __hostname }
@@ -331,9 +340,22 @@ class ExtendedAddress : InetAddress {
 ExtendedAddress parseAddr(String addr) {
     int port;
     String host;
+    bool ssl;
     if ((colon := addr.lfind(b':')) != -1) {
         host = addr.substr(0, colon);
         port = parseInt(addr.substr(colon + 1));
+        colon = addr.lfind(b':', colon + 1);
+
+        # Check for an "ssl" designator.
+        if (colon != -1) {
+            proto := addr.substr(colon + 1);
+            if (proto == 'ssl')
+                ssl = true;
+            else if (proto != 'tcp')
+                throw InvalidArgumentError(
+                    FStr() `Invalid protocol "$proto": must be "ssl" or "tcp"`
+                );
+        }
     } else {
         host = addr;
         port = DEFAULT_PORT;
@@ -346,11 +368,14 @@ ExtendedAddress parseAddr(String addr) {
                             byte(parseInt(m.group(2))),
                             byte(parseInt(m.group(3))),
                             byte(parseInt(m.group(4))),
-                            port
+                            port,
+                            ssl
                             );
     } else {
         addrs := resolve(host);
-        a = ExtendedAddress(host, InetAddress.cast(addrs[0]).getAddr(), port);
+        a = ExtendedAddress(host, InetAddress.cast(addrs[0]).getAddr(), port,
+                            ssl
+                            );
     }
     return a;
 }
@@ -750,8 +775,11 @@ class ClientHandler @impl UserHandler {
         # Initialize the reader if we haven't done so.
         if (!reader)
             reader = _BufferSerialReader(comm.inBuf);
-        if (!__context.log)
+        if (!__context.log) {
             __context.log = comm.log;
+            if (ssl := SSLConnection.get(comm))
+                __context.authenticated = true;
+        }
 
         while (comm.inBuf) {
             # Get the next message, make sure we were able to read it.

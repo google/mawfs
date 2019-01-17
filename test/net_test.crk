@@ -34,7 +34,7 @@ import mawfs.inst InstanceState;
 import mawfs.path MAWFSPath;
 import mawfs.peernet PeerNetwork, RemoteReaderImpl;
 import mawfs.params ParamInfo;
-import mawfs.rpc setInst, PeerProxy;
+import mawfs.rpc setInst, ExtendedAddress, PeerProxy;
 import mawfs.testutil FakeEntropySource;
 import test.unittest register, runAllTests, Test;
 
@@ -79,7 +79,10 @@ class PeerInfo {
         # Set up a remote reader.
         cs.setRemoteReader(RemoteReaderImpl(peerNet));
 
-        peerNet.addServer(InetAddress(127, 0, 0, 1, port));
+        peerNet.addServer(ExtendedAddress('localhost', 127, 0, 0, 1, port,
+                                          false
+                                          )
+                          );
     }
 
     void makeBranch(String branch) {
@@ -153,12 +156,21 @@ class PeerInfo {
         root = makePath('tmp');
         createMaster();
         createSlave();
-        slave.peerNet.addPeer(InetAddress(127, 0, 0, 1, MASTER_PORT));
+        slave.peerNet.addPeer(ExtendedAddress('localhost', 127, 0, 0, 1,
+                                              MASTER_PORT,
+                                              false
+                                              )
+                              );
 
         log := Log(cerrLogger, 'client-proxy');
         comm = Comm(log);
         comm.start();
-        proxy = PeerProxy.make(comm, log, InetAddress(127, 0, 0, 1, getPort()));
+        proxy = PeerProxy.make(
+            comm,
+            log,
+            InetAddress(127, 0, 0, 1, getPort()),
+            null
+        );
         proxy.login(slave.cipher);
     }
 

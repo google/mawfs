@@ -14,8 +14,8 @@ import crack.net.ssl SSLContext;
 import mawfs.blockstore RemoteReader;
 import mawfs.configstore ConfigStore;
 import mawfs.rawchunk RawChunkReader;
-import mawfs.rpc parseAddr, Context, PeerDisconnectedError, PeerProxy,
-    PeerServiceConnectionFactory;
+import mawfs.rpc parseAddr, Context, ExtendedAddress, PeerDisconnectedError,
+    PeerProxy, PeerServiceConnectionFactory;
 
 import .ciphers Cipher;
 import .inst InstanceState;
@@ -99,24 +99,29 @@ class PeerNetwork {
         __sslCtx = sslCtx;
     }
 
-    void addServer(Address addr) {
+    Comm getComm() { return __comm }
+
+    void addServer(ExtendedAddress addr) {
         context := Context(__chunkReader);
         ConnectionFactory factory = PeerServiceConnectionFactory(context);
-        __log.info `starting server on $addr`;
+        __log.info `starting server on $addr:$(addr.ssl ? 'ssl' : 'tcp')`;
         try {
-            if (__sslCtx)
+            useSSL := __sslCtx && addr.ssl;
+            if (useSSL)
                 factory = __sslCtx.makeConnectionFactory(factory);
             __comm.startServer(addr, factory, true);
-            __serverAddrs.append(FStr() `$addr`);
+            __serverAddrs.append(
+                FStr() `$addr:$(useSSL ? 'ssl' : 'tcp')`
+            );
         } catch (Exception ex) {
             __log.error `Error starting server: $ex\n`;
         }
     }
 
-    void addPeer(Address addr) {
+    void addPeer(ExtendedAddress addr) {
         __peers.append(Peer(__comm, Log(__log, FStr() `peer-$addr`), addr,
                             __cipher,
-                            __sslCtx
+                            addr.ssl ? __sslCtx : null
                             )
                        );
     }
@@ -276,13 +281,14 @@ class PeerNetwork {
         ifaceStr := config.get('server', 'iface', '');
         portStr := config.get('server', 'port', '');
         enabled := config.get('server', 'enabled', '');
+        ssl := config.get('server', 'ssl', '');
 
         # If "enabled" is not explicitly defined, infer whether to run a
         # server based on whether "port" or "iface" is defined.
         if (!enabled && (ifaceStr || portStr) || toLower(enabled) == 'true') {
             addr := ifaceStr ? ifaceStr : '0.0.0.0';
             if (portStr)
-                addr = FStr() `$addr:$portStr`;
+                addr = FStr() `$addr:$portStr:$(ssl == 'true' ? 'ssl' : 'tcp')`;
             inetAddr := parseAddr(addr);
             if (!inetAddr)
                 __log.error `Unable to start server on address $addr\n`;
