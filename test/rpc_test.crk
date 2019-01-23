@@ -13,7 +13,7 @@ import mawfs.ciphers sha256, Cipher;
 import mawfs.rawchunk GeneralCallback, JournalBlock, RawChunkReader;
 import mawfs.rpc parseAddr, setInst, Context, InfoResponse, InstIFace,
     LoginError, LoginState, MergeResponse, PeerProxy,
-    PeerServiceConnectionFactory;
+    PeerServiceConnectionFactory, PSKInfo, RemoteError;
 import mawfs.ssl makeSSLContext;
 
 @import crack.ann assert, impl;
@@ -109,11 +109,11 @@ class FakeInstance @impl InstIFace {
         return nonce == 'nonce';
     }
 
-    String getPSK(String identity) {
+    PSKInfo getPSK(String identity) {
         if (identity == 'identity')
-            return identity;
+            return PSKInfo(identity, true);
         else
-            return 'invalid';
+            return PSKInfo('invalid', false);
     }
 }
 
@@ -122,7 +122,6 @@ class RPCTestBed {
 
     Comm comm;
     Log log;
-    Context context;
     bool ssl;
     bool badPSK;
 
@@ -145,9 +144,8 @@ class RPCTestBed {
 
     void startServer() {
         portCallback := PortCollectorCallback();
-        context = Context(FakeChunkReader());
-        context.authenticated = true;
-        ConnectionFactory factory = PeerServiceConnectionFactory(context);
+        ConnectionFactory factory =
+            PeerServiceConnectionFactory(FakeChunkReader());
         if (ssl)
             factory = __getSSLContext().makeConnectionFactory(factory);
         listener := CommListener(log, factory);
@@ -170,6 +168,7 @@ class RPCTestBed {
             PeerProxy.make(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`,
                            __getSSLContext());
         @assert(peer);
+        peer.login(cipher);
         @assert(peer.getObject('foo') == 'from the chunk reader');
     }
 
@@ -177,6 +176,7 @@ class RPCTestBed {
         peer :=
             PeerProxy.make(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`,
                            __getSSLContext());
+        peer.login(cipher);
         @assert(peer.getHead('master') == 'digest');
     }
 
@@ -184,6 +184,7 @@ class RPCTestBed {
         peer :=
             PeerProxy.make(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`,
                            __getSSLContext());
+        peer.login(cipher);
         jb := peer.getJournalBlock('digest', 'branch', 0);
         @assert(jb.firstBlockDigest == 'digest');
         @assert(jb.contents == 'branch contents');
@@ -197,21 +198,19 @@ class RPCTestBed {
         peer :=
             PeerProxy.make(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`,
                            __getSSLContext());
+        peer.login(cipher);
         @assert(peer.getFile('filename') == 'contents');
     }
 
     void testPeerLogin() {
-        context.authenticated = false;
         peer := PeerProxy.make(comm, Log(log, 'client'),
                                FStr() `127.0.0.1:$port`,
                                __getSSLContext()
                                );
         peer.login(cipher);
-        @assert(context.authenticated);
     }
 
     void testFailingPeerLogin() {
-        context.authenticated = false;
         peer := PeerProxy.make(comm, Log(log, 'client'),
                                FStr() `127.0.0.1:$port`,
                                __getSSLContext()
@@ -221,21 +220,22 @@ class RPCTestBed {
             @assert(false);
         } catch (LoginError ex) {
         }
-        @assert(!context.authenticated);
+        try {
+            peer.getObject('foo');
+            @assert(false);
+        } catch (RemoteError ex) {
+        }
     }
 
     void testUserLogin() {
-        context.authenticated = false;
         peer := PeerProxy.make(comm, Log(log, 'client'),
                                FStr() `127.0.0.1:$port`,
                                __getSSLContext()
                                );
         peer.login('nonce');
-        @assert(context.authenticated);
     }
 
     void testFailedUserLogin() {
-        context.authenticated = false;
         peer := PeerProxy.make(comm, Log(log, 'client'),
                                FStr() `127.0.0.1:$port`,
                                __getSSLContext()
@@ -245,8 +245,11 @@ class RPCTestBed {
             @assert(false);
         } catch (LoginError ex) {
         }
-        @assert(!context.authenticated);
-        context.authenticated = true;
+        try {
+            peer.getObject('foo');
+            @assert(false);
+        } catch (RemoteError ex) {
+        }
     }
 
     void tearDown() {

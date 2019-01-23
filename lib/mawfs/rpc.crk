@@ -210,6 +210,15 @@ class LoginError : Exception {
     oper init(String message) : Exception(message) {}
 }
 
+## Encapsulates information on the pre-shared-key.
+@struct PSKInfo {
+    String psk;
+
+    ## True if the client has been authenticated.  If not, this is either an
+    ## invalid or an anonymous connection.
+    bool authenticated;
+}
+
 @interface InstIFace {
     @abstract void pullBranch(String branch, String peer,
                               GeneralCallback[String] callback
@@ -238,7 +247,7 @@ class LoginError : Exception {
     @abstract bool validNonce(String nonce);
 
     ## Returns the PSK for a given identity.
-    @abstract String getPSK(String identity);
+    @abstract PSKInfo getPSK(String identity);
 }
 
 InstIFace _inst;
@@ -436,7 +445,7 @@ class PeerProxy {
     PeerProxy __makeConnection(Comm comm, Log log, Address addr,
                                SSLContext sslCtx
                                ) {
-        log.info `connecting to $addr`;
+        log.info `connecting to $addr:$(sslCtx ? 'ssl' : 'tcp')`;
         try {
             handler := _PeerProxyHandler(log);
             proxy := sslCtx ? sslCtx.connect(addr, handler) :
@@ -727,11 +736,13 @@ class ClientHandler @impl UserHandler {
     ## The session context.
     Context __context;
 
+    Address __clientAddr;
     MethodMap __methods;
 
-    oper init(MethodMap methods, Context context) :
+    oper init(MethodMap methods, Context context, Address clientAddr) :
         __methods = methods,
-        __context = context {
+        __context = context,
+        __clientAddr = clientAddr {
     }
 
     void process(Connection comm, RPCMessage msg) {
@@ -777,8 +788,21 @@ class ClientHandler @impl UserHandler {
             reader = _BufferSerialReader(comm.inBuf);
         if (!__context.log) {
             __context.log = comm.log;
-            if (ssl := SSLConnection.get(comm))
-                __context.authenticated = true;
+            if (ssl := SSLConnection.get(comm)) {
+                __context.authenticated = !(ssl.getUserData(0) is null);
+
+                # Only allow unauthenticated SSL connections over localhost.
+                if (!__context.authenticated &&
+                    (!(inaddr := InetAddress.cast(__clientAddr, null)) ||
+                     inaddr.getAddr() != 0x7f000001
+                     )
+                    ) {
+                    comm.log.error I`Unauthenticated SSL connection from \
+                                     remote client: $__clientAddr`;
+                    comm.close();
+                    return;
+                }
+            }
         }
 
         while (comm.inBuf) {
@@ -1007,9 +1031,9 @@ void login(Context context, RPCMessage msg, Connection comm) {
 
 class PeerServiceConnectionFactory @impl ConnectionFactory {
     MethodMap __methods = {};
-    Context __context;
+    RawChunkReader __chunkReader;
 
-    oper init(Context context) : __context = context {
+    oper init(RawChunkReader chunkReader) : __chunkReader = chunkReader {
         __methods['getObject'] = MethodHandler(getObject);
         __methods['getHead'] = MethodHandler(getHead);
         __methods['getJournalBlock'] = MethodHandler(getJournalBlock);
@@ -1029,6 +1053,10 @@ class PeerServiceConnectionFactory @impl ConnectionFactory {
     Connection makeConnection(NewConnection conn) {
         conn.log.info `accepted connection from $(conn.accepted.addr)\n`;
         log := Log(conn.log, FStr() `server-client-$(conn.accepted.addr)`);
-        return Connection(log, ClientHandler(__methods, __context));
+        return Connection(log,
+                          ClientHandler(__methods, Context(__chunkReader),
+                                        conn.accepted.addr
+                                        )
+                          );
     }
 }

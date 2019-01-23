@@ -28,7 +28,7 @@ uint min(uint a, uint b) {
     return a > b ? b : a;
 }
 
-# There are two kinds of PSK identity:
+# There are three kinds of PSK identity:
 # - for peers, the identity is 'P' + an encrypted, alt-base64 nonce and the
 #   PSK is the encrypted SHA256 hash of the nonce.  A peer may reuse its
 #   identity and PSK for all connections.  We assume that the actual PSK is
@@ -36,6 +36,10 @@ uint min(uint a, uint b) {
 # - for local users, the identity is 'L' + the beginning of the alt-base64
 #   encoded nonce obtained from the filesystem and the PSK is the remaining
 #   portion of that nonce.
+# - anonymous.  The identity is 'A' + a random value which is also used as the
+#   password.  The only purpose for this is to allow a local anoynmous
+#   connection to determine the mountpoint, and it should only be allowed from
+#   localhost and only works for the getMountpoint() rpc.
 
 InstIFace _inst;
 String _identity, _psk;
@@ -55,9 +59,15 @@ uint clientCB(SSL ssl, byteptr hint, byteptr identity,
 }
 
 uint serverCB(SSL ssl, byteptr identity, byteptr psk, uint max_psk_length) {
-    pskString := _inst.getPSK(String(identity));
-    pskSize := min(pskString.size, max_psk_length);
-    memcpy(psk, pskString.buffer, pskSize);
+    pskInfo := _inst.getPSK(String(identity));
+    pskSize := min(pskInfo.psk.size, max_psk_length);
+    memcpy(psk, pskInfo.psk.buffer, pskSize);
+
+    ## Store a non-null in the session's user data to indicate that we've
+    ## authenticated.
+    if (pskInfo.authenticated)
+        ssl.setExData(0, byteptr(1));
+
     return pskSize;
 }
 
@@ -89,3 +99,12 @@ SSLContext makeClientSSLContext(Comm comm, String nonce) {
     _psk = nonce.substr(size);
     return SSLContext.make(clientCB, serverCB, comm);
 }
+
+## Make an anonymous SSL context.  This is only suitable for local connections.
+SSLContext makeAnonSSLContext(Comm comm) {
+    const size := NONCE_SIZE / 2;
+    _psk = altEncode(getEntropySource().getString(16));
+    _identity = 'A' + _psk;
+    return SSLContext.make(clientCB, serverCB, comm);
+}
+

@@ -19,7 +19,7 @@ import .nonces NONCE_SIZE;
 import .peernet PeerNetwork;
 import .rawchunk GeneralCallback;
 import .rpc parseAddr, InfoResponse, InstIFace, LoginError, LoginState,
-    MergeResult, MergeResponse, TRAVERSE_DELTA, TRAVERSE_FULL;
+    MergeResult, MergeResponse, PSKInfo, TRAVERSE_DELTA, TRAVERSE_FULL;
 import .util findCommonAncestor, traverseCommit;
 
 @import crack.ann assert, cvars, define, impl;
@@ -546,7 +546,7 @@ class MAWFSInstance @impl InstIFace {
         return __state.getNonceManager().redeem(nonce);
     }
 
-    String getPSK(String identity) {
+    PSKInfo getPSK(String identity) {
         if (identity.startsWith('L')) {
             # Local identity.  Should be the first half of a registered nonce.
             # If it's not, we construct a random PSK to deny entry.
@@ -554,14 +554,20 @@ class MAWFSInstance @impl InstIFace {
             psk := __state.getNonceManager().redeemPrefix(
                 altDecode(identity.substr(1))
             );
-            return (psk is null) ? getEntropySource().getString(size) : psk;
+            return PSKInfo(
+                (psk is null) ? getEntropySource().getString(size) : psk,
+                !(psk is null)
+            );
+        } else if (identity.startsWith('A')) {
+            # Anonymous user.
+            return PSKInfo(identity.substr(1), false);
         } else {
             # Remote peer identity.  First character should be 'P' and the
             # PSK should be the encrypted hash of the decoded, decrypted
             # identity.
             cipher := __state.getCipher();
             nonce := cipher.decrypt(altDecode(identity.substr(1)));
-            return cipher.encrypt(sha256(nonce));
+            return PSKInfo(cipher.encrypt(sha256(nonce)), true);
         }
     }
 

@@ -842,8 +842,10 @@ class SSLTest : TestCase {
         restartFS('master');
         # Attempt to connect.
         runMawfs(StringArray!['-i', 'fs', 'info']);
-# TODO: this won't work until we get unauthorized clients.
-#        runMawfs(StringArray!['-i', 'localhost:12543:ssl', 'info']);
+
+        # Verify that unauthorized local clients work.
+        runMawfs(StringArray!['-i', 'localhost:12543:ssl', 'info']);
+
 # TODO: the next test still hangs.
 #        try {
 #            runMawfs(StringArray!['-i', 'localhost:12543:tcp', 'info']);

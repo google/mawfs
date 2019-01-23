@@ -102,8 +102,7 @@ class PeerNetwork {
     Comm getComm() { return __comm }
 
     void addServer(ExtendedAddress addr) {
-        context := Context(__chunkReader);
-        ConnectionFactory factory = PeerServiceConnectionFactory(context);
+        ConnectionFactory factory = PeerServiceConnectionFactory(__chunkReader);
         __log.info `starting server on $addr:$(addr.ssl ? 'ssl' : 'tcp')`;
         try {
             useSSL := __sslCtx && addr.ssl;

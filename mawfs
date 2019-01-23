@@ -39,6 +39,7 @@ import crack.logger debug, error, setLogFile, setLogLevel, DEBUG, INFO,
     WARN, ERROR, FATAL;
 import crack.logger.ctx Log;
 import crack.net.comm2 Comm;
+import crack.net.ssl SSLContext;
 import crack.protobuf readMessageFromString;
 import crack.threads Mutex;
 
@@ -55,7 +56,7 @@ import mawfs.peernet PeerNetwork, RemoteReaderImpl;
 import mawfs.rawchunk RawChunkReader;
 import mawfs.rpc parseAddr, setInst, ExtendedAddress, PeerProxy,
     TRAVERSE_DELTA, TRAVERSE_FULL, TRAVERSE_NONE;
-import mawfs.ssl makeClientSSLContext, makeSSLContext;
+import mawfs.ssl makeAnonSSLContext, makeClientSSLContext, makeSSLContext;
 import mawfs.util traverseCommit;
 
 @import crack.ann impl, struct;
@@ -202,13 +203,14 @@ class RPCCmd {
         __log = Log(cerrLogger, 'client');
         __comm = Comm(__log);
         __comm.start();
-        __proxy = PeerProxy.make(__comm, __log, addr,
-                                 (authNonce && addr.ssl) ?
-                                     makeClientSSLContext(__comm,
-                                                          authNonce
-                                                          ) :
-                                      null
-                                 );
+        SSLContext sslCtx;
+        if (addr.ssl) {
+            if (authNonce)
+                sslCtx = makeClientSSLContext(__comm, authNonce);
+            else
+                sslCtx = makeAnonSSLContext(__comm);
+        }
+        __proxy = PeerProxy.make(__comm, __log, addr, sslCtx);
 
         # If we connected but didn't authenticate over SSL, do a login.
         if (__proxy && (!addr.ssl || !authNonce)) {
