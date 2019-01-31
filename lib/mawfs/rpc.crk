@@ -48,7 +48,9 @@ class PeerDisconnectedError : Exception {}
         ## to be asynchronous and don't get a response.
         optional int32 id = 1;
 
-        ## The message to be called.
+        ## The message to be called.  Should only be present for a request.
+        ## If it is absent (or empty), the message is assumed to be a
+        ## response.
         optional string method = 2;
 
         ## The request body.  Should only be present for a request. This will
@@ -169,6 +171,10 @@ class PeerDisconnectedError : Exception {}
         optional string branch = 1;
         optional int32 algo = 2;
     }
+
+    message PeerConnectedRequest {
+        optional string peerName = 1;
+    }
 }
 
 const int
@@ -191,6 +197,8 @@ class MergeResult : MergeResponse {
         conflict = conflicts;
     }
 }
+
+class PeerProxy;
 
 ## Stores information about a pending login challenge.
 @abstract class LoginState {
@@ -248,6 +256,8 @@ class LoginError : Exception {
 
     ## Returns the PSK for a given identity.
     @abstract PSKInfo getPSK(String identity);
+
+    @abstract int peerConnected(String name, PeerProxy proxy);
 }
 
 InstIFace _inst;
@@ -276,29 +286,189 @@ class _BufferSerialReader {
     }
 }
 
-## Synchronous client handler.
-class _Handler @impl UserHandler {
-    _BufferSerialReader __reader;
+## RPC message context associated with a connection.
+class Context {
+    Log log;
+    RawChunkReader reader;
+    LoginState loginState;
+
+    ## Gets set to true when the client has completed authentication.
+    bool authenticated;
+
+    oper init(RawChunkReader reader) : reader = reader {}
+
+    oper init(Log log) : log = log {}
+
+    ## Utility function for writing a response message.
+    void writeResponse(Connection comm, Message response, int32 requestId) {
+        RPCMessage reply = {};
+        reply.id = requestId;
+        reply.response = response ? response.toString() : null;
+        StringWriter backing = {};
+        SerialWriter sw = {backing};
+        sw.write(reply.toString());
+        comm.write(backing.string());
+        log.debug I`sent to poller thread: $(reply.toString().getRepr())`;
+    }
+
+    void writeError(Connection comm, String errorMessage, int32 requestId) {
+        RPCMessage reply = {};
+        reply.id = requestId;
+        reply.error = errorMessage;
+        StringWriter backing = {};
+        SerialWriter sw = {backing};
+        sw.write(reply.toString());
+        comm.write(backing.string());
+        log.debug I`sent to poller thread: $(reply.toString().getRepr())`;
+    }
+}
+
+# Mapping from method name to method processing function.  In addition to a
+# context, a method handler accepts a string containing the serialized request
+# and an AppendBuffer into which to write the serialized response.
+alias _FuncWrapper = Functor3[void, Context, RPCMessage, Connection].Wrap;
+class MethodHandler : _FuncWrapper {
+
+    ## Set to true if authentication isn't required.
+    bool noauth;
+
+    oper init(function[void, Context, RPCMessage, Connection] func) :
+        _FuncWrapper(func) {
+    }
+
+    oper init(function[void, Context, RPCMessage, Connection] func,
+              bool noauth) :
+        _FuncWrapper(func),
+        noauth = noauth {
+    }
+}
+alias MethodMap = HashMap[String, MethodHandler];
+@export_symbols MethodMap;
+
+## TODO: make this abstract as soon as the bug in crack prohibiting an
+## appendage on an abstract class is fixed.
+class _PeerProxyBase {
+    void _invalidateProxy() {}
+}
+
+## Handles communication from an RPC client.
+class RPCHandler @impl UserHandler {
+
+    ## Serial reader for input.
+    _BufferSerialReader reader;
+
+    ## The session context.
+    Context __context;
+
+    Address __clientAddr;
+    MethodMap __methods;
     HashMap[int, RPCWaiter] __waiters = {};
+    RawPtr[_PeerProxyBase] __owner;
+
+    ## methods is nullable
+    oper init(MethodMap methods, Context context, Address clientAddr) :
+        __methods = methods,
+        __context = context,
+        __clientAddr = clientAddr {
+    }
+
+    void processRequest(Connection comm, RPCMessage msg) {
+        comm.log.debug `processing method $(msg.method)`;
+        String error;
+
+        handler := __methods.get(msg.method);
+        if (handler) {
+            try {
+                comm.log.debug `calling handler for $(msg.method)`;
+                if (!__context.authenticated && !handler.noauth) {
+                    comm.log.error I`Access denied to method $(msg.method): \
+                                     requires auth`;
+                    error = FStr() I`Access denied, auth required.`;
+                } else {
+                    handler(__context, msg, comm);
+                    return;
+                }
+            } catch (Exception ex) {
+                error = FStr() `$ex`;
+            }
+        } else {
+            comm.log.error `got unknown method $(msg.method)`;
+            error = FStr() `Method $(msg.method.getRepr()) not found`;
+        }
+
+        # if we haven't returned yet, we have to deal with an error.
+
+        # If there's no message id, the message is asynchronous and we don't
+        # return a response.
+        if (!msg.id)
+            return;
+
+
+        # Wrap the reply in a string and ship it back to the client.
+        comm.log.debug I`sending reply, error $error`;
+        __context.writeError(comm, error, msg.id);
+    }
 
     void process(Connection comm) {
-        if (!__reader)
-            __reader = _BufferSerialReader(comm.inBuf);
+        # Initialize the reader if we haven't done so.
+        if (!reader)
+            reader = _BufferSerialReader(comm.inBuf);
+        if (!__context.log) {
+            __context.log = comm.log;
+            if (ssl := SSLConnection.get(comm)) {
+                __context.authenticated = !(ssl.getUserData(0) is null);
 
-        data := __reader.readString();
-        if (data) {
-            RPCMessage response = {};
-            readMessageFromString(response, data);
+                # Only allow unauthenticated SSL connections over localhost.
+                if (!__context.authenticated &&
+                    (!(inaddr := InetAddress.cast(__clientAddr, null)) ||
+                     inaddr.getAddr() != 0x7f000001
+                     )
+                    ) {
+                    comm.log.error I`Unauthenticated SSL connection from \
+                                     remote client: $__clientAddr`;
+                    comm.close();
+                    return;
+                }
+            }
+        }
 
-            waiter := __waiters.get(response.id);
-            if (waiter)
-                waiter.setResult(response);
-            else
-                comm.log.error `No response found for message id $(response.id)\n`;
+        while (comm.inBuf) {
+            # Get the next message, make sure we were able to read it.
+            serializedMsg := reader.readString();
+            if (!serializedMsg)
+                # Assume this is an incomplete message.
+                return;
+
+            # We've got a complete message, so process it.
+            RPCMessage msg = {};
+            readMessageFromString(msg, serializedMsg);
+
+            if (msg.method) {
+                if (!__methods) {
+                    comm.log.error `conection attempted to send a request`;
+                    __context.writeError(comm,
+                                         'Non-peer cannot process requests',
+                                         msg.id
+                                         );
+                    continue;
+                }
+                processRequest(comm, msg);
+            } else {
+                # Treat it as a response.
+                waiter := __waiters.get(msg.id);
+                if (waiter)
+                    waiter.setResult(msg);
+                else
+                    comm.log.error
+                        `No response found for message id $(msg.id)\n`;
+            }
         }
     }
 
     void terminate(Connection comm) {
+        if (__owner)
+            __owner._invalidateProxy();
+
         # Close all of the open connections.
         for (waiter :in __waiters) {
             RPCMessage response = {};
@@ -312,6 +482,9 @@ class _Handler @impl UserHandler {
         w := RPCWaiter.cast(waiter);
         __waiters[w.info] = w;
     }
+
+    void disown() { __owner = null }
+    void setOwner(RawPtr[_PeerProxyBase] owner) { __owner = owner }
 }
 
 ## Thrown whenever we receive an error from the remote object.
@@ -391,45 +564,27 @@ ExtendedAddress parseAddr(String addr) {
 
 ## Manages a single connection to a peer.  Remains valid (true) as long as
 ## the peer is connected.  Does not automatically reconnect.
-class PeerProxy {
-    Comm __comm;
+class PeerProxy : _PeerProxyBase {
     Connection __proxy;
+    Context __ctx;
     Log __log;
     int32 __lastId;
     SSLContext __sslCtx;
 
-    void __invalidateProxy() {
+    void _invalidateProxy() {
         __proxy = null;
     }
 
-    class _PeerProxyHandler : _Handler {
-        RawPtr[PeerProxy] owner;
-        Log log;
-
-        oper init(Log log) : log = log {}
-
-        void terminate(Connection comm) {
-            if (owner)
-                owner.__invalidateProxy();
-            _Handler.terminate(comm);
-        }
-
-        void disown() { owner = null }
-    }
-
-    _PeerProxyHandler __handler;
-
+    RPCHandler __handler;
 
     ## sslCtx: nullable.  If present, use SSL.
-    oper init(Comm comm, Log log, Connection proxy,
-              _PeerProxyHandler handler,
-              SSLContext sslCtx
+    oper init(Context context, Connection proxy,
+              RPCHandler handler
               ) :
-        __comm = comm,
-        __log = log,
+        __ctx = context,
+        __log = context.log,
         __proxy = proxy,
-        __handler = handler,
-        __sslCtx = sslCtx {
+        __handler = handler {
     }
 
     oper del() {
@@ -443,15 +598,17 @@ class PeerProxy {
 
     @static
     PeerProxy __makeConnection(Comm comm, Log log, Address addr,
-                               SSLContext sslCtx
+                               SSLContext sslCtx,
+                               MethodMap methods
                                ) {
         log.info `connecting to $addr:$(sslCtx ? 'ssl' : 'tcp')`;
         try {
-            handler := _PeerProxyHandler(log);
+            context := Context(log);
+            handler := RPCHandler(methods, context, addr);
             proxy := sslCtx ? sslCtx.connect(addr, handler) :
                               comm.connect(addr, handler);
-            result := PeerProxy(comm, log, proxy, handler, sslCtx);
-            handler.owner = RawPtr[PeerProxy](result);
+            result := PeerProxy(context, proxy, handler);
+            handler.setOwner(RawPtr[_PeerProxyBase](result));
             return result;
         } catch (Exception ex) {
             log.warn `Unable to connect to $addr: $(ex.text)\n`;
@@ -460,14 +617,28 @@ class PeerProxy {
     }
 
     @static
-    PeerProxy make(Comm comm, Log log, String addr, SSLContext sslCtx) {
+    PeerProxy make(Comm comm, Log log, String addr, SSLContext sslCtx,
+                   MethodMap methods
+                   ) {
         a := parseAddr(addr);
-        return __makeConnection(comm, log, a, sslCtx);
+        return __makeConnection(comm, log, a, sslCtx, methods);
+    }
+
+    @static
+    PeerProxy make(Comm comm, Log log, Address addr, SSLContext sslCtx,
+                   MethodMap methods
+                   ) {
+        return __makeConnection(comm, log, addr, sslCtx, methods);
+    }
+
+    @static
+    PeerProxy make(Comm comm, Log log, String addr, SSLContext sslCtx) {
+        return make(comm, log, addr, sslCtx, null);
     }
 
     @static
     PeerProxy make(Comm comm, Log log, Address addr, SSLContext sslCtx) {
-        return __makeConnection(comm, log, addr, sslCtx);
+        return make(comm, log, addr, sslCtx, null);
     }
 
     ## Test constructor.
@@ -629,6 +800,10 @@ class PeerProxy {
     ## Login to the instance as a peer.  This does the complete handshake
     ## required to do login.
     ## 'cipher' must be the current instance cipher.
+    ##
+    ## After this is called, the peer is listed as authenticated, meaning that
+    ## if a method table was provided during construction, the peer can call
+    ## authenticated methods.
     void login(Cipher cipher) {
         req := LoginRequest();
         challenge := getEntropySource().getString(32);
@@ -652,6 +827,7 @@ class PeerProxy {
         readMessageFromString(resp, respData);
         if (resp.error)
             throw LoginError(resp.error);
+        __ctx.authenticated = true;
     }
 
     ## Login from a user agent with access to the mounted filesystem.  The
@@ -660,6 +836,11 @@ class PeerProxy {
     ## Note that 'nonce' is not sent encrypted: this should not be used to
     ## login to a remote system on an unencrypted connection, otherwise the
     ## connection could be MITMed.
+    ##
+    ## This method does not authenticate the peer as login(Cipher) does, for
+    ## one thing it's not important to do so since this method is called in
+    ## local client mode, for another it's not clear that a nonce and a
+    ## connection provide a strong enough form of authentication.
     void login(String nonce) {
         req := LoginRequest();
         req.nonce = nonce;
@@ -669,163 +850,26 @@ class PeerProxy {
         if (resp.error)
             throw LoginError(resp.error);
     }
-}
 
-## Server-side RPC message context.
-class Context {
-    Log log;
-    RawChunkReader reader;
-    LoginState loginState;
-
-    ## Gets set to true when the client has completed authentication.
-    bool authenticated;
-
-    oper init(RawChunkReader reader) : reader = reader {}
-
-    ## Utility function for writing a response message.
-    void writeResponse(Connection comm, Message response, int32 requestId) {
-        RPCMessage reply = {};
-        reply.id = requestId;
-        reply.response = response ? response.toString() : null;
-        StringWriter backing = {};
-        SerialWriter sw = {backing};
-        sw.write(reply.toString());
-        comm.write(backing.string());
-        log.debug I`sent to poller thread: $(reply.toString().getRepr())`;
+    ## Notify the server that we are connecting as a peer that can receive
+    ## RPCs.
+    void peerConnected(String peerName) {
+        req := PeerConnectedRequest();
+        req.peerName = peerName;
+        __invoke('peerConnected', req.toString());
     }
 
-    void writeError(Connection comm, String errorMessage, int32 requestId) {
-        RPCMessage reply = {};
-        reply.id = requestId;
-        reply.error = errorMessage;
-        StringWriter backing = {};
-        SerialWriter sw = {backing};
-        sw.write(reply.toString());
-        comm.write(backing.string());
-        log.debug I`sent to poller thread: $(reply.toString().getRepr())`;
+    ## Sets the "authenticated" flag on the local client context.  This allows
+    ## the remote peer to invoke methods back to this instance if a method
+    ## table was provided.
+    ##
+    ## In most cases, it shouldn't be necessary to call this.  On client side
+    ## the flag is set after a successful peer login, on the server side it is
+    ## set upon authentication (either from a login or implicitly through the
+    ## SSL connection).
+    void setAuthenticated(bool authenticated) {
+        __ctx.authenticated = authenticated;
     }
-}
-
-# Mapping from method name to method processing function.  In addition to a
-# context, a method handler accepts a string containing the serialized request
-# and an AppendBuffer into which to write the serialized response.
-alias _FuncWrapper = Functor3[void, Context, RPCMessage, Connection].Wrap;
-class MethodHandler : _FuncWrapper {
-
-    ## Set to true if authentication isn't required.
-    bool noauth;
-
-    oper init(function[void, Context, RPCMessage, Connection] func) :
-        _FuncWrapper(func) {
-    }
-
-    oper init(function[void, Context, RPCMessage, Connection] func,
-              bool noauth) :
-        _FuncWrapper(func),
-        noauth = noauth {
-    }
-}
-alias MethodMap = HashMap[String, MethodHandler];
-
-## Handles communication from an RPC client.
-class ClientHandler @impl UserHandler {
-
-    ## Serial reader for input.
-    _BufferSerialReader reader;
-
-    ## The session context.
-    Context __context;
-
-    Address __clientAddr;
-    MethodMap __methods;
-
-    oper init(MethodMap methods, Context context, Address clientAddr) :
-        __methods = methods,
-        __context = context,
-        __clientAddr = clientAddr {
-    }
-
-    void process(Connection comm, RPCMessage msg) {
-        comm.log.debug `processing method $(msg.method)`;
-        String error;
-
-        handler := __methods.get(msg.method);
-        if (handler) {
-            try {
-                comm.log.debug `calling handler for $(msg.method)`;
-                if (!__context.authenticated && !handler.noauth) {
-                    comm.log.error I`Access denied to method $(msg.method): \
-                                     requires auth`;
-                    error = FStr() I`Access denied, auth required.`;
-                } else {
-                    handler(__context, msg, comm);
-                    return;
-                }
-            } catch (Exception ex) {
-                error = FStr() `$ex`;
-            }
-        } else {
-            comm.log.error `got unknown method $(msg.method)`;
-            error = FStr() `Method $(msg.method.getRepr()) not found`;
-        }
-
-        # if we haven't returned yet, we have to deal with an error.
-
-        # If there's no message id, the message is asynchronous and we don't
-        # return a response.
-        if (!msg.id)
-            return;
-
-
-        # Wrap the reply in a string and ship it back to the client.
-        comm.log.debug I`sending reply, error $error`;
-        __context.writeError(comm, error, msg.id);
-    }
-
-    void process(Connection comm) {
-        # Initialize the reader if we haven't done so.
-        if (!reader)
-            reader = _BufferSerialReader(comm.inBuf);
-        if (!__context.log) {
-            __context.log = comm.log;
-            if (ssl := SSLConnection.get(comm)) {
-                __context.authenticated = !(ssl.getUserData(0) is null);
-
-                # Only allow unauthenticated SSL connections over localhost.
-                if (!__context.authenticated &&
-                    (!(inaddr := InetAddress.cast(__clientAddr, null)) ||
-                     inaddr.getAddr() != 0x7f000001
-                     )
-                    ) {
-                    comm.log.error I`Unauthenticated SSL connection from \
-                                     remote client: $__clientAddr`;
-                    comm.close();
-                    return;
-                }
-            }
-        }
-
-        while (comm.inBuf) {
-            # Get the next message, make sure we were able to read it.
-            serializedMsg := reader.readString();
-            if (!serializedMsg)
-                # Assume this is an incomplete message.
-                return;
-
-            # We've got a complete message, so process it.
-            RPCMessage msg = {};
-            readMessageFromString(msg, serializedMsg);
-
-            process(comm, msg);
-        }
-    }
-
-    void terminate(Connection comm) {
-        # TODO when the RPC client terminates, we want to close all active
-        # tunnels for the client.
-    }
-
-    void addResponder(Object object) {}
 }
 
 # --- Server-side method implementation functions. ---
@@ -1029,6 +1073,17 @@ void login(Context context, RPCMessage msg, Connection comm) {
     context.writeResponse(comm, LoginResponse(), msg.id);
 }
 
+void peerConnected(Context context, RPCMessage msg, Connection conn) {
+    req := PeerConnectedRequest();
+    readMessageFromString(req, msg.request);
+
+    # Wrap the connection in a new peer proxy.
+    proxy := PeerProxy(context, conn, RPCHandler.cast(conn.userHandler));
+
+    _inst.peerConnected(req.peerName, proxy);
+    context.writeResponse(conn, null, msg.id);
+}
+
 class PeerServiceConnectionFactory @impl ConnectionFactory {
     MethodMap __methods = {};
     RawChunkReader __chunkReader;
@@ -1045,6 +1100,7 @@ class PeerServiceConnectionFactory @impl ConnectionFactory {
         __methods['addPeer'] = MethodHandler(addPeer);
         __methods['getInfo'] = MethodHandler(getInfo);
         __methods['traverse'] = MethodHandler(traverse);
+        __methods['peerConnected'] = MethodHandler(peerConnected);
         # getMountpoint is just getInfo with "noauth".
         __methods['getMountpoint'] = MethodHandler(getInfo, true);
         __methods['login'] = MethodHandler(login, true);
@@ -1054,9 +1110,9 @@ class PeerServiceConnectionFactory @impl ConnectionFactory {
         conn.log.info `accepted connection from $(conn.accepted.addr)\n`;
         log := Log(conn.log, FStr() `server-client-$(conn.accepted.addr)`);
         return Connection(log,
-                          ClientHandler(__methods, Context(__chunkReader),
-                                        conn.accepted.addr
-                                        )
+                          RPCHandler(__methods, Context(__chunkReader),
+                                     conn.accepted.addr
+                                     )
                           );
     }
 }

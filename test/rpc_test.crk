@@ -5,15 +5,16 @@ import crack.lang AssertionError, Exception, InvalidArgumentError;
 import crack.logger.ctx Log;
 import crack.net InetAddress, Poller, PollEvent, PollEventCallback, Socket,
     SocketApd, AF_INET, SOCK_STREAM;
-import crack.net.comm2 Comm, CommListener, ConnectionFactory, WaiterFor;
+import crack.net.comm2 Comm, CommListener, Connection, ConnectionFactory,
+    WaiterFor;
 import crack.net.ssl SSLContext;
 import crack.runtime exit;
 import mawfs.aes_siv SIVCipher;
 import mawfs.ciphers sha256, Cipher;
 import mawfs.rawchunk GeneralCallback, JournalBlock, RawChunkReader;
-import mawfs.rpc parseAddr, setInst, Context, InfoResponse, InstIFace,
-    LoginError, LoginState, MergeResponse, PeerProxy,
-    PeerServiceConnectionFactory, PSKInfo, RemoteError;
+import mawfs.rpc parseAddr, setInst, Context, GetObjectResponse, InfoResponse,
+    InstIFace, LoginError, LoginState, MergeResponse, MethodHandler, MethodMap,
+    PeerProxy, PeerServiceConnectionFactory, PSKInfo, RemoteError, RPCMessage;
 import mawfs.ssl makeSSLContext;
 
 @import crack.ann assert, impl;
@@ -56,6 +57,8 @@ class FakeChunkReader @impl RawChunkReader {
 
 class FakeInstance @impl InstIFace {
     Cipher cipher;
+    String peerName;
+    PeerProxy peerProxy;
 
     oper init(Cipher cipher) : cipher = cipher {}
 
@@ -115,8 +118,19 @@ class FakeInstance @impl InstIFace {
         else
             return PSKInfo('invalid', false);
     }
+
+    int peerConnected(String name, PeerProxy proxy) {
+        peerName = name;
+        peerProxy = proxy;
+        return 0;
+    }
 }
 
+void clientSideGetObject(Context context, RPCMessage msg, Connection conn) {
+    resp := GetObjectResponse();
+    resp.data = 'client data';
+    context.writeResponse(conn, resp, msg.id);
+}
 
 class RPCTestBed {
 
@@ -127,6 +141,8 @@ class RPCTestBed {
 
     ## Server port number.
     int port;
+
+    FakeInstance inst;
 
     Cipher cipher = SIVCipher(sha256('weak password'), null);
 
@@ -153,7 +169,7 @@ class RPCTestBed {
         comm.startServer(InetAddress(127, 0, 0, 1, 0), listener, true);
         port = portCallback.waiter.getResult();
 
-        setInst(FakeInstance(cipher));
+        setInst(inst = FakeInstance(cipher));
     }
 
     void setUp() {
@@ -252,6 +268,23 @@ class RPCTestBed {
         }
     }
 
+    void testPeerConnected() {
+        methods := MethodMap();
+        methods['getObject'] = MethodHandler(clientSideGetObject);
+        peer := PeerProxy.make(comm, Log(log, 'client'),
+                               FStr() `127.0.0.1:$port`,
+                               __getSSLContext(),
+                               methods
+                               );
+        peer.login(cipher);
+        peer.peerConnected('foo');
+        @assert(inst.peerName == 'foo');
+
+        peer.setAuthenticated(true);
+        result := inst.peerProxy.getObject('digest');
+        @assert(result == 'client data');
+    }
+
     void tearDown() {
         comm.stop();
     }
@@ -289,6 +322,7 @@ try {
     testbed.testFailingPeerLogin();
     testbed.testUserLogin();
     testbed.testFailedUserLogin();
+    testbed.testPeerConnected();
 } catch (Exception ex) {
     testbed.tearDown();
     throw ex;

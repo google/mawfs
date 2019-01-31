@@ -19,7 +19,8 @@ import .nonces NONCE_SIZE;
 import .peernet PeerNetwork;
 import .rawchunk GeneralCallback;
 import .rpc parseAddr, InfoResponse, InstIFace, LoginError, LoginState,
-    MergeResult, MergeResponse, PSKInfo, TRAVERSE_DELTA, TRAVERSE_FULL;
+    MergeResult, MergeResponse, PeerProxy, PSKInfo, TRAVERSE_DELTA,
+    TRAVERSE_FULL;
 import .util findCommonAncestor, traverseCommit;
 
 @import crack.ann assert, cvars, define, impl;
@@ -436,6 +437,14 @@ class MAWFSInstance @impl InstIFace {
             host = $(addr.getHostname())
             port = $(addr.getPort())
             `);
+        return 0;
+    }
+
+    ## Called when a full peer connects to the instance.  If the peer name is
+    ## known (in configuration) and the peer address is the one configured,
+    ## set up the peer connection as this one
+    int peerConnected(String peerName, PeerProxy peer) {
+        # TODO: implement.
         return 0;
     }
 
