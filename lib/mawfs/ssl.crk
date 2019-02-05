@@ -71,10 +71,24 @@ uint serverCB(SSL ssl, byteptr identity, byteptr psk, uint max_psk_length) {
     return pskSize;
 }
 
+void _setIdFromCipher(Cipher cipher) {
+    id := getEntropySource().getString(16);
+    _identity = 'P' + altEncode(cipher.encrypt(id));
+    _psk = cipher.encrypt(sha256(id));
+}
+
 ## Create an SSL context for our PSK implementation.
 ##
 ## Note that this stores the identity and psk in global variables: these are
 ## only used on the client side.
+SSLContext makeSSLContext(InstIFace inst, Comm comm, Cipher cipher) {
+    _inst = inst;
+    _setIdFromCipher(cipher);
+    return SSLContext.make(clientCB, serverCB, comm);
+}
+
+## Version of makeSSLContext that lets you specify the identity and the PSK,
+## for testing purposes.
 SSLContext makeSSLContext(InstIFace inst, Comm comm, String identity,
                           String psk
                           ) {
@@ -86,9 +100,7 @@ SSLContext makeSSLContext(InstIFace inst, Comm comm, String identity,
 
 ## Create a client using a cipher to generate the passkey.
 SSLContext makeClientSSLContext(Comm comm, Cipher cipher) {
-    id := getEntropySource().getString(16);
-    _identity = 'P' + altEncode(cipher.encrypt(id));
-    _psk = cipher.encrypt(sha256(id));
+    _setIdFromCipher(cipher);
     return SSLContext.make(clientCB, serverCB, comm);
 }
 

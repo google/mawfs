@@ -15,50 +15,61 @@ import mawfs.blockstore RemoteReader;
 import mawfs.configstore ConfigStore;
 import mawfs.rawchunk RawChunkReader;
 import mawfs.rpc parseAddr, Context, ExtendedAddress, PeerDisconnectedError,
-    PeerProxy, PeerServiceConnectionFactory;
+    PeerProxy, PeerServiceConnectionFactory, METHODS;
 
 import .ciphers Cipher;
 import .inst InstanceState;
 import .params ParamInfo;
 
-@import crack.ann impl, struct;
+@import crack.ann cvars, impl, struct;
 
 ## Thrown by pullParams() in the case of an invalid password.
 class InvalidPasswordError : Exception {
     oper init(String message) : Exception(message) {}
 }
 
-class Peer {
+@abstract class Peer {
+    @abstract PeerProxy getProxy();
+    @abstract String getName();
+    @abstract String getDisplayName();
+    @abstract void shutdown();
+}
+
+## A peer for connecting to a server.
+class ServerPeer : Peer {
     Address addr;
     Comm __comm;
     Log __log;
     PeerProxy __proxy;
     Cipher __cipher;
     SSLContext __sslCtx;
+    RawChunkReader __chunkReader;
 
     ## sslCtx: nullable. if present, use ssl.
     oper init(Comm comm, Log log, Address addr, Cipher cipher,
-              SSLContext sslCtx
+              SSLContext sslCtx,
+              RawChunkReader chunkReader
               ) :
         addr = addr,
         __comm = comm,
         __log = log,
         __cipher = cipher,
-        __sslCtx = sslCtx {
+        __sslCtx = sslCtx,
+        __chunkReader = chunkReader {
     }
 
     ## Returns the peer proxy, creating it if necessary.
     PeerProxy getProxy() {
         if (!__proxy) {
-            __proxy = PeerProxy.make(__comm, __log, addr, __sslCtx);
-            if (__proxy)
+            __proxy = PeerProxy.make(__comm, __log, addr, __sslCtx, METHODS,
+                                     __chunkReader);
+            if (__proxy) {
                 __proxy.login(__cipher);
+                __proxy.peerConnected('homey');
+            }
         }
         return __proxy;
     }
-
-    ## Sets the peer proxy (intended for testing).
-    void setProxy(PeerProxy proxy) { __proxy = proxy }
 
     void formatTo(Formatter out) {
         out `peer-$addr`;
@@ -68,11 +79,28 @@ class Peer {
         return FStr() `$addr`;
     }
 
+    String getDisplayName() {
+        return FStr() `$addr`;
+    }
+
     ## Shutdown the proxy, if active.
     void shutdown() {
         if (__proxy)
             __proxy.shutdown();
     }
+}
+
+## A peer for connecting to a client.
+class ClientPeer : Peer {
+    @cvars{
+        String name;
+        PeerProxy __proxy;
+    }
+
+    PeerProxy getProxy() { return __proxy }
+    String getName() { return name }
+    String getDisplayName() { return name }
+    void shutdown() { if (__proxy) __proxy.shutdown() }
 }
 
 ## Encapsulates the entire peer subsystem.  Starts a server and manages
@@ -118,11 +146,26 @@ class PeerNetwork {
     }
 
     void addPeer(ExtendedAddress addr) {
-        __peers.append(Peer(__comm, Log(__log, FStr() `peer-$addr`), addr,
-                            __cipher,
-                            addr.ssl ? __sslCtx : null
-                            )
+        __peers.append(ServerPeer(__comm, Log(__log, FStr() `peer-$addr`),
+                                  addr,
+                                  __cipher,
+                                  addr.ssl ? __sslCtx : null,
+                                  __chunkReader
+                                  )
                        );
+    }
+
+    ## Add a client-side named peer.  This will pre-empt any peer of the same
+    ## name.
+    void addPeer(String name, PeerProxy proxy) {
+        peer := ClientPeer(name, proxy);
+        for (iter :on __peers) {
+            if (iter.elem().getName() == name) {
+                __peers[iter.index] = peer;
+                return;
+            }
+        }
+        __peers.append(peer);
     }
 
     ## A a new peer object constructed by the user (intended for testing).
@@ -152,15 +195,15 @@ class PeerNetwork {
             proxy := peer.getProxy();
             if (proxy) {
                 try {
-                    __log.debug `got peer proxy for $(peer.addr)`;
+                    __log.debug `got peer proxy for $(peer.getDisplayName())`;
                     head := proxy.getHead(branch);
                     if (head)
                         return HeadAndPeer(head, peer.getName());
                 } catch (PeerDisconnectedError ex) {
-                    __log.debug `Peer $(peer.addr) disconnected.`;
+                    __log.debug `Peer $(peer.getDisplayName()) disconnected.`;
                 }
             } else {
-                __log.debug `unable to get proxy for $(peer.addr)\n`;
+                __log.debug `unable to get proxy for $(peer.getDisplayName())\n`;
             }
         }
 
@@ -176,7 +219,7 @@ class PeerNetwork {
                     if (contents)
                         return contents;
                 } catch (PeerDisconnectedError ex) {
-                    __log.debug `Peer $(peer.addr) disconnected.`;
+                    __log.debug `Peer $(peer.getDisplayName()) disconnected.`;
                 }
             }
         }
@@ -240,7 +283,7 @@ class PeerNetwork {
                     __log.info `Journal of size $pos retrieved.`;
                     return localName;
                 } catch (PeerDisconnectedError ex) {
-                    __log.debug `Peer $(peer.addr) disconnected.`;
+                    __log.debug `Peer $(peer.getDisplayName()) disconnected.`;
                 }
             }
         }
@@ -267,7 +310,7 @@ class PeerNetwork {
                     (root/'params').writeAll(contents);
                     return pi;
                 } catch (PeerDisconnectedError ex) {
-                    __log.debug `Peer $(peer.addr) disconnected.`;
+                    __log.debug `Peer $(peer.getDisplayName()) disconnected.`;
                 }
             }
         }
@@ -309,6 +352,11 @@ class PeerNetwork {
                 portStr := peerInfo.get('port');
                 if (portStr)
                     addrStr = FStr() `$addrStr:$portStr`;
+
+                ssl := peerInfo.get('ssl') == 'true';
+                if (ssl)
+                    addrStr = FStr() `$addrStr:ssl`;
+
                 inetAddr := parseAddr(addrStr);
                 __log.info `adding peer $peerName at $inetAddr`;
                 addPeer(inetAddr);

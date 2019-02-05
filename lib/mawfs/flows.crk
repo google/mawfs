@@ -444,7 +444,7 @@ class MAWFSInstance @impl InstIFace {
     ## known (in configuration) and the peer address is the one configured,
     ## set up the peer connection as this one
     int peerConnected(String peerName, PeerProxy peer) {
-        # TODO: implement.
+        __net.addPeer(peerName, peer);
         return 0;
     }
 

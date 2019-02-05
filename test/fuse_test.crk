@@ -861,4 +861,29 @@ class SSLTest : TestCase {
 }
 register(SSLTest());
 
+class BidirectionalRPCTest : DoubleInstanceTest {
+    void run() {
+        # Start up the master with a server on 12543.
+        (makePath('backing')/'config/peers').writeAll(
+            '[server]\nport = 12543\nssl = true\n');
+
+        (makePath('fs')/'foo').writeAll('test file contents');
+        restartFS('master');
+        runMawfs(StringArray!['clone', 'localhost:12543:ssl', 'backing2']);
+
+        # Start the second instance.
+        startFS('master', 'backing2', 'fs2');
+
+        # Do a pull from the slave to force a connection to the master.
+        runMawfs(StringArray!['-i', 'localhost:9119:ssl', 'pull', 'master']);
+
+        # Now write to bar and pull back to the master.
+        (makePath('fs2')/'bar').writeAll('another test file');
+        runMawfs(StringArray!['-i', 'fs', 'pull', 'master']);
+
+        assertEqual((makePath('fs')/'bar').readAll(), 'another test file');
+    }
+}
+register(BidirectionalRPCTest());
+
 runAllTests();

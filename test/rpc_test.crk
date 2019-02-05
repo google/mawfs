@@ -12,9 +12,10 @@ import crack.runtime exit;
 import mawfs.aes_siv SIVCipher;
 import mawfs.ciphers sha256, Cipher;
 import mawfs.rawchunk GeneralCallback, JournalBlock, RawChunkReader;
-import mawfs.rpc parseAddr, setInst, Context, GetObjectResponse, InfoResponse,
-    InstIFace, LoginError, LoginState, MergeResponse, MethodHandler, MethodMap,
-    PeerProxy, PeerServiceConnectionFactory, PSKInfo, RemoteError, RPCMessage;
+import mawfs.rpc parseAddr, setInst, Context, GetFileResponse,
+    GetObjectResponse, InfoResponse, InstIFace, LoginError, LoginState,
+    MergeResponse, MethodHandler, MethodMap, PeerProxy,
+    PeerServiceConnectionFactory, PSKInfo, RemoteError, RPCMessage;
 import mawfs.ssl makeSSLContext;
 
 @import crack.ann assert, impl;
@@ -129,6 +130,20 @@ class FakeInstance @impl InstIFace {
 void clientSideGetObject(Context context, RPCMessage msg, Connection conn) {
     resp := GetObjectResponse();
     resp.data = 'client data';
+    context.writeResponse(conn, resp, msg.id);
+}
+
+void clientSideGetFile(Context context, RPCMessage msg, Connection conn) {
+    resp := GetFileResponse();
+    class Collector @impl GeneralCallback[String] {
+        String result;
+        void oper call(String result, Exception ex) {
+            this.result = result;
+        }
+    }
+    collector := Collector();
+    context.reader.getFile('xxx', collector);
+    resp.data = collector.result;
     context.writeResponse(conn, resp, msg.id);
 }
 
@@ -271,10 +286,12 @@ class RPCTestBed {
     void testPeerConnected() {
         methods := MethodMap();
         methods['getObject'] = MethodHandler(clientSideGetObject);
+        methods['getFile'] = MethodHandler(clientSideGetFile);
         peer := PeerProxy.make(comm, Log(log, 'client'),
                                FStr() `127.0.0.1:$port`,
                                __getSSLContext(),
-                               methods
+                               methods,
+                               FakeChunkReader()
                                );
         peer.login(cipher);
         peer.peerConnected('foo');
@@ -283,6 +300,9 @@ class RPCTestBed {
         peer.setAuthenticated(true);
         result := inst.peerProxy.getObject('digest');
         @assert(result == 'client data');
+
+        # Test the chunk reader.
+        @assert(inst.peerProxy.getFile('foo') == 'contents');
     }
 
     void tearDown() {

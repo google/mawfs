@@ -599,11 +599,13 @@ class PeerProxy : _PeerProxyBase {
     @static
     PeerProxy __makeConnection(Comm comm, Log log, Address addr,
                                SSLContext sslCtx,
-                               MethodMap methods
+                               MethodMap methods,
+                               RawChunkReader reader
                                ) {
         log.info `connecting to $addr:$(sslCtx ? 'ssl' : 'tcp')`;
         try {
             context := Context(log);
+            context.reader = reader;
             handler := RPCHandler(methods, context, addr);
             proxy := sslCtx ? sslCtx.connect(addr, handler) :
                               comm.connect(addr, handler);
@@ -618,27 +620,29 @@ class PeerProxy : _PeerProxyBase {
 
     @static
     PeerProxy make(Comm comm, Log log, String addr, SSLContext sslCtx,
-                   MethodMap methods
+                   MethodMap methods,
+                   RawChunkReader reader
                    ) {
         a := parseAddr(addr);
-        return __makeConnection(comm, log, a, sslCtx, methods);
+        return __makeConnection(comm, log, a, sslCtx, methods, reader);
     }
 
     @static
     PeerProxy make(Comm comm, Log log, Address addr, SSLContext sslCtx,
-                   MethodMap methods
+                   MethodMap methods,
+                   RawChunkReader reader
                    ) {
-        return __makeConnection(comm, log, addr, sslCtx, methods);
+        return __makeConnection(comm, log, addr, sslCtx, methods, reader);
     }
 
     @static
     PeerProxy make(Comm comm, Log log, String addr, SSLContext sslCtx) {
-        return make(comm, log, addr, sslCtx, null);
+        return make(comm, log, addr, sslCtx, null, null);
     }
 
     @static
     PeerProxy make(Comm comm, Log log, Address addr, SSLContext sslCtx) {
-        return make(comm, log, addr, sslCtx, null);
+        return make(comm, log, addr, sslCtx, null, null);
     }
 
     ## Test constructor.
@@ -1084,33 +1088,34 @@ void peerConnected(Context context, RPCMessage msg, Connection conn) {
     context.writeResponse(conn, null, msg.id);
 }
 
+const METHODS := MethodMap();
+METHODS['getObject'] = MethodHandler(getObject);
+METHODS['getHead'] = MethodHandler(getHead);
+METHODS['getJournalBlock'] = MethodHandler(getJournalBlock);
+METHODS['getFile'] = MethodHandler(getFile);
+METHODS['pullBranch'] = MethodHandler(pullBranch);
+METHODS['merge'] = MethodHandler(merge);
+METHODS['resolve'] = MethodHandler(resolve);
+METHODS['cancelMerge'] = MethodHandler(cancelMerge);
+METHODS['addPeer'] = MethodHandler(addPeer);
+METHODS['getInfo'] = MethodHandler(getInfo);
+METHODS['traverse'] = MethodHandler(traverse);
+METHODS['peerConnected'] = MethodHandler(peerConnected);
+# getMountpoint is just getInfo with "noauth".
+METHODS['getMountpoint'] = MethodHandler(getInfo, true);
+METHODS['login'] = MethodHandler(login, true);
+
 class PeerServiceConnectionFactory @impl ConnectionFactory {
-    MethodMap __methods = {};
     RawChunkReader __chunkReader;
 
     oper init(RawChunkReader chunkReader) : __chunkReader = chunkReader {
-        __methods['getObject'] = MethodHandler(getObject);
-        __methods['getHead'] = MethodHandler(getHead);
-        __methods['getJournalBlock'] = MethodHandler(getJournalBlock);
-        __methods['getFile'] = MethodHandler(getFile);
-        __methods['pullBranch'] = MethodHandler(pullBranch);
-        __methods['merge'] = MethodHandler(merge);
-        __methods['resolve'] = MethodHandler(resolve);
-        __methods['cancelMerge'] = MethodHandler(cancelMerge);
-        __methods['addPeer'] = MethodHandler(addPeer);
-        __methods['getInfo'] = MethodHandler(getInfo);
-        __methods['traverse'] = MethodHandler(traverse);
-        __methods['peerConnected'] = MethodHandler(peerConnected);
-        # getMountpoint is just getInfo with "noauth".
-        __methods['getMountpoint'] = MethodHandler(getInfo, true);
-        __methods['login'] = MethodHandler(login, true);
     }
 
     Connection makeConnection(NewConnection conn) {
         conn.log.info `accepted connection from $(conn.accepted.addr)\n`;
         log := Log(conn.log, FStr() `server-client-$(conn.accepted.addr)`);
         return Connection(log,
-                          RPCHandler(__methods, Context(__chunkReader),
+                          RPCHandler(METHODS, Context(__chunkReader),
                                      conn.accepted.addr
                                      )
                           );

@@ -601,6 +601,7 @@ class CommandManager {
             [peer-origin]
             host = $(peerAddr.getHostname())
             port = $(peerAddr.getPort())
+            ssl = $(peerAddr.ssl ? 'true' : 'false')
             `;
         showRunInstructions();
     }
@@ -845,11 +846,7 @@ void main() {
                     mawfsInstance := MAWFSInstance(instState, __net);
                     __net.setSSLContext(makeSSLContext(mawfsInstance,
                                                        __net.getComm(),
-                                                       # XXX gotta do
-                                                       # something about
-                                                       # these nulls...
-                                                       null,
-                                                       null
+                                                       instState.getCipher()
                                                        )
                                         );
                     setInst(mawfsInstance);

@@ -24,7 +24,7 @@ import crack.sys exit;
 import mawfs.aes_siv SIVCipher;
 import mawfs.ciphers sha256;
 import mawfs.params ParamInfo;
-import mawfs.peernet Peer, PeerNetwork;
+import mawfs.peernet ClientPeer, Peer, PeerNetwork;
 import mawfs.rawchunk JournalBlock;
 import mawfs.rpc PeerProxy;
 import mawfs.testutil FakeEntropySource;
@@ -75,8 +75,7 @@ class TestBed {
     void setUp() {
         __resetTempDir();
         net = PeerNetwork(null, SIVCipher(sha256('test test'), null));
-        peer := Peer(null, null, null, null, null);
-        peer.setProxy(FakeProxy(getJournalBlockResults));
+        peer := ClientPeer('peer', FakeProxy(getJournalBlockResults));
         net.addPeer(peer);
     }
 
