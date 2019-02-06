@@ -207,14 +207,15 @@ class Instance:
     To obtain the argument for '-i', use the get_descriptor() method.
 
     Attributes:
-        port: (str or None) host:port of the instance, None if the instance
+        addr: (str or None) host:port of the instance, None if the instance
             has no server.
         mountpoint: The full path to the mountpoint.
     """
 
-    def __init__(self, port, mountpoint):
-        self.port = port
-        self.mountpoint = mountpoint
+    def __init__(self, addr=None, mountpoint=None):
+        """One of port or mountpoint must be specified."""
+        self.addr = addr
+        self.__mountpoint = mountpoint
 
     def get_descriptor(self):
         """Returns the port (if defined) or the mountpoint if not.
@@ -222,7 +223,15 @@ class Instance:
         In either case, this returns a descriptor that can be used for -i in
         the mawfs command.
         """
-        return self.port or self.mountpoint
+        # TODO: invert this, mountpoints are preferrable to addresses because
+        # of the nonce.
+        return self.addr or self.mountpoint
+
+    @property
+    def mountpoint(self):
+        if not self.__mountpoint:
+            self.__mountpoint = get_mountpoint(self.addr)
+        return self.__mountpoint
 
 def get_mountpoint(server):
     """Returns the mounpoint for a given server.
@@ -252,19 +261,15 @@ def get_instance():
         if os.path.exists('.mawfs/inst/servers'):
             mount_point = os.getcwd()
             server = get_server_from_dir(os.getcwd())
-            processed_instance = Instance(server, get_mountpoint(server))
+            processed_instance = Instance(addr=server)
         else:
             raise Abort('You must specify an instance (-i <instance>) for '
                         'this command.')
     elif os.path.isdir(instance):
-        try:
-            server = get_server_from_dir(instance)
-        except Abort:
-            server = None
-        processed_instance = Instance(server, os.path.abspath(instance))
+        processed_instance = Instance(mountpoint=os.path.abspath(instance))
     else:
         # Assume it is an address.
-        processed_instance = Instance(instance, get_mountpoint(instance))
+        processed_instance = Instance(addr=instance)
     return processed_instance
 
 def read_password():
