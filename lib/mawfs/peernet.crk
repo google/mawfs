@@ -44,18 +44,21 @@ class ServerPeer : Peer {
     Cipher __cipher;
     SSLContext __sslCtx;
     RawChunkReader __chunkReader;
+    String __myName;
 
     ## sslCtx: nullable. if present, use ssl.
     oper init(Comm comm, Log log, Address addr, Cipher cipher,
               SSLContext sslCtx,
-              RawChunkReader chunkReader
+              RawChunkReader chunkReader,
+              String myName
               ) :
         addr = addr,
         __comm = comm,
         __log = log,
         __cipher = cipher,
         __sslCtx = sslCtx,
-        __chunkReader = chunkReader {
+        __chunkReader = chunkReader,
+        __myName = myName {
     }
 
     ## Returns the peer proxy, creating it if necessary.
@@ -65,14 +68,14 @@ class ServerPeer : Peer {
                                      __chunkReader);
             if (__proxy) {
                 __proxy.login(__cipher);
-                __proxy.peerConnected('homey');
+                __proxy.peerConnected(__myName);
             }
         }
         return __proxy;
     }
 
     void formatTo(Formatter out) {
-        out `peer-$addr`;
+        out `server-$addr`;
     }
 
     String getName() {
@@ -101,6 +104,7 @@ class ClientPeer : Peer {
     String getName() { return name }
     String getDisplayName() { return name }
     void shutdown() { if (__proxy) __proxy.shutdown() }
+    void formatTo(Formatter out) { out `client-$name` }
 }
 
 ## Encapsulates the entire peer subsystem.  Starts a server and manages
@@ -112,11 +116,15 @@ class PeerNetwork {
     Array[Peer] __peers = {};
     Array[String] __serverAddrs = {};
     Cipher __cipher;
+    String __name;
     SSLContext __sslCtx;
 
-    oper init(RawChunkReader chunkReader, Cipher cipher) :
+    oper init(RawChunkReader chunkReader, Cipher cipher,
+              String name
+              ) :
         __chunkReader = chunkReader,
-        __cipher = cipher {
+        __cipher = cipher,
+        __name = name {
 
         __log = Log(cerrLogger, 'peernet');
         __comm = Comm(__log);
@@ -150,7 +158,8 @@ class PeerNetwork {
                                   addr,
                                   __cipher,
                                   addr.ssl ? __sslCtx : null,
-                                  __chunkReader
+                                  __chunkReader,
+                                  __name
                                   )
                        );
     }
@@ -338,7 +347,7 @@ class PeerNetwork {
                 addServer(inetAddr);
         }
 
-        ## Initialize peeers.
+        ## Initialize peers.
         for (section :in config) {
             if (section.key.startsWith('peer-')) {
                 peerName := section.key.substr(5);
@@ -358,8 +367,12 @@ class PeerNetwork {
                     addrStr = FStr() `$addrStr:ssl`;
 
                 inetAddr := parseAddr(addrStr);
-                __log.info `adding peer $peerName at $inetAddr`;
-                addPeer(inetAddr);
+                if (inetAddr) {
+                    __log.info `adding peer $peerName at $inetAddr`;
+                    addPeer(inetAddr);
+                } else {
+                    __log.error `unable to resolve $addrStr for peer $peerName`;
+                }
             }
         }
     }

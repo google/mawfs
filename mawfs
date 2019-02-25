@@ -46,11 +46,12 @@ import crack.threads Mutex;
 import mawfs.aes_siv SIVCipher;
 import mawfs.blockstore hashFile, ChunkStore, FSInfo, Node, BLOCK_SIZE;
 import mawfs.cache sig;
+import mawfs.ciphers Cipher;
 import mawfs.configstore ConfigStore;
 import mawfs.entropy DeviceEntropySource;
 import mawfs.fuse runFuse;
 import mawfs.flows MAWFSInstance;
-import mawfs.inst InstanceState, UserModule;
+import mawfs.inst InstanceState, LocalInstanceState, UserModule;
 import mawfs.params ParamInfo;
 import mawfs.peernet PeerNetwork, RemoteReaderImpl;
 import mawfs.rawchunk RawChunkReader;
@@ -59,7 +60,7 @@ import mawfs.rpc parseAddr, setInst, ExtendedAddress, PeerProxy,
 import mawfs.ssl makeAnonSSLContext, makeClientSSLContext, makeSSLContext;
 import mawfs.util traverseCommit;
 
-@import crack.ann impl, struct;
+@import crack.ann assert, impl, struct;
 
 import 'libc.so.6' fsync;
 int fsync(int fd);
@@ -353,7 +354,28 @@ opts := CmdOptions![
            'info',
            CMD_STR
            ),
+    Option('name', 'n',
+           'When creating a new instance, this is the name of the new '
+           'instance.  If absent, a random name is used.',
+           '',
+           CMD_STR
+           ),
 ];
+
+## Convenience class for obtaining the peer network parameters from the
+## instance.
+class PeerNetParams {
+    Cipher cipher;
+    String name;
+
+    oper init(InstanceState state, bool locked) {
+        lock := locked ? typeof(state.lock()).cast(null, null) : state.lock();
+        if (!locked)
+            @assert(lock);
+        cipher = state.getCipher();
+        name = state.getInstanceName();
+    }
+}
 
 class CommandManager {
 
@@ -433,8 +455,8 @@ class CommandManager {
 
     ## Create the chunk store, also initializing the params file in the
     ## backing store if it doesn't exist.
-    void makeChunkStore() {
-        makeChunkStore(rootDir);
+    ChunkStore makeChunkStore() {
+        return makeChunkStore(rootDir);
     }
 
     ## Write instructions for running the command.
@@ -551,6 +573,21 @@ class CommandManager {
         return default;
     }
 
+
+    ## Set the name of a newly created instance if one has been provided by
+    ## the user.
+    void _setInstanceName(Cipher cipher) {
+        @assert(rootDir);
+        # Set the instance name if one is provided.
+        if (name := opts.getString('name')) {
+            # We don't necessarily have an instance state, so we just create
+            # the instance state proto file directly.
+            state := LocalInstanceState();
+            state.instanceName = name;
+            (rootDir/'inst').writeAll(cipher.encrypt(state.toString()));
+        }
+    }
+
     ## The "clone" command.
     void clone() {
         checkArgs(4, 'Usage: mawfs clone <peer-address> <backing-dir>\n');
@@ -563,9 +600,20 @@ class CommandManager {
         # Initialize backing store, use the peer's ssl setting as a default.
         initBackingStore(args[3], peerAddr.ssl);
 
+        mutex := Mutex();
+        store := ChunkStore(rootDir, FSInfo(tempCipher));
+        instState := InstanceState.create(rootDir, tempCipher, store,
+                                          opts.getString('branch'),
+                                          mutex,
+                                          null
+                                          );
+        _setInstanceName(tempCipher);
+
+        params := PeerNetParams(instState, false);
+
         # Only need a raw chunk reader if we're running a server, so we
         # can give it a null.
-        net := PeerNetwork(null, tempCipher);
+        net := PeerNetwork(null, params.cipher, params.name);
         net.setSSLContext(makeClientSSLContext(net.getComm(), tempCipher));
         net.addPeer(peerAddr);
 
@@ -576,7 +624,6 @@ class CommandManager {
             makePath(args[3]).deleteTree();
             exit(1);
         }
-        store := ChunkStore(rootDir, FSInfo(paramInfo.cipher));
 
         store.setRemoteReader(RemoteReaderImpl(net));
 
@@ -611,7 +658,8 @@ class CommandManager {
         checkArgs(3, 'Usage: mawfs create <backing-dir>\n');
         cerr `port is $(opts.getInt('port'))\n`;
         initBackingStore(args[2], true);
-        makeChunkStore();
+        cipher := makeChunkStore().getCipher();
+        _setInstanceName(cipher);
         cerr I`MAWFS Cell created\n`;
         showRunInstructions();
     }
@@ -701,7 +749,9 @@ class CommandManager {
     void info() {
         checkArgs(2, 'Usage: mawfs info\n');
         result := getRPC().getProxy().getInfo();
-        cout `Mountpoint: $(result.mountpoint)\n`;
+        cout I`Name: $(result.name)
+               Mountpoint: $(result.mountpoint)
+               `;
     }
 
     ## The "verify" command.
@@ -822,9 +872,16 @@ void main() {
             fuseArgs.extend(args.subarray(3));
 
             setLogFile(opts.getString('logfile'));
+
             rootDir := makePath(args[2]);
+            newInstance := !(rootDir/'params').exists();
             configStore := ConfigStore(rootDir, 'peers');
             chunkStore := makeChunkStore(rootDir);
+
+            if (newInstance) {
+                cm.rootDir = rootDir;
+                cm._setInstanceName(chunkStore.getCipher());
+            }
 
             # Start the peer network.
             mutex := Mutex();
@@ -842,7 +899,10 @@ void main() {
                 }
 
                 void start() {
-                    __net = PeerNetwork(__chunkReader, instState.getCipher());
+                    params := PeerNetParams(instState, true);
+                    __net = PeerNetwork(__chunkReader, params.cipher,
+                                        params.name
+                                        );
                     mawfsInstance := MAWFSInstance(instState, __net);
                     __net.setSSLContext(makeSSLContext(mawfsInstance,
                                                        __net.getComm(),

@@ -133,8 +133,7 @@ class PeerDisconnectedError : Exception {}
 
     message InfoResponse {
         optional string mountpoint = 1;
-        # Note: if we add anything else to this we need to copy getInfo()
-        # (below) to getMountpoint(), which just returns the mountpoint.
+        optional string name = 2;
     }
 
     message LoginRequest {
@@ -519,6 +518,7 @@ class ExtendedAddress : InetAddress {
 
 ## Parse an address of the form host:port.  "host" may be either a hostname or
 ## an ip address.
+## Returns null if the address is not resolvable.
 ExtendedAddress parseAddr(String addr) {
     int port;
     String host;
@@ -555,6 +555,8 @@ ExtendedAddress parseAddr(String addr) {
                             );
     } else {
         addrs := resolve(host);
+        if (!addrs)
+            return null;
         a = ExtendedAddress(host, InetAddress.cast(addrs[0]).getAddr(), port,
                             ssl
                             );
@@ -1032,6 +1034,17 @@ void getInfo(Context context, RPCMessage msg, Connection comm) {
     }
 }
 
+void getMountpoint(Context context, RPCMessage msg, Connection comm) {
+    try {
+        info := _inst.getInfo();
+        resp := InfoResponse();
+        resp.mountpoint = info.mountpoint;
+        context.writeResponse(comm, resp, msg.id);
+    } catch (Exception ex) {
+        context.writeError(comm, ex.text, msg.id);
+    }
+}
+
 void traverse(Context context, RPCMessage msg, Connection comm) {
     req := TraverseRequest();
     readMessageFromString(req, msg.request);
@@ -1082,7 +1095,9 @@ void peerConnected(Context context, RPCMessage msg, Connection conn) {
     readMessageFromString(req, msg.request);
 
     # Wrap the connection in a new peer proxy.
-    proxy := PeerProxy(context, conn, RPCHandler.cast(conn.userHandler));
+    handler := RPCHandler.cast(conn.userHandler);
+    proxy := PeerProxy(context, conn, handler);
+    handler.setOwner(RawPtr[_PeerProxyBase](proxy));
 
     _inst.peerConnected(req.peerName, proxy);
     context.writeResponse(conn, null, msg.id);
@@ -1101,8 +1116,7 @@ METHODS['addPeer'] = MethodHandler(addPeer);
 METHODS['getInfo'] = MethodHandler(getInfo);
 METHODS['traverse'] = MethodHandler(traverse);
 METHODS['peerConnected'] = MethodHandler(peerConnected);
-# getMountpoint is just getInfo with "noauth".
-METHODS['getMountpoint'] = MethodHandler(getInfo, true);
+METHODS['getMountpoint'] = MethodHandler(getMountpoint, true);
 METHODS['login'] = MethodHandler(login, true);
 
 class PeerServiceConnectionFactory @impl ConnectionFactory {

@@ -111,7 +111,9 @@ bool gotFailures;
 
     void startFS(String branch, String backing, String dir) {
         runMawfs(StringArray!['run', '-b', branch, '-l',
-                              'mawfs_' + dir + '.log', backing, dir]);
+                              'mawfs_' + dir + '.log', '-n', dir, backing,
+                               '-v', 'debug',
+                              dir]);
     }
 
     void startFS(String branch) {
@@ -143,6 +145,7 @@ bool gotFailures;
 
     void restartSlaveFS(String branch) {
         stopFS('fs2');
+        makePath('mawfs_fs2.log').moveTo(makePath('mawfs_fs2.old.log'));
         startFS(branch, 'backing2', 'fs2');
     }
 
@@ -687,7 +690,7 @@ class InfoTest : TestCase {
         @assert((rootPath/'.mawfs').exists());
         stdout := AppendBuffer(256);
         runMawfs(StringArray!['info', '-i', rootPath.getFullName()], stdout);
-        assertEqual(stdout, FStr() `Mountpoint: $rootPath\n`);
+        assertEqual(stdout, FStr() `Name: fs\nMountpoint: $rootPath\n`);
     }
 }
 register(InfoTest());
@@ -846,15 +849,14 @@ class SSLTest : TestCase {
         # Verify that unauthorized local clients work.
         runMawfs(StringArray!['-i', 'localhost:12543:ssl', 'info']);
 
-# TODO: the next test still hangs.
-#        try {
-#            runMawfs(StringArray!['-i', 'localhost:12543:tcp', 'info']);
-#            @assert(false &&
-#                    'No error doing normal TCP connection to SSL server.');
-#        } catch (Exception ex) {
-#            if (ex.isa(AssertionError))
-#                throw ex;
-#        }
+        try {
+            runMawfs(StringArray!['-i', 'localhost:12543:tcp', 'info']);
+            @assert(false &&
+                    'No error doing normal TCP connection to SSL server.');
+        } catch (Exception ex) {
+            if (ex.isa(AssertionError))
+                throw ex;
+        }
 
         # XXX also need to verify that a server can communicate to its peers.
     }

@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import crack.cont.array Array;
 import crack.cont.hashmap HashMap;
+import crack.enc.base64 altEncode;
 import crack.fs Path;
-import crack.io FStr, SeekableReader, SeekableWriter;
-import crack.lang InvalidArgumentError, InvalidStateError;
+import crack.io FStr, Formatter, SeekableReader, SeekableWriter;
+import crack.lang cmp, makeHashVal, InvalidArgumentError, InvalidStateError;
 import crack.logger info;
-import crack.protobuf readMessageFromString;
+import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
 import crack.threads Mutex, MutexLock;
 
 import .admin AdminRootFactory, InfoFiles;
@@ -25,11 +27,31 @@ import .alt ResidentBranches;
 import .blockstore Commit, Node, NodeStore, MODE_DIR;
 import .ciphers Cipher;
 import .cache CachedNode, Tree;
-import .merge LocalInstanceState, Merger, MergeState;
+import .entropy getEntropySource;
+import .merge Merger, MergeState;
 import .nonces NonceManager;
 import .path MAWFSPath;
 
-@import crack.ann define, interface;
+@import crack.ann define, impl, interface;
+@import crack.protobuf.ann protobuf;
+
+@protobuf {
+    version = 1
+    declare MergeState;
+
+    ## Used to store the entirety local instance state.
+    ##
+    ## The local instance state is similar to 'params', only where 'params'
+    ## contains parameters relevant to the entire cell and repository, the
+    ## instance state is specific to the current instance.
+    message LocalInstanceState {
+        optional MergeState mergeState = 1;
+
+        ## The instance name, which is used by the peer name when registering
+        ## with another instance.
+        optional string instanceName = 2;
+    }
+}
 
 class FileInfo {
 
@@ -74,6 +96,7 @@ class InstanceState {
 
 
     Cipher __cipher;
+    String __name;
     NodeStore __store;
     Tree __tree;
     HashMap[int, FileInfo] __files = {};
@@ -355,6 +378,28 @@ class InstanceState {
         return Merger(__tree.getRoot(), orgRoot, otherRoot, __pendingMerge);
     }
 
+    void save();
+
+    String getInstanceName() {
+        @checkLock();
+        if (!__name) {
+            # If we don't have a name, make one up.
+            __name = altEncode(getEntropySource().getString(8));
+
+            # Check for a backing store, makes it a bit easier to deal with
+            # this in a unit test.
+            if (__backing)
+                save();
+        }
+        return __name
+    }
+
+    void setInstanceName(String name) {
+        @checkLock();
+        __name = name;
+        save();
+    }
+
     ## Load the local instance state from the backing store.
     void load() {
         @checkLock();
@@ -368,6 +413,7 @@ class InstanceState {
         serialized := instStateFile.readAll();
         readMessageFromString(state, __cipher.decrypt(serialized));
         __pendingMerge = state.mergeState;
+        __name = state.instanceName;
 
         # If we're currently looking at the target branch, set to the merge
         # branch.
@@ -388,8 +434,10 @@ class InstanceState {
 
     ## Write the local instance state to the backing store.
     void save() {
+        @checkLock();
         state := LocalInstanceState();
         state.mergeState = __pendingMerge;
+        state.instanceName = __name;
         (__backing/'inst').writeAll(__cipher.encrypt(state.toString()));
     }
 
