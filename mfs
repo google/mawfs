@@ -62,7 +62,14 @@ def check_args(func, args):
 
 def get_backing_dir_root():
     """Returns the directory where we keep all of the backing stores."""
-    return os.path.join(os.path.expanduser('~'), '.mawfs')
+    backing_dir_root = os.path.join(os.path.expanduser('~'), '.mawfs')
+    if not os.path.exists(backing_dir_root):
+        try:
+            os.makedirs(backing_dir_root)
+        except OSError as ex:
+            if ex.errno != EEXIST:
+                raise
+    return backing_dir_root
 
 def get_backing_dir(path):
     """Returns the full path to the backing dir for 'path'.
@@ -167,6 +174,14 @@ def find_unused_port():
 def run_mawfs(*args, **kwargs):
     """Run the "mawfs" command.
 
+    Args:
+        *args: positional arguments and flags.
+        **kwargs: Keyword arguments:
+            capture_stdout: (bool) If true, captures and returns standard
+                output.
+            logfile: (str) If present, overrides the logfile path (by default,
+                we use $HOME/.mawfs/mawfs.log for this.
+
     Returns:
         (int) If capture_stdout was not True, returns just the exit code of
         the child process.
@@ -175,8 +190,13 @@ def run_mawfs(*args, **kwargs):
     """
     stdin = kwargs.get('stdin')
     capture_stdout = kwargs.get('capture_stdout')
+    logfile = kwargs.get('logfile')
+    if logfile is None:
+        logfile = os.path.join(get_backing_dir_root(), 'mawfs.log')
+        print('logfile is %s' % logfile)
     cmd = [os.environ.get('MAWFS_BIN', 'mawfs')] + \
-          [str(arg) for arg in args if arg is not None]
+          [str(arg) for arg in args if arg is not None] + \
+          ['-l', logfile] + mawfs_flags
     if stdin is not None or capture_stdout:
         popen_kwargs = {}
         if stdin is not None:
@@ -193,6 +213,7 @@ def run_mawfs(*args, **kwargs):
     else:
         return subprocess.call(cmd)
 
+mawfs_flags = []
 processed_instance = instance = mount_point = None
 
 def get_server_from_dir(dir):
@@ -297,7 +318,7 @@ def new(path):
                        '-f', '127.0.0.1',
                        stdin=password
                        ) or \
-             run_mawfs('run', '-l', logfile, backing, path, stdin=password)
+             run_mawfs('run', backing, path, stdin=password, logfile=logfile)
         print('Your filesystem has been mounted on %s' % path)
     finally:
         if rc and os.path.exists(backing):
@@ -321,9 +342,9 @@ def mount(path):
     backing = get_backing_dir(os.path.abspath(path))
     check_backing_exists(backing, path)
     if not os.path.exists(path):
-        raise Abort('%s does not exist.  (Re)create it with mkdir?')
+        raise Abort('%s does not exist.  (Re)create it with mkdir?' % path)
     logfile = os.path.join(backing, 'mawfs.log')
-    return run_mawfs('run', '-l', logfile, backing, path)
+    return run_mawfs('run', backing, path, logfile=logfile)
 
 @command
 def delete(path):
@@ -541,10 +562,15 @@ def verify():
 
 def main(args):
     global instance
-    opts, args = getopt.gnu_getopt(args[1:], 'i:')
+    opts, args = getopt.gnu_getopt(args[1:], 'i:v:')
     for opt, val in opts:
         if opt == '-i':
             instance = val
+        elif opt == '-v':
+            mawfs_flags.append('-v')
+            mawfs_flags.append(val)
+        else:
+            raise AssertionError('unkonwn flag: %s' % opt)
     try:
         if not args:
             help()
