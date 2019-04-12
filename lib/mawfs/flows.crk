@@ -556,15 +556,15 @@ class MAWFSInstance @impl InstIFace {
     }
 
     PSKInfo getPSK(String identity) {
+        const pskSize := NONCE_SIZE / 2;
         if (identity.startsWith('L')) {
             # Local identity.  Should be the first half of a registered nonce.
             # If it's not, we construct a random PSK to deny entry.
-            const size := NONCE_SIZE / 2;
             psk := __state.getNonceManager().redeemPrefix(
                 altDecode(identity.substr(1))
             );
             return PSKInfo(
-                (psk is null) ? getEntropySource().getString(size) : psk,
+                (psk is null) ? getEntropySource().getString(pskSize) : psk,
                 !(psk is null)
             );
         } else if (identity.startsWith('A')) {
@@ -575,7 +575,16 @@ class MAWFSInstance @impl InstIFace {
             # PSK should be the encrypted hash of the decoded, decrypted
             # identity.
             cipher := __state.getCipher();
-            nonce := cipher.decrypt(altDecode(identity.substr(1)));
+            String nonce;
+            try {
+                nonce = cipher.decrypt(altDecode(identity.substr(1)));
+                if (!nonce)
+                    throw InvalidArgumentError('Failed to decrypt');
+            } catch (InvalidArgumentError ex) {
+                info `Invalid identity in password request: $(ex.text)`;
+                # Random key to deny entry.
+                return PSKInfo(getEntropySource().getString(pskSize), false);
+            }
             return PSKInfo(cipher.encrypt(sha256(nonce)), true);
         }
     }
