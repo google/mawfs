@@ -74,7 +74,7 @@ class PeerInfo {
 
         # Create the peer network.
         chunkReader := cs.getRawChunkReader(mutex);
-        peerNet = PeerNetwork(chunkReader, cipher);
+        peerNet = PeerNetwork(chunkReader, cipher, 'name');
 
         # Set up a remote reader.
         cs.setRemoteReader(RemoteReaderImpl(peerNet));

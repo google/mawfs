@@ -33,9 +33,11 @@ import mawfs.testutil FakeEntropySource;
 
 class FakeProxy : PeerProxy {
     Array[JournalBlock] results;
-    oper init(Array[JournalBlock] results) :
+    bool valid;
+    oper init(Array[JournalBlock] results, bool valid) :
         PeerProxy(null),
-        results = results {
+        results = results,
+        valid = valid {
     }
 
     JournalBlock getJournalBlock(String firstBlockDigest,
@@ -58,7 +60,8 @@ class FakeProxy : PeerProxy {
         }
     }
 
-    bool isTrue() { return true }
+    bool isTrue() { return valid }
+    bool reusable() { return false }
 }
 
 class TestBed {
@@ -74,8 +77,10 @@ class TestBed {
 
     void setUp() {
         __resetTempDir();
-        net = PeerNetwork(null, SIVCipher(sha256('test test'), null));
-        peer := ClientPeer('peer', FakeProxy(getJournalBlockResults));
+        net = PeerNetwork(null, SIVCipher(sha256('test test'), null), 'name');
+        peer := ClientPeer('invalid', FakeProxy(getJournalBlockResults, false));
+        net.addPeer(peer);
+        peer = ClientPeer('peer', FakeProxy(getJournalBlockResults, true));
         net.addPeer(peer);
     }
 
@@ -85,6 +90,12 @@ class TestBed {
 
     void __assertNoJournal() {
         @assert(!(root/'journals/master').exists());
+    }
+
+    void testPeerCleanup() {
+        @assert(net.getPeers().count() == 2);
+        paramInfo := net.pullParams(root, sha256('password'));
+        @assert(net.getPeers().count() == 1);
     }
 
     void testEmptyJournal() {
@@ -154,6 +165,7 @@ class TestBed {
             result : false;
         result = __run(testJournalChanged, 'journal changed') ? result : false;
         result = __run(testGetFile, 'get file') ? result : false;
+        result = __run(testPeerCleanup, 'peer cleanup') ? result : false;
         return result;
     }
 }

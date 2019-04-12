@@ -511,6 +511,7 @@ class MAWFSInstance @impl InstIFace {
         resp := InfoResponse();
         lock := __state.lock();
         resp.mountpoint = __state.getMountpoint().getFullName();
+        resp.name = __state.getInstanceName();
         return resp;
     }
 

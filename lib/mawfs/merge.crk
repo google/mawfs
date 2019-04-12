@@ -303,6 +303,8 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
 
 ## Keeps track of the current state of a pending merge.
 @protobuf {
+    version = 1
+
     message MergeState {
 
         ## The name of the target branch (the branch that we started from and
@@ -334,16 +336,6 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
         ## may be omitted if the origin is at the head of the branch.
         optional string orgBranch = 8;
         optional string orgChange = 9;
-    }
-
-    ## Used to store the entirety local instance state.  For now, this is just
-    ## the merge state, so we define this here.
-    ##
-    ## The local instance state is similar to 'params', only where 'params'
-    ## contains parameters relevant to the entire cell and repository, the
-    ## instance state is specific to the current instance.
-    message LocalInstanceState {
-        optional MergeState mergeState = 1;
     }
 }
 

@@ -21,7 +21,7 @@ import .ciphers Cipher;
 import .inst InstanceState;
 import .params ParamInfo;
 
-@import crack.ann cvars, impl, struct;
+@import crack.ann cvars, define, impl, struct;
 
 ## Thrown by pullParams() in the case of an invalid password.
 class InvalidPasswordError : Exception {
@@ -33,6 +33,7 @@ class InvalidPasswordError : Exception {
     @abstract String getName();
     @abstract String getDisplayName();
     @abstract void shutdown();
+    @abstract bool reusable();
 }
 
 ## A peer for connecting to a server.
@@ -44,18 +45,21 @@ class ServerPeer : Peer {
     Cipher __cipher;
     SSLContext __sslCtx;
     RawChunkReader __chunkReader;
+    String __myName;
 
     ## sslCtx: nullable. if present, use ssl.
     oper init(Comm comm, Log log, Address addr, Cipher cipher,
               SSLContext sslCtx,
-              RawChunkReader chunkReader
+              RawChunkReader chunkReader,
+              String myName
               ) :
         addr = addr,
         __comm = comm,
         __log = log,
         __cipher = cipher,
         __sslCtx = sslCtx,
-        __chunkReader = chunkReader {
+        __chunkReader = chunkReader,
+        __myName = myName {
     }
 
     ## Returns the peer proxy, creating it if necessary.
@@ -65,14 +69,14 @@ class ServerPeer : Peer {
                                      __chunkReader);
             if (__proxy) {
                 __proxy.login(__cipher);
-                __proxy.peerConnected('homey');
+                __proxy.peerConnected(__myName);
             }
         }
         return __proxy;
     }
 
     void formatTo(Formatter out) {
-        out `peer-$addr`;
+        out `server-$addr`;
     }
 
     String getName() {
@@ -88,6 +92,8 @@ class ServerPeer : Peer {
         if (__proxy)
             __proxy.shutdown();
     }
+
+    bool reusable() { return true }
 }
 
 ## A peer for connecting to a client.
@@ -101,6 +107,8 @@ class ClientPeer : Peer {
     String getName() { return name }
     String getDisplayName() { return name }
     void shutdown() { if (__proxy) __proxy.shutdown() }
+    bool reusable() { return false }
+    void formatTo(Formatter out) { out `client-$name` }
 }
 
 ## Encapsulates the entire peer subsystem.  Starts a server and manages
@@ -112,11 +120,15 @@ class PeerNetwork {
     Array[Peer] __peers = {};
     Array[String] __serverAddrs = {};
     Cipher __cipher;
+    String __name;
     SSLContext __sslCtx;
 
-    oper init(RawChunkReader chunkReader, Cipher cipher) :
+    oper init(RawChunkReader chunkReader, Cipher cipher,
+              String name
+              ) :
         __chunkReader = chunkReader,
-        __cipher = cipher {
+        __cipher = cipher,
+        __name = name {
 
         __log = Log(cerrLogger, 'peernet');
         __comm = Comm(__log);
@@ -150,7 +162,8 @@ class PeerNetwork {
                                   addr,
                                   __cipher,
                                   addr.ssl ? __sslCtx : null,
-                                  __chunkReader
+                                  __chunkReader,
+                                  __name
                                   )
                        );
     }
@@ -183,6 +196,43 @@ class PeerNetwork {
 
     oper del() {}
 
+    void __deletePeers(Array[uint] indexes) {
+        // Delete in reverse order to preserve indexes.
+        for (int i = indexes.count() - 1; i > -1; --i)
+            __peers.delete(indexes[i]);
+    }
+
+    @define iterPeers(code) {
+        class Deleter : Array[uint] {
+            @cvars { Array[Peer] peers; }
+            oper del() {
+                // Delete in reverse order to preserve indexes.
+                for (int i = count() - 1; i > -1; --i)
+                    peers.delete(this[i]);
+            }
+        }
+        toDelete := Deleter(__peers);
+        for (peerIter :on __peers) {
+            peer := peerIter.elem();
+            proxy := peer.getProxy();
+            if (proxy) {
+                try
+                    code
+                catch (PeerDisconnectedError ex) {
+                    __log.debug `Peer $(peer.getDisplayName()) disconnected.`;
+                }
+            } else {
+                __log.debug `unable to get proxy for $(peer.getDisplayName())`;
+                if (!peer.reusable()) {
+                    __log.info I`deleting closed client peer \
+                                 $(peer.getDisplayName())`;
+                    toDelete.append(peerIter.index);
+                }
+            }
+        }
+        __deletePeers(toDelete);
+    }
+
     @struct HeadAndPeer {
         ## Head commit digest.
         String head;
@@ -191,38 +241,22 @@ class PeerNetwork {
         String peer;
     }
     HeadAndPeer getHead(String branch) {
-        for (peer :in __peers) {
-            proxy := peer.getProxy();
-            if (proxy) {
-                try {
-                    __log.debug `got peer proxy for $(peer.getDisplayName())`;
-                    head := proxy.getHead(branch);
-                    if (head)
-                        return HeadAndPeer(head, peer.getName());
-                } catch (PeerDisconnectedError ex) {
-                    __log.debug `Peer $(peer.getDisplayName()) disconnected.`;
-                }
-            } else {
-                __log.debug `unable to get proxy for $(peer.getDisplayName())\n`;
-            }
-        }
+        @iterPeers({
+            __log.debug `got peer proxy for $(peer.getDisplayName())`;
+            head := proxy.getHead(branch);
+            if (head)
+                return HeadAndPeer(head, peer.getName());
+        });
 
         return null;
     }
 
     String getObject(String digest) {
-        for (peer :in __peers) {
-            proxy := peer.getProxy();
-            if (proxy) {
-                try {
-                    contents := proxy.getObject(digest);
-                    if (contents)
-                        return contents;
-                } catch (PeerDisconnectedError ex) {
-                    __log.debug `Peer $(peer.getDisplayName()) disconnected.`;
-                }
-            }
-        }
+        @iterPeers({
+            contents := proxy.getObject(digest);
+            if (contents)
+                return contents;
+        });
 
         return null;
     }
@@ -241,52 +275,45 @@ class PeerNetwork {
     String pullJournal(Path root, String branch, bool qualified) {
         Writer dst;
         uint pos;
-        for (peer :in __peers) {
-            proxy := peer.getProxy();
-            if (proxy) {
-                try {
-                    __log.info `Pulling journal from $peer`;
+        @iterPeers({
+            __log.info `Pulling journal from $peer`;
 
-                    # Get the first block.
-                    jb := proxy.getJournalBlock(null, branch, 0);
+            # Get the first block.
+            jb := proxy.getJournalBlock(null, branch, 0);
 
-                    localName :=
-                        qualified ? peer.getName() + ':' + branch : branch;
-                    branchPath := root/'journals'/localName;
-                    if (jb.contents) {
-                        branchPath.parent().makeDirs();
-                        dst = branchPath.writer();
-                        dst.write(jb.contents);
-                        pos = jb.contents.size;
-                    }
-
-                    while (!jb.done) {
-                        jb := proxy.getJournalBlock(jb.firstBlockDigest, branch,
-                                                    pos
-                                                    );
-                        if (jb.contents) {
-                            pos += jb.contents.size;
-                            dst.write(jb.contents);
-                        } else if (!jb.firstBlockDigest && !jb.done) {
-                            # The journal has changed.
-                            # TODO: This is where we really need to get the new
-                            # head and start over again.
-                            __log.info `Remote journal has changed.`;
-                            branchPath.delete();
-                            break;
-                        }
-
-                        if (jb.done)
-                            break;
-                    }
-
-                    __log.info `Journal of size $pos retrieved.`;
-                    return localName;
-                } catch (PeerDisconnectedError ex) {
-                    __log.debug `Peer $(peer.getDisplayName()) disconnected.`;
-                }
+            localName :=
+                qualified ? peer.getName() + ':' + branch : branch;
+            branchPath := root/'journals'/localName;
+            if (jb.contents) {
+                branchPath.parent().makeDirs();
+                dst = branchPath.writer();
+                dst.write(jb.contents);
+                pos = jb.contents.size;
             }
-        }
+
+            while (!jb.done) {
+                jb := proxy.getJournalBlock(jb.firstBlockDigest, branch,
+                                            pos
+                                            );
+                if (jb.contents) {
+                    pos += jb.contents.size;
+                    dst.write(jb.contents);
+                } else if (!jb.firstBlockDigest && !jb.done) {
+                    # The journal has changed.
+                    # TODO: This is where we really need to get the new
+                    # head and start over again.
+                    __log.info `Remote journal has changed.`;
+                    branchPath.delete();
+                    break;
+                }
+
+                if (jb.done)
+                    break;
+            }
+
+            __log.info `Journal of size $pos retrieved.`;
+            return localName;
+        });
 
         return null;
     }
@@ -297,23 +324,16 @@ class PeerNetwork {
     ## doesn't have a params file (or runs into problems reading it) and any
     ## of the exceptions raised by ParamInfo.read() if the file is corrupt,
     ParamInfo pullParams(Path root, String password) {
-        for (peer :in __peers) {
-            proxy := peer.getProxy();
-            if (proxy) {
-                try {
-                    __log.info `Pulling params from $peer`;
-                    contents := proxy.getFile('params');
-                    pi := ParamInfo.read(StringReader(contents), password);
-                    if (!pi)
-                        throw Exception('Invalid password');
-                    root.makeDirs();
-                    (root/'params').writeAll(contents);
-                    return pi;
-                } catch (PeerDisconnectedError ex) {
-                    __log.debug `Peer $(peer.getDisplayName()) disconnected.`;
-                }
-            }
-        }
+        @iterPeers({
+            __log.info `Pulling params from $peer`;
+            contents := proxy.getFile('params');
+            pi := ParamInfo.read(StringReader(contents), password);
+            if (!pi)
+                throw Exception('Invalid password');
+            root.makeDirs();
+            (root/'params').writeAll(contents);
+            return pi;
+        });
         return null;
     }
 
@@ -338,7 +358,7 @@ class PeerNetwork {
                 addServer(inetAddr);
         }
 
-        ## Initialize peeers.
+        ## Initialize peers.
         for (section :in config) {
             if (section.key.startsWith('peer-')) {
                 peerName := section.key.substr(5);
@@ -358,8 +378,12 @@ class PeerNetwork {
                     addrStr = FStr() `$addrStr:ssl`;
 
                 inetAddr := parseAddr(addrStr);
-                __log.info `adding peer $peerName at $inetAddr`;
-                addPeer(inetAddr);
+                if (inetAddr) {
+                    __log.info `adding peer $peerName at $inetAddr`;
+                    addPeer(inetAddr);
+                } else {
+                    __log.error `unable to resolve $addrStr for peer $peerName`;
+                }
             }
         }
     }
@@ -372,6 +396,12 @@ class PeerNetwork {
         for (addr :in __serverAddrs)
             tmp `$addr\n`;
         state.setInfoFile('servers', tmp.string());
+    }
+
+
+    ## Return the list of peers.
+    Array[Peer] getPeers() {
+        return __peers;
     }
 }
 
