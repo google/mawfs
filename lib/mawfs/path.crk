@@ -380,6 +380,27 @@ class MAWFSPath : RWPath {
 
     ## Returns the underlying cached node.
     CachedNode getCachedNode() { return __rep }
+
+    void __resetTo(MAWFSPath path) {
+        __rep = path.getCachedNode();
+        if (__parent)
+            __parent.__resetTo(path.__parent);
+    }
+
+    ## Reset the underlying cache node against the new filesystem root.
+    ## This gets called when the tree gets reset out from under us.
+    ## We just have to do the sanest thing we can here.
+    void reset(CachedNode root) {
+        Path resolve(MAWFSPath org, CachedNode root) {
+            if (!org.__parent)
+                return MAWFSPath(root, false);
+            return resolve(org.__parent, root)[org.getName()];
+        }
+
+        # reconstitute the root path.
+        curNode := MAWFSPath.cast(resolve(this, root));
+        __resetTo(curNode);
+    }
 }
 
 Path _makeMAWFSPath(CachedNode node, Path parent, String name) {

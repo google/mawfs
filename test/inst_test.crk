@@ -1,0 +1,111 @@
+
+import crack.fs makePath, Path;
+import crack.io cerr;
+import crack.threads Mutex;
+import mawfs.aes_siv SIVCipher;
+import mawfs.inst InstanceState;
+import mawfs.memstore MemNodeStore;
+import mawfs.path MAWFSPath;
+
+import test.unittest register, runAllTests, Test;
+
+@import crack.ann assert;
+
+@abstract class TestBase : Test {
+    Path backing;
+    InstanceState inst;
+
+    void setUp() {
+        # Backing directory, which need not exist and is not created (it just
+        # can't be null).
+        backing = makePath('/bogus_dir');
+        store := MemNodeStore();
+        inst = InstanceState.create(
+            backing,
+            SIVCipher('passwordpasswordpasswordpassword',
+                      null
+                      ),
+            store,
+            'master',
+            Mutex(),
+            null
+        );
+    }
+}
+
+## Test for the experimental "resetTreeAndFiles()" function which tries to fit
+## all open files to their counterparts in the new tree after a tree reset.
+class ResetTreeAndFilesTest : TestBase {
+    void run() {
+        lock := inst.lock();
+
+        # Get a path object.
+        path := MAWFSPath.cast(inst.getRoot()/'file');
+        file := inst.makeFileInfo(path, null, path.writer());
+        out := file.writer;
+        out.write('first');
+        out.write('second');
+
+        inst.resetTreeAndFiles();
+
+        out.write('third');
+        out.write('fourth');
+        out = null;
+        file = null;
+
+        path = MAWFSPath.cast(inst.getRoot()/'file');
+
+        assertEqual(path.readAll(), 'firstsecondthirdfourth');
+    }
+}
+register(ResetTreeAndFilesTest());
+
+class ResetTest : TestBase {
+    void run() {
+        lock := inst.lock();
+
+        # Get a path object.
+        path := MAWFSPath.cast(inst.getRoot()/'file');
+        file := inst.makeFileInfo(path, null, path.writer());
+        out := file.writer;
+        out.write('first');
+        out.write('second');
+
+        inst.resetTree();
+
+        assertEqual(file.writer, null);
+
+        path = MAWFSPath.cast(inst.getRoot()/'file');
+        assertEqual(path.readAll(), 'firstsecond');
+    }
+}
+register(ResetTest());
+
+class BranchChangeTest : TestBase {
+    void run() {
+        lock := inst.lock();
+
+        # Fork another branch.
+        rootDigest := inst.getRoot().getCachedNode().digest;
+        store := inst.getStore();
+        store.setHead('other', store.getHead('master'));
+
+        # Get a path object.
+        path := MAWFSPath.cast(inst.getRoot()/'file');
+        file := inst.makeFileInfo(path, null, path.writer());
+        out := file.writer;
+        out.write('first');
+        out.write('second');
+
+        inst.setBranch('other');
+
+        assertEqual(file.writer, null);
+        @assert(!inst.getRoot()['file'].exists());
+
+        inst.setBranch('master');
+        assertEqual(inst.getRoot()['file'].readAll(), 'firstsecond');
+    }
+}
+register(BranchChangeTest());
+
+runAllTests();

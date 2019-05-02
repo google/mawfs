@@ -76,8 +76,10 @@ class Context {
         return cur;
     }
 
-    FileInfo makeFileInfo(SeekableReader reader, SeekableWriter writer) {
-        return __fs.makeFileInfo(reader, writer);
+    FileInfo makeFileInfo(Path path, SeekableReader reader,
+                          SeekableWriter writer
+                          ) {
+        return __fs.makeFileInfo(MAWFSPath.cast(path, null), reader, writer);
     }
 
     FileInfo getFileInfo(uint64 fh) {
@@ -169,7 +171,7 @@ int _open(byteptr path, FuseFileInfo fi) {
                 writer = p.writer();
             }
 
-            fi.fh = ctx.makeFileInfo(reader, writer).fh;
+            fi.fh = ctx.makeFileInfo(p, reader, writer).fh;
             return 0;
         } else {
             return -ENOENT;
@@ -279,7 +281,7 @@ int _create(byteptr path, int mode, FuseFileInfo fi) {
         ctx := Context.get();
         p := ctx.getPath(path);
         if (p) {
-            fi.fh = ctx.makeFileInfo(null, p.writer()).fh;
+            fi.fh = ctx.makeFileInfo(p, null, p.writer()).fh;
             return 0;
         } else {
             return -ENOENT;

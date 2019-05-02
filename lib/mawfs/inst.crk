@@ -58,14 +58,33 @@ class FileInfo {
     ## File Handle.
     uint64 fh;
 
+    # The underlying path object.  This may be null if either 1) the path has
+    # been invalidated or 2) The underlying object is not a MAWFSPath.
+    MAWFSPath __path;
+
+    # Reader and writer objects, may be null.
     SeekableReader reader;
     SeekableWriter writer;
 
-    oper init(uint64 fh, SeekableReader reader, SeekableWriter writer) :
+    oper init(uint64 fh, MAWFSPath path, SeekableReader reader,
+              SeekableWriter writer) :
         fh = fh,
+        __path = path,
         reader = reader,
         writer = writer {
     }
+
+    ## Invalidate the object.
+    void invalidate() {
+        reader = null;
+        writer = null;
+        __path = null
+    }
+
+    ## Reset the underlying path object relative to the new filesystem root.
+    ##
+    ## This is experimental code, see reset below.
+    void reset(CachedNode root) { if (__path) __path.reset(root) }
 }
 
 ## Object that can be atteched to the filesystem, allowing the creating
@@ -159,6 +178,23 @@ class InstanceState {
         __tree = Tree(__store, __branch);
         cachedRoot := __tree.getRoot();
         __setRoot(cachedRoot);
+
+        # Invalidate all open files.
+        for (entry :in __files)
+            entry.val.invalidate();
+    }
+
+    ## Reset all open files to the current tree.
+    ##
+    ## This is experimental code, and generally not ready for prime time.
+    void resetTreeAndFiles() {
+        __tree = Tree(__store, __branch);
+        cachedRoot := __tree.getRoot();
+        __setRoot(cachedRoot);
+
+        # Reset all of the file info objects.
+        for (entry :in __files)
+            entry.val.reset(__tree.getRoot());
     }
 
     ## Install a new root node into the instance.
@@ -284,7 +320,9 @@ class InstanceState {
     }
 
     ## Store a new FileInfo object for the given reader and writer.
-    FileInfo makeFileInfo(SeekableReader reader, SeekableWriter writer) {
+    FileInfo makeFileInfo(MAWFSPath path, SeekableReader reader,
+                          SeekableWriter writer
+                          ) {
         @checkLock();
 
         # Find the first unused handle
@@ -293,7 +331,7 @@ class InstanceState {
             ++fh;
 
         # Create, store and return it.
-        fi := FileInfo(fh, reader, writer);
+        fi := FileInfo(fh, path, reader, writer);
         __files[fh] = fi;
         return fi;
     }

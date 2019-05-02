@@ -888,4 +888,27 @@ class BidirectionalRPCTest : DoubleInstanceTest {
 }
 register(BidirectionalRPCTest());
 
+## Verify that we can get a sane error when keeping a file descriptor alive
+## during a commit.
+class OpenFileDescriptorTest : TestCase {
+    void run() {
+        out := (makePath('fs')/'filename.txt').writer();
+        out.write('first line\n');
+        out.write('second line\n');
+
+        runMawfs(StringArray!['commit', 'fs']);
+
+        out.write('third line\n');  # This should give an error.
+
+        contents := (makePath('fs')/'filename.txt').readAll();
+        assertEqual(contents, 'first line\nsecond line\n');
+
+        restartFS('master');
+        out = null;
+        contents = (makePath('fs')/'filename.txt').readAll();
+        assertEqual(contents, 'first line\nsecond line\n');
+    }
+}
+register(OpenFileDescriptorTest());
+
 runAllTests();
