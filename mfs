@@ -193,7 +193,6 @@ def run_mawfs(*args, **kwargs):
     logfile = kwargs.get('logfile')
     if logfile is None:
         logfile = os.path.join(get_backing_dir_root(), 'mawfs.log')
-        print('logfile is %s' % logfile)
     cmd = [os.environ.get('MAWFS_BIN', 'mawfs')] + \
           [str(arg) for arg in args if arg is not None] + \
           ['-l', logfile] + mawfs_flags
