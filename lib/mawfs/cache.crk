@@ -128,6 +128,14 @@ int32 getPosixTime() {
     return Time.now().secs;
 }
 
+## Thrown when we're unable to load a chunk.
+class MissingChunkError : Exception {
+    ## Constructs the error given a digest and a context (which may be null).
+    oper init(String digest, String context) :
+        Exception(FStr() `Missing chunk $(sig(digest))$(context ? context : '').`) {
+    }
+}
+
 class Cache {
     NodeStore store;
 
@@ -2211,7 +2219,13 @@ class CachedNode {
         childIndex := change.path[index];
         __populateChildren(false);
         @assert(node.children && childIndex < node.children.count());
-        return __children[childIndex].getNode().__lookup(change, index + 1);
+        child := __children[childIndex].getNode();
+        if (!child)
+            throw MissingChunkError(
+                __children[childIndex].getDigest(),
+                ' instantiating node in filesystem tree'
+            );
+        return child.__lookup(change, index + 1);
     }
 
     ## Replay a single change from the journal.
@@ -2249,6 +2263,12 @@ class CachedNode {
             __ctx.storeSessionId(change.sessionId);
         return entry.digest;
 
+    }
+
+    String replayChange(ChangeEntry entry, String lastChangeDigest) {
+        result := __replayChange(entry, lastChangeDigest);
+        __ctx.setLastChange(result);
+        return result;
     }
 
     ## Replay all journal entries against the node.  If the node doesn't have
@@ -2596,6 +2616,10 @@ Reader _makeReadFile(NodeContext ctx, String digest) {
         }
 
         uint read(WriteBuffer buffer) {
+            if (!node) {
+                buffer.size = 0;
+                return 0;
+            }
             rc := node.read(pos, buffer);
             if (rc > 0)
                 pos += rc;
@@ -2624,14 +2648,6 @@ class OrphanContext : NodeContext._OrphanContextBase {
 
 Object _makeOrphanContext(NodeContext context) {
     return OrphanContext(context);
-}
-
-## Thrown when we're unable to load a chunk.
-class MissingChunkError : Exception {
-    ## Constructs the error given a digest and a context (which may be null).
-    oper init(String digest, String context) :
-        Exception(FStr() `Missing chunk $(sig(digest))$(context ? context : '').`) {
-    }
 }
 
 ## Facade for a complete cached filesystem tree representing the head of a

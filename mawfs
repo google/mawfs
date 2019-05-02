@@ -125,7 +125,7 @@ void dumpNode(Formatter out, Node node) {
     if (node.children) {
         out `children:\n`;
         for (child :in node.children) {
-            out `-  hash: $(hex(child.hash))\n`;
+            out `-  hash: $(sig(child.hash))\n`;
             if (child.name)
                 out `   name: $(child.name)\n`;
             if (child.org_checksum)
@@ -285,7 +285,9 @@ String readPassword() {
 }
 
 ## initializes the chunk store from disk.  Reads the password from the user.
-ChunkStore makeChunkStore(Path backingDir) {
+## Creates the backing store if it doesn't exist and maybeCreate is true,
+## otherwise throws and Abort.
+ChunkStore makeChunkStore(Path backingDir, bool maybeCreate) {
     password := readPassword();
     entropy := DeviceEntropySource(makePath('/dev/urandom'));
     paramsFile := backingDir/'params';
@@ -295,12 +297,14 @@ ChunkStore makeChunkStore(Path backingDir) {
         params = ParamInfo.read(backingDir/'params', password);
         if (!params)
             throw Abort('Invalid password');
-    } else {
+    } else if (maybeCreate) {
         # Write a new params file.
         if (!backingDir.exists())
             backingDir.makeDir();
         params = ParamInfo.getDefault(password);
         params.writeTo((backingDir/'params').writer(), entropy);
+    } else {
+        throw Abort(FStr() `Backing dir $backingDir does not exist.`);
     }
 
     return ChunkStore(backingDir, FSInfo(params.cipher));
@@ -383,6 +387,9 @@ class CommandManager {
     Path rootDir;
     StringArray args;
 
+    # Backing store.  This current only gets set by the dump functions.
+    ChunkStore store;
+
     oper init(StringArray args) : args = args {}
 
     void checkArgs(int count, String message) {
@@ -456,7 +463,7 @@ class CommandManager {
     ## Create the chunk store, also initializing the params file in the
     ## backing store if it doesn't exist.
     ChunkStore makeChunkStore() {
-        return makeChunkStore(rootDir);
+        return makeChunkStore(rootDir, true);
     }
 
     ## Write instructions for running the command.
@@ -620,7 +627,7 @@ class CommandManager {
         # If there's no params file, get one.
         paramInfo := net.pullParams(rootDir, password);
         if (!paramInfo) {
-            cerr `No peers found.\n`;
+            cerr `No peers found (or bad password).\n`;
             makePath(args[3]).deleteTree();
             exit(1);
         }
@@ -745,6 +752,82 @@ class CommandManager {
         }
     }
 
+    ## Does all of the common stuff for dumping different kinds of chunks.
+    ## Returns the digest to be dumped.
+    String _prepareToDump(String message) {
+        checkArgs(4, message);
+        rootDir = makePath(args[2]);
+        store = makeChunkStore(rootDir, false);
+        return altDecode(args[3]);
+    }
+
+    void dump_commit() {
+        commit := _prepareToDump(
+            'Usage: mawfs dump_commit <backing-dir> <commit-hash>'
+        );
+        commitObj := store.getCommit(commit);
+        cout I`parent: `;
+        if (commitObj.parent) {
+            for (p :in commitObj.parent)
+                cout `$(sig(p)) `;
+        } else {
+            cout `null`;
+        }
+        cout I`
+               root: $(sig(commitObj.root))
+               journalInfo: $(sig(commitObj.journalInfo))
+               journal: $(sig(commitObj.journal))
+               `;
+    }
+
+    void dump_node() {
+        digest := _prepareToDump(
+            'Usage: mawfs dump_node <backing-dir> <commit-hash>'
+        );
+        node := store.getNode(digest);
+        if (node)
+            dumpNode(cout, node);
+        else
+            cerr `node $(sig(digest)) not found\n`;
+    }
+
+    void load_branch() {
+        checkArgs(4, 'Usage: load_branch <backing-dir> <<branch>');
+        rootDir = makePath(args[2]);
+        store = makeChunkStore(rootDir, false);
+        branch := args[3];
+
+        import mawfs.cache Cache, CachedNode, NodeContext;
+
+        ctx := NodeContext(store, Cache(), branch);
+        headDigest := ctx.getHead();
+        commit := ctx.getCommit(headDigest);
+        ctx.recordCommit(headDigest);
+        rootNode := ctx.getNode(commit.root);
+        root := CachedNode(ctx, commit.root, rootNode);
+
+        cerr `journal entries:\n`;
+        for (entry :in ctx.getJournalInfo(commit.journalInfo))
+            cerr `$(sig(entry.key)) ($(entry.key.getRepr())\n`;
+
+        cerr `node time = $(root.getTime())\n`;
+        String lastChangeDigest;
+        for (entry :in ctx.makeJournalIter()) {
+            cerr `commit is $(sig(entry.change.commit))\n`;
+            if (entry.change.time >= root.getTime()) {
+                cerr `ignoring change from session $(
+                      sig(entry.change.sessionId))\n`;
+                continue;
+            } else {
+                cerr `replaying node $(entry.change)\n`;
+                cerr `commit is $(sig(entry.change.commit))\n`;
+            }
+            lastChangeDigest = root.replayChange(entry, lastChangeDigest);
+            cerr `replaying $(entry.change)\n`;
+        }
+    }
+
+
     ## The "info" command.
     void info() {
         checkArgs(2, 'Usage: mawfs info\n');
@@ -824,13 +907,13 @@ void main() {
             while (data := src.read(BLOCK_SIZE))
                 contents.extend(data);
 
-            store := makeChunkStore(cwd);
+            store := makeChunkStore(cwd, true);
             digest := store.store(contents);
             cout `$(hex(digest))\n`;
         } else if (cmd == 'loadchunk') {
             cm.checkArgs(3, "Usage: mawfs loadchunk <hash>\n");
 
-            store := makeChunkStore(cwd);
+            store := makeChunkStore(cwd, true);
             chunk := store.load(altDecode(args[2]));
             if (!chunk)
                 cerr `Chunk $(args[2]) not found\n`;
@@ -876,7 +959,7 @@ void main() {
             rootDir := makePath(args[2]);
             newInstance := !(rootDir/'params').exists();
             configStore := ConfigStore(rootDir, 'peers');
-            chunkStore := makeChunkStore(rootDir);
+            chunkStore := makeChunkStore(rootDir, true);
 
             if (newInstance) {
                 cm.rootDir = rootDir;
@@ -968,6 +1051,12 @@ void main() {
             cm.addPeer();
         } else if (cmd == 'dbg_log') {
             cm.dbg_log();
+        } else if (cmd == 'dump_commit') {
+            cm.dump_commit();
+        } else if (cmd == 'load_branch') {
+            cm.load_branch();
+        } else if (cmd == 'dump_node') {
+            cm.dump_node();
         } else if (cmd == 'info') {
             cm.info();
         } else if (cmd == 'verify') {
