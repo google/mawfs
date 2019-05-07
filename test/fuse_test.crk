@@ -633,6 +633,38 @@ class RestoreStateTest : MergeTest {
 }
 register(RestoreStateTest());
 
+## Verify we pull a commit with an empty journal correctly.
+class PullEmptyJournalTest : MergeTest {
+    void run() {
+        (makePath('fs')/'foo').writeAll('initial contents');
+        (makePath('fs2')/'bar').writeAll('other contents');
+
+        # pull.
+        runMawfs(StringArray!['pull', '-i', 'localhost:9119', 'master']);
+
+        # verify that we have a journal.
+        @assert(makePath('backing2/journals/127.0.0.1:12543:master').exists());
+
+        # Commit the master, verify that its journal is gone and load its ref.
+        runMawfs(StringArray!['commit', 'fs']);
+        @assert(!makePath('backing/journals/master').exists());
+        head := makePath('backing/refs/master').readAll();
+
+        # Make sure we don't currently have the same head as the master.
+        @assert(makePath('backing2/refs/127.0.0.1:12543:master').readAll() !=
+                head)
+
+        # Pull again.
+        runMawfs(StringArray!['pull', '-i', 'localhost:9119', 'master']);
+
+        # make sure we now have an empty journal and the latest head.
+        @assert(!makePath('backing2/journals/127.0.0.1:12543:master').exists());
+        @assert(makePath('backing2/refs/127.0.0.1:12543:master').readAll() ==
+                head)
+    }
+}
+register(PullEmptyJournalTest());
+
 ## Verify that we can still run things with a missing peer.
 class MissingPeerTest : DoubleInstanceTest {
 

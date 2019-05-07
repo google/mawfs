@@ -289,6 +289,10 @@ class PeerNetwork {
                 dst = branchPath.writer();
                 dst.write(jb.contents);
                 pos = jb.contents.size;
+            } else if (branchPath.exists()) {
+                # No journal.  Remove any existing journal file of the same
+                # name.
+                branchPath.delete();
             }
 
             while (!jb.done) {
