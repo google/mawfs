@@ -181,15 +181,13 @@ class MAWFSInstance @impl InstIFace {
 
             # If there is a local journal for the branch, check to see if the
             # new commit includes all changes.
-            # XXX This won't work if there are a few commits in between, need
-            # to get the commit immediately following this one.
             localJiter := store.makeJournalIter(name);
             if (localJiter) {
                 # Note that if we get here, there's a local journal so we're
                 # assuming newName is the name of a tracking branch.
                 commit := __getFollowingCommit(localHead, head);
                 bool incompatible;
-                if (commit.journalInfo) {
+                if (commit && commit.journalInfo) {
                     nodeCtx := NodeContext(store, Cache(), name);
                     sessionIds := nodeCtx.getJournalInfo(commit.journalInfo);
 
@@ -207,7 +205,8 @@ class MAWFSInstance @impl InstIFace {
                         }
                     }
                 } else {
-                    # No journal info, assume incompatible.
+                    # Either the new head is not derived from the local head
+                    # or there's no journal info.  Assume incompatible.
                     incompatible = true;
                 }
 
