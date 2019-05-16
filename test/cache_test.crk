@@ -804,6 +804,29 @@ if (true) {
             );
 }
 
+cerr `Commits during write.\n`;
+if (true) {
+    nodeStore = MemNodeStore();
+    ctx = NodeContext(nodeStore, 'master', null);
+
+    ctx.getCache().maxJournalSize = 100;
+
+    # Write a large file to the source tree.
+    src := CachedNode(ctx, null, makeDirNode());
+    fileNode := CachedNode(ctx, null, Node());
+    src.addChild('file', fileNode, 0);
+    fileData := String(makeRandomData());
+    fileNode.addExtRef();
+    fileNode.write(0, fileData.substr(0, 1024), 0);
+    fileNode.write(1024, fileData.substr(1024, 2048), 0);
+    fileNode.write(2048, fileData.substr(2048), 0);
+    fileNode.releaseExtRef();
+
+    # Verify that it's all still there.
+    root := Tree(nodeStore, 'master').getRoot();
+    @assert(root.getChild('file').getContents() == fileData);
+}
+
 cerr `Commits during a child copy.\n`;
 if (true) {
     nodeStore = MemNodeStore();

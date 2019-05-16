@@ -559,7 +559,7 @@ class CachedNode {
     }
 
     @final uint64 getSize();
-    @final void __release();
+    @final bool __release(bool delete);
 
     ## Manages caching for an Entry record and the associated child node.
     ##
@@ -641,12 +641,21 @@ class CachedNode {
         }
 
         ## Release the node (if any) allowing it to be GCed.
-        @final void releaseNode() {
-            if (node) {
-                node.__release();
+        ## Returns true if the node was actually released (or wasn't there in
+        ## the first place).
+        @final bool releaseNode(bool delete) {
+            if (!node)
+                return true;
+
+            if (node.__release(delete)) {
                 node = null;
+                return true;
             }
+
+            return false;
         }
+
+        @final bool releaseNode() { return releaseNode(true) }
 
         void formatTo(Formatter out) {
             indent := Indenter.wrap(out);
@@ -855,14 +864,32 @@ class CachedNode {
     }
 
     ## Release the cached node from its parent and from all children.
-    @final void __release() {
+    ## Returns true if the node was actually released.
+    @final bool __release(bool delete) {
         # If there are external references, add the node to an orphan context.
-        if (__extRefCount) {
+        if (delete && __extRefCount) {
             __orphaned = true;
             __ctx = ctx := __ctx.getOrphanContext();
             ctx.addOrphan(this);
-            return;
+            return false;
         }
+
+        if (__children) {
+            # Releasing the children breaks all cyclic links to the parent.
+            allDeleted := true;
+            for (child :in __children) {
+                if (!child.releaseNode(delete))
+                    allDeleted = false;
+            }
+            if (allDeleted)
+                __children = null;
+        }
+
+        # If there are external references, quit here (we don't want to remove
+        # ourselves from the tree because we could end up needing to mark our
+        # ancestors as dirty if the node is modified).
+        if (__extRefCount)
+            return false;
 
         # Find the entry that holds the node in the parent (if any).
         if (parent && parent.__children) {
@@ -874,12 +901,7 @@ class CachedNode {
             }
         }
 
-        if (__children) {
-            # Releasing the children breaks all cyclic links to the parent.
-            for (child :in __children)
-                child.releaseNode();
-            __children = null;
-        }
+        return true;
     }
 
     ## Add an external reference to the node.  External systems that may
@@ -895,7 +917,7 @@ class CachedNode {
     ## Release an external reference claimed with addExtRef().
     @final void releaseExtRef() {
         if (__orphaned && !--__extRefCount)
-            __release();
+            __release(false);
     }
 
     ## Returns the "resident size" of the node.  This is an approximation of
@@ -1575,7 +1597,7 @@ class CachedNode {
                 nextChild.mergeChild(0);
 
             # Release the node now that we're done with it.
-            node.__release();
+            node.__release(true);
 
             # Split the new entry.
             newChild := nextChild.__maybeSplit();
@@ -1611,7 +1633,7 @@ class CachedNode {
                 prevChild.mergeChild(prevChild.__getChildren().count() - 1);
 
             # Release the node now that we're done with it.
-            node.__release();
+            node.__release(true);
 
             # Split the new entry.
             newChild := prevChild.__maybeSplit();
@@ -1640,7 +1662,7 @@ class CachedNode {
                     # The child is a content node.  Remove it.
                     childSize = int64(child.getSize());
                     __children.delete(index);
-                    child.node.__release();
+                    child.node.__release(true);
                 } else {
                     # The child is an intermediate node, have it remove the
                     # appropriate content node.
@@ -1682,7 +1704,7 @@ class CachedNode {
             cachedNode := __children[0].getNode();
             node = cachedNode.node;
             __stealChildren(cachedNode);
-            cachedNode.__release();
+            cachedNode.__release(true);
             if (parent) {
                 entry := parent.__getChildEntry(this);
                 entry.setCachedNode(this);
@@ -1787,7 +1809,7 @@ class CachedNode {
                 __stealChildren(firstChild);
             }
 
-            firstChild.__release();
+            firstChild.__release(true);
         }
 
         if (time)
@@ -2385,7 +2407,7 @@ class CachedNode {
 
     void __pruneCleanNodes() {
         if (!isDirty())
-            __release();
+            __release(false);
     }
 
     void garbageCollect() {
