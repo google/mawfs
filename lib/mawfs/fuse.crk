@@ -349,17 +349,17 @@ int _chown(byteptr path, int uid, int gid) {
 }
 
 int _utimens(byteptr path, DoubleTimeSpec times) {
-    info `in utimens($path, times)`;
+    info `in utimens($path, $times)`;
     try {
         ctx := Context.get();
         p := ctx.getPath(path);
         if (!p || !p.exists())
             return -ENOENT;
-        timesArr := array[TimeVal](times);
-        if (timesArr[1].secs == p.getModTime())
+        secs := times.getMTimeSecs();
+        if (secs == p.getModTime())
             return 0;
         if (mp := MAWFSPath.cast(p, null)) {
-            mp.setModTime(timesArr[1].secs);
+            mp.setModTime(int32(secs));
         } else {
             warn `$path is not a MAWFSPath`;
         }
