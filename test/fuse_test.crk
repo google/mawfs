@@ -943,4 +943,29 @@ class OpenFileDescriptorTest : TestCase {
 }
 register(OpenFileDescriptorTest());
 
+class PushTest : DoubleInstanceTest {
+    void run() {
+        # Start up the primary with a server on 12543.
+        (makePath('backing')/'config/peers').writeAll(
+            '[server]\nport = 12543\nssl = true\n');
+
+        (makePath('fs')/'foo').writeAll('test file contents');
+        restartFS('master');
+        runMawfs(StringArray!['clone', 'localhost:12543:ssl', 'backing2']);
+
+        # Start the second instance.
+        startFS('master', 'backing2', 'fs2');
+
+        # Add a file to the secondary.
+        makePath('fs2/foo').writer().write('got foo?');
+
+        # Make the secondary push to the primary.
+        runMawfs(StringArray!['push', '-i', 'localhost:9119:ssl',
+                              'master', '127.0.0.1:12543'],
+                 );
+        assertEqual(makePath('fs/foo').readAll(), 'got foo?');
+    }
+}
+register(PushTest());
+
 runAllTests();

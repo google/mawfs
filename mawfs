@@ -145,10 +145,13 @@ void usage() {
                 Clone the remote peer into the give backing directory.
                 The remote peer is in the form address:port.  The backing
                 directory must not already exist.
-            mawfs pull <addr> <branch> [peer]
-                Pull the branch.  'addr' is the mawfs instance address. You
-                may optionally specify a peer to pull the branch from a
-                specific peer, otherwise the instance will just select one.
+            mawfs pull <branch> [peer]
+                Pull the branch. You may optionally specify a peer to pull
+                the branch from a specific peer, otherwise the instance will
+                just select one.
+            mawfs push <branch> <peer>
+                Push the branch to the specified peer.  Prints the remote
+                branch name.
             mawfs merge <branch>
                 Merge with another branch.  This produces a new commit if
                 there are no conflicts, or a merge branch and a conflict
@@ -683,6 +686,17 @@ class CommandManager {
             rpc.getProxy().traverse(branch, traverseType);
     }
 
+    ## The "push" command.
+    void push() {
+        checkArgsAtLeast(2, 'Usage: mawfs push <branch> <peer>\n');
+        branch := args[2];
+        peer := args[3];
+
+        rpc := getRPC();
+        remoteBranch := rpc.getProxy().pushBranch(branch, peer);
+        cout `remote branch: $remoteBranch\n`;
+    }
+
     ## The "merge" command.
     void merge() {
         checkArgs(3, "Usage: mawfs merge <branch>\n");
@@ -1041,6 +1055,8 @@ void main() {
             dumpNode(cout, node);
         } else if (cmd == 'pull') {
             cm.pull();
+        } else if (cmd == 'push') {
+            cm.push();
         } else if (cmd == 'merge') {
             cm.merge();
         } else if (cmd == 'resolve') {

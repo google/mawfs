@@ -10,18 +10,19 @@ import crack.lang cmp, makeHashVal, AppendBuffer, Exception,
 import crack.logger.ctx Log;
 import crack.net resolve, Address, InetAddress;
 import crack.net.comm2 Comm, Connection, ConnectionFactory, NewConnection,
-    UserHandler, WaiterFor;
+    UserHandler, Waiter;
 import crack.protobuf readMessageFromString, Field, Message, ProtoWriter;
 import crack.rawptr RawPtr;
 import crack.regex Regex;
 import crack.serial SerialReader, SerialWriter;
+import crack.threads MutexLock;
 import crack.net.ssl SSLConnection, SSLContext;
 
 import .ciphers Cipher, sha256;
 import .entropy getEntropySource;
 import .rawchunk GeneralCallback, JournalBlock, RawChunkReader;
 
-@import crack.ann cvars, impl, interface, struct;
+@import crack.ann cvars, impl, implements, interface, struct;
 @import crack.protobuf.ann  protobuf;
 
 const DEFAULT_PORT := 9119
@@ -104,11 +105,18 @@ class PeerDisconnectedError : Exception {}
         optional bool done = 3;
     }
 
+    ## Note that this is also used for pushBranch (which sends the same data).
     message PullBranchRequest {
         optional string branch = 1;
         optional string peer = 2;
+
+        ## If present and true, 'peer' is ignored and the pull is done from
+        ## the client that initiated the pull.  This message may only be sent
+        ## from a peer.
+        optional bool fromClient = 3;
     }
 
+    ## Also used for pushBranch.
     message PullBranchResponse {
         optional string localName = 1;
     }
@@ -230,6 +238,9 @@ class LoginError : Exception {
     @abstract void pullBranch(String branch, String peer,
                               GeneralCallback[String] callback
                               );
+    @abstract void pushBranch(String branch, String peer,
+                              GeneralCallback[String] callback
+                              );
 
     @abstract void merge(String
                          branch, GeneralCallback[MergeResponse] callback
@@ -262,7 +273,60 @@ class LoginError : Exception {
 InstIFace _inst;
 void setInst(InstIFace inst) { _inst = inst }
 
-alias RPCWaiter = WaiterFor[RPCMessage, int];
+@interface ResultHandler {
+    alias Info = int;
+    @abstract void setResponse(RPCMessage result);
+    @abstract Info getInfo();
+}
+
+class RPCWaiter : Waiter @implements ResultHandler {
+
+    # This class was stolen from WaiterFor[], which should be replaced with
+    # something like this and GeneralCallback.  Aliasing the generic's
+    # parameter types to emphasize this point.
+    alias Result = RPCMessage;
+    alias Info = int;
+
+    Result __result;
+    Exception __exception;
+    Info info;
+
+    oper init(Info info) : info = info {}
+
+
+    void setResponse(Result result) {
+        MutexLock lock = {_event.getMutex()};
+        __result = result;
+        _signal();
+    }
+
+    Result getResult() {
+        MutexLock lock = {_event.getMutex()};
+        _event.wait();
+        if (__exception)
+            throw __exception;
+        return __result;
+    }
+
+    Info getInfo() {
+        return info;
+    }
+}
+
+## ResultHandler that calls a callback.  Derived classes must implement
+## setResponse().
+##
+## Unfortunately we have to make this derived from Waiter because comm2
+## doesn't have a way to pass anything other than a Waiter through to the
+## handler.  Otherwise we could just make RPCCallbackAdapter implement
+## ResultHandler.
+@abstract class RPCCallback : Waiter @implements ResultHandler {
+    int info;
+
+    int getInfo() {
+        return info;
+    }
+}
 
 class _FakeReader @impl Reader {
     uint read(WriteBuffer buf) {
@@ -290,6 +354,11 @@ class Context {
     Log log;
     RawChunkReader reader;
     LoginState loginState;
+
+    ## The name of the peer that made the RPC request.  This is null if either
+    ## 1) the connection did not come from a peer or 2) the peerConnected
+    ## rpc has not yet been processed.
+    String peerName;
 
     ## Gets set to true when the client has completed authentication.
     bool authenticated;
@@ -361,7 +430,7 @@ class RPCHandler @impl UserHandler {
 
     Address __clientAddr;
     MethodMap __methods;
-    HashMap[int, RPCWaiter] __waiters = {};
+    HashMap[int, ResultHandler] __waiters = {};
     RawPtr[_PeerProxyBase] __owner;
 
     ## methods is nullable
@@ -456,7 +525,7 @@ class RPCHandler @impl UserHandler {
                 # Treat it as a response.
                 waiter := __waiters.get(msg.id);
                 if (waiter)
-                    waiter.setResult(msg);
+                    waiter.setResponse(msg);
                 else
                     comm.log.error
                         `No response found for message id $(msg.id)\n`;
@@ -473,13 +542,13 @@ class RPCHandler @impl UserHandler {
             RPCMessage response = {};
             response.id = int32(waiter.key);
             response.error = 'Connection closed prematurely.';
-            waiter.val.setResult(response);
+            waiter.val.setResponse(response);
         }
     }
 
     void addResponder(Object waiter) {
-        w := RPCWaiter.cast(waiter);
-        __waiters[w.info] = w;
+        w := ResultHandler.cast(waiter);
+        __waiters[w.getInfo()] = w;
     }
 
     void disown() { __owner = null }
@@ -615,7 +684,7 @@ class PeerProxy : _PeerProxyBase {
             handler.setOwner(RawPtr[_PeerProxyBase](result));
             return result;
         } catch (Exception ex) {
-            log.warn `Unable to connect to $addr: $(ex.text)\n`;
+            log.warn `Unable to connect to $addr: $(ex.text)`;
             return null;
         }
     }
@@ -683,6 +752,24 @@ class PeerProxy : _PeerProxyBase {
         return resp.response;
     }
 
+    void __sendAsync(RPCMessage message, RPCCallback callback) {
+        if (!__proxy)
+            throw PeerDisconnectedError();
+        # Serialize and send the message.
+        serialized := __serialize(message);
+        __proxy.sendSync(serialized, callback);
+    }
+
+    void __invokeAsync(String method, String contents,
+                       RPCCallback callback
+                       ) {
+        RPCMessage msg = {};
+        callback.info = msg.id = ++__lastId;
+        msg.method = method;
+        msg.request = contents;
+        __sendAsync(msg, callback);
+    }
+
     ## Shutdown the proxy connection.
     void shutdown() {
         if (__proxy)
@@ -748,6 +835,41 @@ class PeerProxy : _PeerProxyBase {
         respData := __invoke('pullBranch', req.toString());
         readMessageFromString(resp, respData);
         return resp.localName;
+    }
+
+    ## Notifies another peer to pull the branch from this peer.
+    void pullBranchFromMe(String branch, GeneralCallback[String] callback) {
+        PullBranchRequest req = {};
+        req.branch = branch;
+        req.fromClient = true;
+
+        class Callback : RPCCallback {
+            @cvars {
+                GeneralCallback[String] callback;
+            }
+
+            void setResponse(RPCMessage result) {
+                PullBranchResponse resp = {};
+                readMessageFromString(resp, result.response);
+                callback(resp.localName, null);
+            }
+        }
+
+        __invokeAsync('pullBranch', req.toString(), Callback(callback));
+        # XXX need to force a traversal, too.
+    }
+
+    ## Push the specified branch to the peer.
+    ##
+    ## Returns the local name that the peer chose for the branch.
+    String pushBranch(String branch, String peer) {
+        PullBranchRequest req = {};
+        PullBranchResponse resp = {};
+        req.branch = branch;
+        req.peer = peer;
+        respData := __invoke('pushBranch', req.toString());
+        readMessageFromString(resp, respData);
+        return resp.localName
     }
 
     ## Initiates a merge of the active branch with the specified merge branch.
@@ -971,7 +1093,44 @@ void pullBranch(Context context, RPCMessage msg, Connection comm) {
         }
     }
 
-    _inst.pullBranch(req.branch, req.peer,
+    String peerName = req.peer;
+    if (req.fromClient) {
+        if (!context.peerName) {
+            context.writeError(comm,
+                               'pullBranch with fromClient may only be '
+                               'called from another peer',
+                               msg.id
+                               );
+            return;
+        }
+
+        peerName = context.peerName;
+    }
+
+    _inst.pullBranch(req.branch, peerName,
+                     ResponseCallback(context, comm, msg.id));
+}
+
+void pushBranch(Context context, RPCMessage msg, Connection comm) {
+    PullBranchRequest req = {};
+    readMessageFromString(req, msg.request);
+
+    class ResponseCallback @impl GeneralCallback[String] {
+        @cvars {Context context; Connection comm; int32 requestId;}
+        void oper call(String localName, Exception ex) {
+            if (ex) {
+                context.writeError(comm,
+                                   ex.text ? ex.text : String(ex.class.name),
+                                   requestId);
+            } else {
+                PullBranchResponse resp = {};
+                resp.localName = localName;
+                context.writeResponse(comm, resp, requestId);
+            }
+        }
+    }
+
+    _inst.pushBranch(req.branch, req.peer,
                      ResponseCallback(context, comm, msg.id));
 }
 
@@ -1099,6 +1258,7 @@ void peerConnected(Context context, RPCMessage msg, Connection conn) {
     proxy := PeerProxy(context, conn, handler);
     handler.setOwner(RawPtr[_PeerProxyBase](proxy));
 
+    context.peerName = req.peerName;
     _inst.peerConnected(req.peerName, proxy);
     context.writeResponse(conn, null, msg.id);
 }
@@ -1116,6 +1276,7 @@ METHODS['addPeer'] = MethodHandler(addPeer);
 METHODS['getInfo'] = MethodHandler(getInfo);
 METHODS['traverse'] = MethodHandler(traverse);
 METHODS['peerConnected'] = MethodHandler(peerConnected);
+METHODS['pushBranch'] = MethodHandler(pushBranch);
 METHODS['getMountpoint'] = MethodHandler(getMountpoint, true);
 METHODS['login'] = MethodHandler(login, true);
 

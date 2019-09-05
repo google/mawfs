@@ -482,6 +482,52 @@ class MAWFSInstance @impl InstIFace {
         __pool.submit(MyTask(this, name, peer, callback));
     }
 
+    void __pushBranch(String branch, String peerName,
+                    GeneralCallback[String] callback
+                    ) {
+        for (peer :in __net.getPeers()) {
+            if (peer.getName() == peerName) {
+                proxy := peer.getProxy();
+                if (!proxy) {
+                    callback(
+                        null,
+                        Exception(
+                            FStr() `peer $peerName not available`
+                        )
+                    );
+                    return;
+                }
+                proxy.pullBranchFromMe(branch, callback);
+                return;
+            }
+        }
+
+        # If we get here, we didn't find the peer.
+        callback( null, Exception(FStr() `peer $peerName is unkonwn`));
+    }
+
+    void pushBranch(String branch, String peerName,
+                    GeneralCallback[String] callback
+                    ) {
+        # Even though this method is inherenntly async, we need to run it in a
+        # thread because it can potentially do connect, which is synchronous
+        # and requires a callback on the poller thread which we're currently
+        # blocking :-P.
+        class MyTask @impl Task {
+            @cvars {
+                MAWFSInstance inst;
+                String branch;
+                String peerName;
+                GeneralCallback[String] callback;
+            }
+
+            void oper call() {
+                inst.__pushBranch(branch, peerName, callback);
+            }
+        }
+        __pool.submit(MyTask(this, branch, peerName, callback));
+    }
+
     void merge(String branch, GeneralCallback[MergeResponse] callback) {
         @task(MAWFSInstance inst; String branch;, MergeResponse,
               inst.merge(branch));

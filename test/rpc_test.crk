@@ -68,6 +68,12 @@ class FakeInstance @impl InstIFace {
                     ) {
     }
 
+    void pushBranch(String branch, String peer,
+                    GeneralCallback[String] callback
+                    ) {
+        callback(branch, null);
+    }
+
     void merge(String branch, GeneralCallback[MergeResponse] callback) {}
 
     void resolve(GeneralCallback[int] callback) {}
@@ -305,6 +311,20 @@ class RPCTestBed {
         @assert(inst.peerProxy.getFile('foo') == 'contents');
     }
 
+    void testPushBranch() {
+        methods := MethodMap();
+        methods['getObject'] = MethodHandler(clientSideGetObject);
+        methods['getFile'] = MethodHandler(clientSideGetFile);
+        peer := PeerProxy.make(comm, Log(log, 'client'),
+                               FStr() `127.0.0.1:$port`,
+                               __getSSLContext(),
+                               methods,
+                               FakeChunkReader()
+                               );
+        peer.login(cipher);
+        @assert(peer.pushBranch('master', 'peer') == 'master');
+    }
+
     void tearDown() {
         comm.stop();
     }
@@ -343,6 +363,7 @@ try {
     testbed.testUserLogin();
     testbed.testFailedUserLogin();
     testbed.testPeerConnected();
+    testbed.testPushBranch();
 } catch (Exception ex) {
     testbed.tearDown();
     throw ex;
