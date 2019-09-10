@@ -271,54 +271,73 @@ class PeerNetwork {
     ##
     ## root: Root of the backing directory to replicate into.
     ## branch: branch of the journal.
+    ## peer: proxy of the desired peer
     ## qualified: If true, store as a local tracking branch.
-    String pullJournal(Path root, String branch, bool qualified) {
+    String __pullJournal(Path root, String branch, Peer peer,
+                         PeerProxy proxy,
+                         bool qualified
+                         ) {
         Writer dst;
         uint pos;
-        @iterPeers({
-            __log.info `Pulling journal from $peer`;
+        __log.info `Pulling journal from $peer`;
 
-            # Get the first block.
-            jb := proxy.getJournalBlock(null, branch, 0);
+        # Get the first block.
+        jb := proxy.getJournalBlock(null, branch, 0);
 
-            localName :=
-                qualified ? peer.getName() + ':' + branch : branch;
-            branchPath := root/'journals'/localName;
+        localName :=
+            qualified ? peer.getName() + ':' + branch : branch;
+        branchPath := root/'journals'/localName;
+        if (jb.contents) {
+            branchPath.parent().makeDirs();
+            dst = branchPath.writer();
+            dst.write(jb.contents);
+            pos = jb.contents.size;
+        } else if (branchPath.exists()) {
+            # No journal.  Remove any existing journal file of the same
+            # name.
+            branchPath.delete();
+        }
+
+        while (!jb.done) {
+            jb := proxy.getJournalBlock(jb.firstBlockDigest, branch,
+                                        pos
+                                        );
             if (jb.contents) {
-                branchPath.parent().makeDirs();
-                dst = branchPath.writer();
+                pos += jb.contents.size;
                 dst.write(jb.contents);
-                pos = jb.contents.size;
-            } else if (branchPath.exists()) {
-                # No journal.  Remove any existing journal file of the same
-                # name.
+            } else if (!jb.firstBlockDigest && !jb.done) {
+                # The journal has changed.
+                # TODO: This is where we really need to get the new
+                # head and start over again.
+                __log.info `Remote journal has changed.`;
                 branchPath.delete();
+                break;
             }
 
-            while (!jb.done) {
-                jb := proxy.getJournalBlock(jb.firstBlockDigest, branch,
-                                            pos
-                                            );
-                if (jb.contents) {
-                    pos += jb.contents.size;
-                    dst.write(jb.contents);
-                } else if (!jb.firstBlockDigest && !jb.done) {
-                    # The journal has changed.
-                    # TODO: This is where we really need to get the new
-                    # head and start over again.
-                    __log.info `Remote journal has changed.`;
-                    branchPath.delete();
-                    break;
-                }
+            if (jb.done)
+                break;
+        }
 
-                if (jb.done)
-                    break;
-            }
+        __log.info `Journal of size $pos retrieved.`;
+        return localName;
+    }
 
-            __log.info `Journal of size $pos retrieved.`;
-            return localName;
+    ## Pull the journal from the specified peer.
+    String pullJournal(Path root, String branch, Peer peer, bool qualified) {
+        proxy := peer.getProxy();
+        if (!proxy)
+            throw Exception(
+                FStr() `Unable to connect to peer $(peer.getName())`
+            );
+        return __pullJournal(root, branch, peer, proxy, qualified);
+    }
+
+    ## Pull the entire journal file from any peer that has it.  Returns null
+    ## if no peer was able to supply the branch.
+    String pullJournal(Path root, String branch, bool qualified) {
+        @iterPeers({
+            return __pullJournal(root, branch, peer, proxy, qualified);
         });
-
         return null;
     }
 
@@ -406,6 +425,15 @@ class PeerNetwork {
     ## Return the list of peers.
     Array[Peer] getPeers() {
         return __peers;
+    }
+
+    ## Returns the peer, null if it doesn't exist.
+    Peer getPeer(String name) {
+        for (peer :in __peers) {
+            if (peer.getName() == name)
+                return peer;
+        }
+        return null;
     }
 }
 

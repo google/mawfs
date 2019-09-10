@@ -16,7 +16,7 @@ import .entropy getEntropySource;
 import .inst InstanceState;
 import .merge Merger, MergeState;
 import .nonces NONCE_SIZE;
-import .peernet PeerNetwork;
+import .peernet Peer, PeerNetwork;
 import .rawchunk GeneralCallback;
 import .rpc parseAddr, InfoResponse, InstIFace, LoginError, LoginState,
     MergeResult, MergeResponse, PeerProxy, PSKInfo, TRAVERSE_DELTA,
@@ -153,27 +153,46 @@ class MAWFSInstance @impl InstIFace {
         backing := __state.getBacking();
         store := __state.getStore();
         localHead := store.getHead(name);
-        String newName;
-        if (!localHead) {
-            # The branch isn't present locally, so we can pull it.
-            __net.pullJournal(backing, name, false);
-            newName = name;
-        } else {
-            # Pull the journal to a temporary name. (This returns a temporary
-            # name even if there's no remote journal).
-            newName = __net.pullJournal(backing, name, true);
+
+        Peer peerObj;
+        if (peer) {
+            peerObj = __net.getPeer(peer);
+            if (!peerObj)
+                throw Exception(FStr() `Peer $peer does not exist.`);
         }
 
-        if (!newName)
-            throw Exception('No peer was able to supply the branch.');
+        # Pull the journal, either from the specified peer or from the peer
+        # network.  Use 'localHead' as the flag to determine if the branch
+        # name needs to be fully qualified (by the name of the peer), which is
+        # the case if there is a local journal for the branch.
+        String newName;
+        if (peerObj) {
+            newName = __net.pullJournal(backing, name, peerObj, localHead);
+        } else {
+            newName = __net.pullJournal(backing, name, localHead);
+            if (!newName)
+                throw Exception('No peer was able to supply the branch.');
+        }
 
         jiter := store.makeJournalIter(newName);
         if (!jiter) {
+            # 'supplier' is the name of the peer that actually supplied the
+            # branch, it will be either 'peer' or the first peer in the
+            # network that provided the branch.  'head' is simply the branch
+            # head.
+            String supplier, head;
+
             # No journal.  Try pulling the commit.
-            headAndPeer := __net.getHead(name);
-            if (!headAndPeer)
-                throw Exception('Unable to retrieve branch');
-            head := headAndPeer.head;
+            if (peerObj) {
+                supplier = peer;
+                head = peerObj.getProxy().getHead(name);
+            } else {
+                headAndPeer := __net.getHead(name);
+                if (!headAndPeer)
+                    throw Exception('Unable to retrieve branch');
+                supplier = headAndPeer.peer;
+                head = headAndPeer.head;
+            }
 
             # If our commit is derived from the remote commit, we're done.
             if (localHead && __derivesFrom(localHead, head))
@@ -220,7 +239,7 @@ class MAWFSInstance @impl InstIFace {
                 # Otherwise make sure we've changed the name (even if there's
                 # no local journal).
                 } else if (name == newName) {
-                    newName = headAndPeer.peer + ':' + name;
+                    newName = supplier + ':' + name;
                 }
             } else if (localHead && __derivesFrom(head, localHead)) {
                 # There's no journals and the new head derives from the local
@@ -485,25 +504,22 @@ class MAWFSInstance @impl InstIFace {
     void __pushBranch(String branch, String peerName,
                     GeneralCallback[String] callback
                     ) {
-        for (peer :in __net.getPeers()) {
-            if (peer.getName() == peerName) {
-                proxy := peer.getProxy();
-                if (!proxy) {
-                    callback(
-                        null,
-                        Exception(
-                            FStr() `peer $peerName not available`
-                        )
-                    );
-                    return;
-                }
-                proxy.pullBranchFromMe(branch, callback);
-                return;
-            }
+        peer := __net.getPeer(peerName);
+        if (!peer) {
+            callback(null, Exception(FStr() `peer $peerName is unkonwn`));
+            return;
         }
 
-        # If we get here, we didn't find the peer.
-        callback( null, Exception(FStr() `peer $peerName is unkonwn`));
+        proxy := peer.getProxy();
+        if (!proxy) {
+            callback(
+                null,
+                Exception(FStr() `peer $peerName not available`)
+            );
+            return;
+        }
+
+        proxy.pullBranchFromMe(branch, callback);
     }
 
     void pushBranch(String branch, String peerName,
