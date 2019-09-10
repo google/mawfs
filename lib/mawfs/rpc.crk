@@ -837,7 +837,8 @@ class PeerProxy : _PeerProxyBase {
         return resp.localName;
     }
 
-    ## Notifies another peer to pull the branch from this peer.
+    ## Notifies another peer to pull the branch from this peer.  Does not
+    ## block, invokes 'callback' when done.
     void pullBranchFromMe(String branch, GeneralCallback[String] callback) {
         PullBranchRequest req = {};
         req.branch = branch;
