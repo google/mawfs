@@ -18,12 +18,26 @@ latest commit.  Journals are transient entities, when a commit is generated
 (either as a result of explicit user action or due to the journal exceeding
 some size threshold) the latest journal is discarded.
 
-Blocks
+Chunks
 ======
 
-Most of the data in MAWFS is stored in "blocks".  A block is a an encrypted
-sequence of data which can be of any size.  A block is indexed by the
-multihash of its ciphertext, referred to as the "digest" of the block.
+Most of the data in MAWFS is stored in "chunks" (or "blocks" as they are
+sometimes called).  A chunk is a an encrypted sequence of data which can be
+of any size.  A chunk is indexed by the sha256 hash of its ciphertext,
+referred to as the "digest" of the chunk.  In this way, chunks can be stored
+and indexed without revealing their contents.
+
+It is important to note that in order for the digest to function as a key for
+the chunk, the chunk must be encrypted deterministically: that is, for a
+given chunk and encryption key, the encryption function must always produce
+the same ciphertext.
+
+Encryption
+==========
+
+The encryption algorithm is configurable, in the current implementation uses
+AES-SIV mode (RFC5297).  As noted in [Chunks], the encryption algorithm must
+be deterministic for chunk indexing to work.
 
 Known Issues
 ============
