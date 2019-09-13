@@ -19,8 +19,8 @@ import .nonces NONCE_SIZE;
 import .peernet Peer, PeerNetwork;
 import .rawchunk GeneralCallback;
 import .rpc parseAddr, InfoResponse, InstIFace, LoginError, LoginState,
-    MergeResult, MergeResponse, PeerProxy, PSKInfo, TRAVERSE_DELTA,
-    TRAVERSE_FULL;
+    MergeResult, MergeResponse, PeerProxy, PSKInfo, TRAVERSE_NONE,
+    TRAVERSE_DELTA, TRAVERSE_FULL;
 import .util findCommonAncestor, traverseCommit;
 
 @import crack.ann assert, cvars, define, impl;
@@ -502,8 +502,9 @@ class MAWFSInstance @impl InstIFace {
     }
 
     void __pushBranch(String branch, String peerName,
-                    GeneralCallback[String] callback
-                    ) {
+                      int traverse,
+                      GeneralCallback[String] callback
+                      ) {
         peer := __net.getPeer(peerName);
         if (!peer) {
             callback(null, Exception(FStr() `peer $peerName is unkonwn`));
@@ -519,10 +520,34 @@ class MAWFSInstance @impl InstIFace {
             return;
         }
 
-        proxy.pullBranchFromMe(branch, callback);
+        ## Callback to be used for the pullBranch() invocation.
+        class PullBranchCallback @impl GeneralCallback[String] {
+            @cvars {
+                PeerProxy proxy;
+                int traverse;
+                GeneralCallback[String] clientCallback;
+            }
+
+            void oper call(String actualBranch, Exception error) {
+                if (error) {
+                    clientCallback(null, error);
+                    return;
+                }
+                if (traverse == TRAVERSE_NONE)
+                    clientCallback(actualBranch, null);
+                else
+                    proxy.traverseAsync(actualBranch, traverse,
+                                        clientCallback
+                                        );
+            }
+        }
+
+        proxy.pullBranchFromMe(branch,
+                               PullBranchCallback(proxy, traverse, callback)
+                               );
     }
 
-    void pushBranch(String branch, String peerName,
+    void pushBranch(String branch, String peerName, int traverse,
                     GeneralCallback[String] callback
                     ) {
         # Even though this method is inherenntly async, we need to run it in a
@@ -534,14 +559,15 @@ class MAWFSInstance @impl InstIFace {
                 MAWFSInstance inst;
                 String branch;
                 String peerName;
+                int traverse;
                 GeneralCallback[String] callback;
             }
 
             void oper call() {
-                inst.__pushBranch(branch, peerName, callback);
+                inst.__pushBranch(branch, peerName, traverse, callback);
             }
         }
-        __pool.submit(MyTask(this, branch, peerName, callback));
+        __pool.submit(MyTask(this, branch, peerName, traverse, callback));
     }
 
     void merge(String branch, GeneralCallback[MergeResponse] callback) {

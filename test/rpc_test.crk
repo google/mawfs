@@ -68,10 +68,10 @@ class FakeInstance @impl InstIFace {
                     ) {
     }
 
-    void pushBranch(String branch, String peer,
+    void pushBranch(String branch, String peer, int traverse,
                     GeneralCallback[String] callback
                     ) {
-        callback(branch, null);
+        callback(FStr() `$branch$traverse`, null);
     }
 
     void merge(String branch, GeneralCallback[MergeResponse] callback) {}
@@ -322,7 +322,7 @@ class RPCTestBed {
                                FakeChunkReader()
                                );
         peer.login(cipher);
-        @assert(peer.pushBranch('master', 'peer') == 'master');
+        @assert(peer.pushBranch('master', 'peer', 1) == 'master1');
     }
 
     void tearDown() {

@@ -114,6 +114,12 @@ class PeerDisconnectedError : Exception {}
         ## the client that initiated the pull.  This message may only be sent
         ## from a peer.
         optional bool fromClient = 3;
+
+        ## Only used for pushBranch.  If specified, this should be one of the
+        ## TRAVERSE_* constants below plus one (and really only TRAVERSE_FULL
+        ## and TRAVERSE_DELTA, hence the +1 so that we can make TRAVERSE_NONE
+        ## the default).
+        optional int32 traverse = 4;
     }
 
     ## Also used for pushBranch.
@@ -238,7 +244,7 @@ class LoginError : Exception {
     @abstract void pullBranch(String branch, String peer,
                               GeneralCallback[String] callback
                               );
-    @abstract void pushBranch(String branch, String peer,
+    @abstract void pushBranch(String branch, String peer, int traverse,
                               GeneralCallback[String] callback
                               );
 
@@ -857,17 +863,21 @@ class PeerProxy : _PeerProxyBase {
         }
 
         __invokeAsync('pullBranch', req.toString(), Callback(callback));
-        # XXX need to force a traversal, too.
     }
 
     ## Push the specified branch to the peer.
     ##
     ## Returns the local name that the peer chose for the branch.
-    String pushBranch(String branch, String peer) {
+    ##
+    ## traverse: one of the TRAVERSE_* constants below.
+    String pushBranch(String branch, String peer, int traverse) {
         PullBranchRequest req = {};
         PullBranchResponse resp = {};
         req.branch = branch;
         req.peer = peer;
+        if (traverse != TRAVERSE_NONE)
+            # Omit this if it's NONE
+            req.traverse = int32(traverse + 1);
         respData := __invoke('pushBranch', req.toString());
         readMessageFromString(resp, respData);
         return resp.localName
@@ -916,6 +926,33 @@ class PeerProxy : _PeerProxyBase {
         req.branch = branch;
         req.algo = int32(algo);
         __invoke('traverse', req.toString());
+    }
+
+    ## Asynchronous call to traverse.
+    ##
+    ## 'branch' is passed back to the client through the callback, this is
+    ## expedient given the way this is used (as the second stage in the "push"
+    ## process).
+    void traverseAsync(String branch, int algo,
+                       GeneralCallback[String] callback
+                       ) {
+        req := TraverseRequest();
+        req.branch = branch;
+        req.algo = int32(algo);
+
+        class Callback : RPCCallback {
+            @cvars {
+                String branch;
+                GeneralCallback[String] clientCallback;
+            }
+
+            void setResponse(RPCMessage result) {
+                # No response content for traverse requests.
+                clientCallback(branch, null);
+            }
+        }
+
+        __invokeAsync('traverse', req.toString(), Callback(branch, callback));
     }
 
     ## Get the current mountpoint (a subset of getInfo()).
@@ -1131,7 +1168,7 @@ void pushBranch(Context context, RPCMessage msg, Connection comm) {
         }
     }
 
-    _inst.pushBranch(req.branch, req.peer,
+    _inst.pushBranch(req.branch, req.peer, req.traverse - 1,
                      ResponseCallback(context, comm, msg.id));
 }
 

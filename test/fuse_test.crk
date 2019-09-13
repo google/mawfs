@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import crack.ascii rstrip;
 import crack.cmdline CmdOptions, Option, CMD_STR;
 import crack.cont.hashmap HashMap;
 import crack.fs cwd, makePath, Path;
@@ -949,21 +950,41 @@ class PushTest : DoubleInstanceTest {
         (makePath('backing')/'config/peers').writeAll(
             '[server]\nport = 12543\nssl = true\n');
 
-        (makePath('fs')/'foo').writeAll('test file contents');
+        (makePath('fs')/'first').writeAll('first file contents');
         restartFS('master');
         runMawfs(StringArray!['clone', 'localhost:12543:ssl', 'backing2']);
 
         # Start the second instance.
         startFS('master', 'backing2', 'fs2');
 
-        # Add a file to the secondary.
+        # Add two files to the secondary, one commited and one in the journal.
         makePath('fs2/foo').writer().write('got foo?');
+        runMawfs(StringArray!['commit', 'fs2']);
+        makePath('fs2/journaled').writeAll('should be in journal');
 
-        # Make the secondary push to the primary.
+        # Make the secondary push to the primary, capture the branch name.
+        buf := AppendBuffer(256);
         runMawfs(StringArray!['push', '-i', 'localhost:9119:ssl',
                               'master', '127.0.0.1:12543'],
+                 buf
                  );
+        @assert(buf.startsWith('remote branch: '));
+        branch := rstrip(String(buf, true)).slice(15);
+
+        # Take down the secondary and merge the branch.  TODO: make mawfs do a
+        # better job of auto-merging in a case where the journal is completely
+        # consumed by a new commit, not sure why this doesn't already work.
+        # Not only that, but in order to avoid a conflict, we can't overwrite
+        # the original file we wrote to master (changed the write to 'foo' in
+        # the beginning to 'first' to deal with this).
+        stopFS('fs2');
+        runMawfs(StringArray!['-i', 'fs', 'merge', branch]);
+
+        # Verify that the primary has everything.
         assertEqual(makePath('fs/foo').readAll(), 'got foo?');
+        assertEqual(makePath('fs/journaled').readAll(),
+                    'should be in journal'
+                    );
     }
 }
 register(PushTest());

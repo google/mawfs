@@ -691,9 +691,10 @@ class CommandManager {
         checkArgsAtLeast(2, 'Usage: mawfs push <branch> <peer>\n');
         branch := args[2];
         peer := args[3];
+        traverseType := getTraverseType(false, TRAVERSE_DELTA);
 
         rpc := getRPC();
-        remoteBranch := rpc.getProxy().pushBranch(branch, peer);
+        remoteBranch := rpc.getProxy().pushBranch(branch, peer, traverseType);
         cout `remote branch: $remoteBranch\n`;
     }
 
