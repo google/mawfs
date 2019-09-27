@@ -9,7 +9,7 @@ import crack.lang Exception, InvalidArgumentError, InvalidResourceError;
 import crack.logger debug, error, info;
 import crack.threads Mutex, MutexLock, Queue, Thread;
 
-import .blockstore ChunkStore, Commit;
+import .blockstore ChunkStore, Commit, JournalIter;
 import .cache Cache, NodeContext;
 import .ciphers sha256, Cipher;
 import .entropy getEntropySource;
@@ -145,6 +145,39 @@ class MAWFSInstance @impl InstIFace {
         return null;
     }
 
+    ## Returns true if the commit in 'head' includes all of the changes in
+    ## 'otherHead' and the journal 'otherJiter'.  This basically verifies that
+    ## head is derived from otherHead and all sessions in otherJiter are in
+    ## the commit following otherHead on the path to head.
+    ##
+    ## Assumes that 'otherJiter' is valid (not null).
+    bool __subsumes(String head, String otherHead, JournalIter otherJiter) {
+        following := __getFollowingCommit(otherHead, head);
+        import mawfs.cache sig;
+        if (!following || !following.journalInfo)
+            return false;
+
+        # We can get away with a 'null' branch name for this because we're
+        # just using the NodeContext to load the journal info for the branch.
+        nodeCtx := NodeContext(__state.getStore(), Cache(), /* name */ null);
+        sessionIds := nodeCtx.getJournalInfo(following.journalInfo);
+
+        # Verify that all sessions that are in the local journal
+        # are present in the following commit.
+        for (entry :in otherJiter) {
+            if (!sessionIds.get(entry.change.sessionId)) {
+                # There are changes in the local journal that
+                # aren't in the commit, so we have to branch.
+                info I`Unable to fast-forward pull of branch, missing
+                       session id $(entry.change.sessionId.getRepr())`;
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+
     ## Helper function for __pullBranch, does everything but update the local
     ## tree.
     ##
@@ -202,37 +235,9 @@ class MAWFSInstance @impl InstIFace {
             # new commit includes all changes.
             localJiter := store.makeJournalIter(name);
             if (localJiter) {
-                # Note that if we get here, there's a local journal so we're
-                # assuming newName is the name of a tracking branch.
-                commit := __getFollowingCommit(localHead, head);
-                bool incompatible;
-                if (commit && commit.journalInfo) {
-                    nodeCtx := NodeContext(store, Cache(), name);
-                    sessionIds := nodeCtx.getJournalInfo(commit.journalInfo);
-
-                    # Verify that all sessions that are in the local journal
-                    # are present in the commit.
-                    for (entry :in localJiter) {
-                        if (!sessionIds.get(entry.change.sessionId)) {
-                            # There are changes in the local journal that
-                            # aren't in the commit, so we have to branch.
-                            info I`Unable to fast-forward pull of \
-                                   branch $name, missing session id \
-                                   $(entry.change.sessionId.getRepr())`;
-                            incompatible = true;
-                            break;
-                        }
-                    }
-                } else {
-                    # Either the new head is not derived from the local head
-                    # or there's no journal info.  Assume incompatible.
-                    incompatible = true;
-                }
-
-
                 # If the new commit subsumes the local journal, delete the
                 # local journal.
-                if (!incompatible) {
+                if (__subsumes(head, localHead, localJiter)) {
                     (backing/'journals'/name).delete();
                     newName = name;
 
@@ -265,10 +270,28 @@ class MAWFSInstance @impl InstIFace {
                 # journal" below.
                 if (!__derivesFrom(newHead, localHead))
                     return newName;
-            } else if (!localJiter || localJiter.elem().change.commit != newHead) {
-                return newName;
             }
 
+            # If the two branches have different heads, check to see if one of
+            # the journals is entirely subsumed by the next commit.
+            if (newHead != localHead) {
+                if (__subsumes(newHead, localHead, localJiter)) {
+                    (backing/'journals'/newName).moveTo(backing/'journals'/name);
+                    (backing/'refs'/newName).moveTo(backing/'refs'/name);
+                    return name;
+                } else if (__subsumes(localHead, newHead, jiter)) {
+                    # The local head subsumes the new head.  Discard the new
+                    # branch.
+                    (backing/'journals'/newName).delete();
+                    (backing/'refs'/newName).delete();
+                } else {
+                    # The branches diverge.
+                    return newName;
+                }
+            }
+
+            # Loop through the changes in the journals until either they
+            # diverge or one ends.
             while (jiter && localJiter) {
                 if (jiter.elem().change != localJiter.elem().change)
                     break;

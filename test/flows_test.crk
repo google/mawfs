@@ -1,0 +1,408 @@
+
+import crack.cont.hashmap HashMap;
+import crack.fs makePath, Path;
+import crack.io cerr, Formatter, FStr, StringWriter;
+import crack.lang Exception;
+import crack.rawptr RawPtr;
+import crack.threads Mutex;
+import mawfs.aes_siv SIVCipher;
+import mawfs.blockstore ChunkStore, FSInfo, FSRawChunkReader, NodeStore;
+import mawfs.cache Tree;
+import mawfs.flows MAWFSInstance;
+import mawfs.inst InstanceState;
+import mawfs.path MAWFSPath;
+import mawfs.rawchunk GeneralCallback, JournalBlock, RawChunkReader;
+import mawfs.peernet ClientPeer, PeerNetwork, RemoteReaderImpl;
+import mawfs.rpc PeerProxy, RemoteError;
+import test.unittest register, runAllTests, Test;
+
+@import crack.ann impl;
+
+const CIPHERKEY := 'passwordpasswordpasswordpassword';
+
+# Move FakeFile and FakePath into their own module.
+
+import crack.fs PathIter, PathStat;
+import crack.io SeekableReader, SeekableWriter, StringReader;
+import crack.lang InvalidArgumentError, ManagedBuffer, SystemError;
+import crack.runtime ENOENT;
+import crack.strutil split, StringArray;
+
+@import crack.ann assert, cvars;
+
+class FakeFile {
+    alias Map = HashMap[String, FakeFile];
+
+    @cvars {
+        ## Children of a directory.  null if not a directory
+        Map children;
+
+        ## File contents.  null if not a file.
+        ManagedBuffer contents;
+    }
+}
+
+class FakePath : Path {
+    @cvars {
+        FakePath __parent;
+        FakeFile rep;
+        String name;
+    }
+
+    oper init(FakePath parent, String name) :
+        __parent = parent,
+        name = name {
+
+        if (parent && !(parent.rep.children is null) &&
+            existing := parent.rep.children.get(name))
+            rep = existing;
+        else
+            rep = FakeFile(null, null);
+    }
+
+    ## Initialize the root node.
+    oper init() : rep(FakeFile.Map(), null), name = '/' {}
+
+    SeekableReader reader() {
+        if (rep.contents is null)
+            throw SystemError(getFullName(), ENOENT);
+        return StringReader(rep.contents)
+    }
+
+    SeekableWriter writer() {
+        __parent.rep.children[name] = rep;
+        rep.contents = result := StringWriter();
+        return result;
+    }
+
+    SeekableWriter appender() {
+        import crack.io cerr;
+        __parent.rep.children[name] = rep;
+        result := StringWriter();
+        if (rep.contents)
+            result.write(rep.contents);
+        rep.contents = result;
+        return result;
+    }
+
+    void truncate(uint64 newSize) {
+        if (rep.contents.size > newSize)
+            rep.contents.size = newSize;
+    }
+
+    void makeDir(bool errorOnExists) {
+        if (__parent.rep.children is null)
+            throw Exception(FStr() I`Parent dir $__parent does not exist \
+                                     while creating $this`);
+        __parent.rep.children[name] = rep;
+        rep.children = FakeFile.Map();
+    }
+
+    Path oper[](String child) { return FakePath(this, child) }
+
+    Path _createNode(String path) { return this[path] }
+
+    Path oper /(String other) {
+        Path cur = this;
+        for (segment :in split(other, '/'))
+            cur = cur[segment];
+        return cur;
+    }
+
+    bool exists() { return !(rep.children is null) || !(rep.contents is null) }
+
+    bool isDir() { return !(rep.children is null) }
+
+    bool isLink() { return false }
+
+    void delete() {
+        __parent.rep.children.delete(name);
+        rep.children = null;
+        rep.contents = null;
+    }
+
+    String getName() { return name }
+
+    ## Helper function which returns the parent directory name with the
+    ## trailing slash.
+    @final String __getDirName() {
+        return __parent ? __parent.__getDirName() + name + '/' : '/';
+    }
+
+    String getFullName() {
+        return __parent ? __parent.__getDirName() + name :  '/';
+    }
+
+    PathStat getStat() {
+        stat := PathStat();
+        stat.st_size = rep.contents ? rep.contents.size : 0;
+        stat.st_mode = 0o666;
+        return stat;
+    }
+
+    void setMode(int mode) {}
+
+    class __PathIter : PathIter {
+        alias FileMapIter = FakeFile.Map.Iter;
+        @cvars {
+            FakePath __parent;
+            FileMapIter __iter;
+        }
+
+        Path elem() {
+            cur := __iter.elem();
+            return FakePath(__parent, cur.val, cur.key);
+        }
+
+        bool isTrue() {
+            return __iter;
+        }
+
+        bool next() {
+            __iter.next();
+            return __iter;
+        }
+    }
+
+    PathIter children() {
+        return __PathIter(this, rep.children.iter());
+    }
+
+    Path parent() {
+        return __parent;
+    }
+
+    void moveTo(Path other) {
+        if (!__parent)
+            throw InvalidArgumentError('THe root directory cannot be moved');
+        otherPath := FakePath.cast(other);
+        otherPath.__parent.rep.children[otherPath.name] = rep;
+        rep = FakeFile(null, null);
+        __parent.rep.children.delete(name);
+    }
+
+    void formatTo(Formatter out) {
+        out `$(getFullName())`;
+    }
+}
+
+class FakePathTest : Test {
+    void run() {
+        root := FakePath();
+        @assert(root.exists());
+        assertEqual(root.getFullName(), '/');
+        assertEqual((root/'foo').getFullName(), '/foo');
+        assertEqual((root/'foo'/'bar').getFullName(), '/foo/bar');
+        (root/'foo').writeAll('this is a test');
+        assertEqual((root/'foo').readAll(), 'this is a test');
+
+        (root/'foo').appender().write('.  So is this.');
+        assertEqual((root/'foo').readAll(), 'this is a test.  So is this.');
+        (root/'foo').truncate(4);
+        assertEqual((root/'foo').readAll(), 'this');
+        (root/'foo').truncate(5);
+        assertEqual((root/'foo').readAll(), 'this');
+        root['bar'].makeDir();
+        @assert(root['bar'].isDir());
+        (root/'bar'/'baz').writeAll('this is data');
+        assertEqual((root/'bar'/'baz').readAll(), 'this is data');
+        (root/'a/b').makeDirs();
+        @assert((root/'a'/'b').exists());
+        (root/'a/b').delete();
+        @assert(!(root/'a/b').exists());
+
+        dirs := StringArray();
+        for (child :in root.children())
+            dirs.append(child.getName());
+        dirs.sort();
+        assertEqual(dirs, StringArray!['a', 'bar', 'foo']);
+        @assert((root/'foo').parent() is root);
+        (root/'foo').moveTo(root/'bar/fooz');
+        @assert((root/'bar/fooz').exists());
+        @assert(!(root/'foo').exists());
+    }
+}
+#register(FakePathTest());
+
+class FakeCallback[ResultType] @impl GeneralCallback[ResultType] {
+    ResultType result;
+    Exception ex;
+    void oper call(ResultType result, Exception ex) {
+        this.result = result;
+        this.ex = ex;
+    }
+
+    ResultType getResult() {
+        if (ex)
+            throw ex;
+        return result;
+    }
+}
+
+## Overrides most of peer proxy so that we can fake out a peer with a local
+## stub object based on a memory-resident MAWFS instance.
+class FakeProxy : PeerProxy {
+    RawChunkReader rawChunkReader;
+    Mutex __mutex = {};
+
+    oper init(Path backingDir, NodeStore store) :
+        PeerProxy( /* test constructor */ null),
+        rawChunkReader = FSRawChunkReader(backingDir, __mutex, store) {
+    }
+
+    String getHead(String branch) {
+        cb := FakeCallback[String]();
+        rawChunkReader.getHead(branch, cb);
+        return cb.getResult();
+    }
+
+    JournalBlock getJournalBlock(String firstBlockDigest,
+                                 String branch,
+                                 uint pos
+                                 ) {
+        cb := FakeCallback[JournalBlock]();
+        rawChunkReader.getJournalBlock(firstBlockDigest, branch, pos, cb);
+        return cb.getResult();
+    }
+
+    String getObject(String digest) {
+        cb := FakeCallback[String]();
+        rawChunkReader.readRawChunk(digest, cb);
+        return cb.getResult();
+    }
+
+    bool isTrue() { return true }
+    bool reusable() { return false }
+}
+
+## Container for all of the stuff needed for a MAWFS instance (either for the
+## test instance or a fake proxy).
+class FakeInst {
+
+    @cvars {
+        Path backing;
+        ChunkStore store;
+        SIVCipher cipher;
+        Tree tree;
+    }
+
+    @static FakeInst create(String backing) {
+        back := FakePath()/backing;
+        back.makeDir();
+        cipher := SIVCipher(CIPHERKEY, null);
+        store := ChunkStore(back, FSInfo(cipher));
+        store.createRepository('master');
+        return FakeInst(back, store, cipher, Tree(store, 'master'));
+    }
+
+
+    ## Returns a Path object encapsulating the root of the MAWFS filesystem
+    ## for the instance.
+    Path getRootPath() {
+        return MAWFSPath(tree.getRoot());
+    }
+}
+
+@abstract class FlowTest : Test {
+    FakeInst testInst, peerInst;
+    InstanceState inst;
+    MAWFSInstance flows;
+
+    void setUp() {
+        testInst = FakeInst.create('backing');
+        peerInst = FakeInst.create('peer');
+        inst = InstanceState.create(testInst.backing, testInst.cipher,
+                                    testInst.store,
+                                    'master',
+                                    Mutex(),
+                                    null);
+
+        peerNet := PeerNetwork(null, testInst.cipher, 'client');
+        peerNet.addPeer(ClientPeer('peer',
+                                   FakeProxy(peerInst.backing, peerInst.store)
+                                   )
+                        );
+        testInst.store.setRemoteReader(RemoteReaderImpl(peerNet));
+        flows = MAWFSInstance(inst, peerNet);
+    }
+
+    Path getRootPath() {
+        instLock := inst.lock();
+        return inst.getRoot();
+    }
+}
+
+## Test that we can pull a subsuming branch without a merge.
+class PullOfSubsumer : FlowTest {
+    void run() {
+        # Get some data in the peer's journal and propagate it to the test
+        # instance.
+        (peerInst.getRootPath()/'foo').writeAll('first file');
+        assertEqual((peerInst.getRootPath()/'foo').readAll(),
+                    'first file');
+        flows.pullBranch('master', null);
+        assertEqual((getRootPath()/'foo').readAll(), 'first file');
+
+        # Commit the peer a couple of times and then add some info to the new
+        # journal.
+        peerInst.tree.commit();
+        (peerInst.getRootPath()/'bar').writeAll('second file');
+        peerInst.tree.commit();
+        (peerInst.getRootPath()/'baz').writeAll('third file');
+
+        branchName := flows.pullBranch('master', null);
+        assertEqual(branchName, 'master');
+        assertEqual((getRootPath()/'bar').readAll(), 'second file');
+        assertEqual((getRootPath()/'baz').readAll(), 'third file');
+    }
+}
+register(PullOfSubsumer());
+
+## Test that we can pull a subsuming branch with no remote journal without a
+## merge.
+class PullOfSubsumerNoRemoteJournal : FlowTest {
+    void run() {
+        # Get some data in the peer's journal and propagate it to the test
+        # instance.
+        (peerInst.getRootPath()/'foo').writeAll('first file');
+        assertEqual((peerInst.getRootPath()/'foo').readAll(),
+                    'first file');
+        flows.pullBranch('master', null);
+        assertEqual((getRootPath()/'foo').readAll(), 'first file');
+
+        # Commit the peer a couple of times.
+        peerInst.tree.commit();
+        (peerInst.getRootPath()/'bar').writeAll('second file');
+        peerInst.tree.commit();
+
+        branchName := flows.pullBranch('master', null);
+        assertEqual(branchName, 'master');
+        assertEqual((getRootPath()/'bar').readAll(), 'second file');
+    }
+}
+register(PullOfSubsumerNoRemoteJournal());
+
+## Test that we can pull a subsuming branch with no remote journal without a
+## merge.
+class PullOfSubsumerNoLocalJournal : FlowTest {
+    void run() {
+        # Commit a couple of changes, add a change that's just in the journal.
+        (peerInst.getRootPath()/'foo').writeAll('first file');
+        peerInst.tree.commit();
+        (peerInst.getRootPath()/'bar').writeAll('second file');
+        peerInst.tree.commit();
+        (peerInst.getRootPath()/'baz').writeAll('third file');
+
+        branchName := flows.pullBranch('master', null);
+        assertEqual(branchName, 'master');
+        assertEqual((getRootPath()/'foo').readAll(), 'first file');
+        assertEqual((getRootPath()/'bar').readAll(), 'second file');
+        assertEqual((getRootPath()/'baz').readAll(), 'third file');
+    }
+}
+register(PullOfSubsumerNoLocalJournal());
+
+
+runAllTests();
+
+
