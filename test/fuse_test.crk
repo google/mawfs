@@ -950,7 +950,7 @@ class PushTest : DoubleInstanceTest {
         (makePath('backing')/'config/peers').writeAll(
             '[server]\nport = 12543\nssl = true\n');
 
-        (makePath('fs')/'first').writeAll('first file contents');
+        (makePath('fs')/'foo').writeAll('foo file contents');
         restartFS('master');
         runMawfs(StringArray!['clone', 'localhost:12543:ssl', 'backing2']);
 
@@ -971,12 +971,7 @@ class PushTest : DoubleInstanceTest {
         @assert(buf.startsWith('remote branch: '));
         branch := rstrip(String(buf, true)).slice(15);
 
-        # Take down the secondary and merge the branch.  TODO: make mawfs do a
-        # better job of auto-merging in a case where the journal is completely
-        # consumed by a new commit, not sure why this doesn't already work.
-        # Not only that, but in order to avoid a conflict, we can't overwrite
-        # the original file we wrote to master (changed the write to 'foo' in
-        # the beginning to 'first' to deal with this).
+        # Take down the secondary and merge the branch.
         stopFS('fs2');
         runMawfs(StringArray!['-i', 'fs', 'merge', branch]);
 
