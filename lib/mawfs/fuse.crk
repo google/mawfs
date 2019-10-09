@@ -191,6 +191,7 @@ int _read(byteptr path, byteptr buf, uintz size, uint64 offset,
         info := ctx.getFileInfo(fi.fh);
         if (!((info ? info.reader : null) is null)) {
             WriteBuffer temp = {buf, 0, size};
+            info.reader.seek(int64(offset), SEEK_SET);
             return info.reader.read(temp);
         } else {
             return -EINVAL;

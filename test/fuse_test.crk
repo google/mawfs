@@ -968,12 +968,11 @@ class PushTest : DoubleInstanceTest {
                               'master', '127.0.0.1:12543'],
                  buf
                  );
-        @assert(buf.startsWith('remote branch: '));
-        branch := rstrip(String(buf, true)).slice(15);
+        assertEqual(buf, 'remote branch: master\n');
 
-        # Take down the secondary and merge the branch.
+        # Take down the secondary so that the primary can't pull chunks on
+        # demand.  This ensures that we've done a traversal on the branch.
         stopFS('fs2');
-        runMawfs(StringArray!['-i', 'fs', 'merge', branch]);
 
         # Verify that the primary has everything.
         assertEqual(makePath('fs/foo').readAll(), 'got foo?');
@@ -983,5 +982,37 @@ class PushTest : DoubleInstanceTest {
     }
 }
 register(PushTest());
+
+class SeekTest : TestCase {
+    void run() {
+
+        const FILE_SIZE := 1000000;
+
+        # Create a temporary buffer full of random data, sanity check
+        # readersEqual.
+        tmp := AppendBuffer(FILE_SIZE);
+        srandom(0x58f28595);
+        for (int i; i < FILE_SIZE; ++i)
+            tmp.append(byte(random()));
+
+        file := makePath('fs/file');
+        file.writeAll(tmp);
+
+        String subbuf(Buffer buf, uintz pos, uintz size) {
+            return String(buf, pos, size);
+        }
+
+        # Use plain @assert's here, otherwise we print these binary strings.
+        src := file.reader();
+        @assert(src.read(4096) == subbuf(tmp, 0, 4096));
+        src.seek(100000, SEEK_SET);
+        @assert(src.read(4096) == subbuf(tmp, 100000, 4096));
+        src.seek(200000, SEEK_SET);
+        @assert(src.read(4096) == subbuf(tmp, 200000, 4096));
+        src.seek(65536, SEEK_SET);
+        @assert(src.read(4096) == subbuf(tmp, 65536, 4096));
+    }
+}
+register(SeekTest());
 
 runAllTests();
