@@ -966,6 +966,12 @@ void main() {
             free(sa);
             sa = null;
 
+            # Last argument should be a mountpoint, verify that it exists.
+            if (!makePath(args[-1]).isDir())
+                throw Abort(FStr() I`Mountpoint $(args[-1]) does not exist \
+                                     or is not a directory.`
+                            );
+
             StringArray fuseArgs = [args[0]];
             fuseArgs.extend(args.subarray(3));
 
