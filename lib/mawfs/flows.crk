@@ -461,6 +461,8 @@ class MAWFSInstance @impl InstIFace {
 
         info `adding peer $peerAddr to network and backing store\n`;
         addr := parseAddr(peerAddr);
+        if (!addr)
+            throw InvalidResourceError(FStr() `Unable to resolve $peerAddr`);
         __net.addPeer(addr);
 
         # Read the existing file.
