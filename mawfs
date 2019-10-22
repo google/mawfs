@@ -433,15 +433,8 @@ class CommandManager {
         setLogLevel(lvl := parseLogVerbosity());
     }
 
-    ## Initialize the backing store and its config, giving an error if it
-    ## doesn't exist.
-    void initBackingStore(String arg, bool defaultSSL) {
-        rootDir = makePath(arg);
-        if (rootDir.exists() && !opts.getBool('overwrite')) {
-            cerr `Directory $rootDir already exists\n`;
-            exit(1);
-        }
-
+    ## Create the network config file (if 'port' is defined).
+    void createConfig(Path rootDir, bool defaultSSL) {
         # Create a peer config if "port" is specified.
         if (port := opts.getString('port')) {
             String iface = opts.getString('iface');
@@ -461,6 +454,18 @@ class CommandManager {
                 ssl = $ssl
                 `;
         }
+    }
+
+    ## Initialize the backing store and its config, giving an error if it
+    ## doesn't exist.
+    void initBackingStore(String arg, bool defaultSSL) {
+        rootDir = makePath(arg);
+        if (rootDir.exists() && !opts.getBool('overwrite')) {
+            cerr `Directory $rootDir already exists\n`;
+            exit(1);
+        }
+
+        createConfig(rootDir, defaultSSL);
     }
 
     ## Create the chunk store, also initializing the params file in the
@@ -979,13 +984,17 @@ void main() {
 
             rootDir := makePath(args[2]);
             newInstance := !(rootDir/'params').exists();
-            configStore := ConfigStore(rootDir, 'peers');
             chunkStore := makeChunkStore(rootDir, true);
 
             if (newInstance) {
                 cm.rootDir = rootDir;
                 cm._setInstanceName(chunkStore.getCipher());
+                cm.createConfig(rootDir, true);
             }
+
+            # Initialize the config store (we have to do this after it may
+            # have been created).
+            configStore := ConfigStore(rootDir, 'peers');
 
             # Start the peer network.
             mutex := Mutex();
