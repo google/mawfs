@@ -160,15 +160,6 @@ void usage() {
                 Resolve an outstanding merge that had conflicts.
             mawfs cancelMerge
                 Cancel an outstanding merge.
-            mawfs hash <filename> ...
-                Show file hashes.
-                the correct way to do this.
-            mawfs storechunk <src-file>
-                Reads data from <src-file> and writes it to the filesystem
-                under its digest name.
-            mawfs loadchunk <hash>
-                Loads a chunk based on its digest and writes it to standard
-                output.
             mawfs dump <filename>
                 Dump the contents of an encrypted backing file.
             mawfs addPeer <peer-name> <peer-addr>
@@ -329,6 +320,11 @@ opts := CmdOptions![
     Option('logfile', 'l', 'logfile name', 'mawfs.log', CMD_STR),
     Option('branch', 'b', 'branch name', 'master', CMD_STR),
     Option('port', 'p', 'port number', '9119', CMD_INT),
+    Option('no-server', 'false',
+           'if set to false, disable configuring a server for a new instance',
+           null,
+           CMD_BOOL
+           ),
     Option('ssl', '',
            I'enable ssl for a new instance (true, false or empty to use the
            default value',
@@ -436,7 +432,7 @@ class CommandManager {
     ## Create the network config file (if 'port' is defined).
     void createConfig(Path rootDir, bool defaultSSL) {
         # Create a peer config if "port" is specified.
-        if (port := opts.getString('port')) {
+        if (!opts.getBool('no-server') && (port := opts.getString('port'))) {
             String iface = opts.getString('iface');
             bool ssl;
             if (opts.getString('ssl') == 'true')
@@ -603,6 +599,21 @@ class CommandManager {
         }
     }
 
+    ## The "commit" command.
+    void commit() {
+        checkArgsAtLeast(3, "Usage: commit <mount-point> ...\n");
+
+        fd := open(args[2].buffer, O_RDONLY, 0);
+        if (fd == -1) {
+            cerr `Unable to open $(args[2]): c_strerror()\n`;
+            exit(1);
+        } else {
+            fsync(fd);
+            close(fd);
+            cerr `Synced.\n`;
+        }
+    }
+
     ## The "clone" command.
     void clone() {
         checkArgs(4, 'Usage: mawfs clone <peer-address> <backing-dir>\n');
@@ -666,6 +677,125 @@ class CommandManager {
             ssl = $(peerAddr.ssl ? 'true' : 'false')
             `;
         showRunInstructions();
+    }
+
+    ## The "run" command.
+    void run() {
+        checkArgsAtLeast(
+            4,
+            I"Usage: mawfs run [-b branch] <backing-dir> [fuse-options] \
+              <mount-point>\n"
+        );
+
+        sa := SigAction();
+        sa.sa_sigaction = trapHandler;
+        sa.sa_flags = SA_SIGINFO;
+        sigaction(SIGSEGV, sa, null);
+        sigaction(SIGILL, sa, null);
+        sigaction(SIGFPE, sa, null);
+        free(sa);
+        sa = null;
+
+        # Last argument should be a mountpoint, verify that it exists.
+        if (!makePath(args[-1]).isDir())
+            throw Abort(FStr() I`Mountpoint $(args[-1]) does not exist \
+                                 or is not a directory.`
+                        );
+
+        StringArray fuseArgs = [args[0]];
+        fuseArgs.extend(args.subarray(3));
+
+        setLogFile(opts.getString('logfile'));
+
+        rootDir = makePath(args[2]);
+        newInstance := !(rootDir/'params').exists();
+        chunkStore := makeChunkStore(rootDir, true);
+
+        if (newInstance) {
+            _setInstanceName(chunkStore.getCipher());
+            createConfig(rootDir, true);
+        }
+
+        # Initialize the config store (we have to do this after it may
+        # have been created).
+        configStore := ConfigStore(rootDir, 'peers');
+
+        # Start the peer network.
+        mutex := Mutex();
+        chunkReader := chunkStore.getRawChunkReader(mutex);
+
+        class PeerNetModule @impl UserModule {
+            PeerNetwork __net;
+            ConfigStore __config;
+            RawChunkReader __chunkReader;
+            InstanceState instState;
+
+            oper init(ConfigStore config, RawChunkReader chunkReader) :
+                __config = config,
+                __chunkReader = chunkReader {
+            }
+
+            void start() {
+                params := PeerNetParams(instState, true);
+                __net = PeerNetwork(__chunkReader, params.cipher,
+                                    params.name
+                                    );
+                mawfsInstance := MAWFSInstance(instState, __net);
+                __net.setSSLContext(makeSSLContext(mawfsInstance,
+                                                   __net.getComm(),
+                                                   instState.getCipher()
+                                                   )
+                                    );
+                setInst(mawfsInstance);
+                __net.configure(__config);
+                __net.storeServersIn(instState);
+
+                # Set the remote reader from the peer net (note that we
+                # already have the instance lock).
+                instState.getStore().setRemoteReader(
+                    RemoteReaderImpl(__net)
+                );
+
+                # Break the cycle with the instance state.
+                instState = null;
+            }
+        }
+
+        peerModule := PeerNetModule(configStore, chunkReader);
+        instState := InstanceState.create(rootDir,
+                                          chunkStore.getCipher(),
+                                          chunkStore,
+                                          opts.getString('branch'),
+                                          mutex,
+                                          peerModule
+                                          );
+
+        # Create a temporary reference cycle, this will be resolved in
+        # PeerNetModule.start().
+        peerModule.instState = instState;
+        runFuse(instState, fuseArgs);
+    }
+
+    ## The "dump" command.
+    void dump() {
+        checkArgs(3, "Usage: mawfs dump <path>");
+
+        password := readPassword();
+
+        path := makePath(args[2]);
+        contents := path.readAll();
+
+        # See if this is a tag.
+        if (contents.count() == 64 &&
+            ((refed := path.parent()/altDecode(contents))).exists()
+            )
+            contents = refed.readAll();
+
+        # Read it.
+        chunk := FSInfo(password).readChunk(StringReader(contents));
+        Node node = {};
+        readMessageFromString(node, chunk.contents);
+        dumpNode(cout, node);
     }
 
     ## The "create" command.
@@ -914,161 +1044,16 @@ void main() {
 
     try {
         cmd := args[1];
-        if (cmd == 'hash') {
-            cm.checkArgsAtLeast(3, "Usage: mawfs hash <filename> ...\n");
-            for (file :in args.subarray(2))
-                cout `$(hex(hashFile(makePath(file)))) $file\n`;
-        } else if (cmd == 'storechunk') {
-            cm.checkArgs(3, "Usage: mawfs storechunk <src-file>\n");
-
-            # Read the file contents.
-            src := getReader(args[2]);
-            contents := AppendBuffer(BLOCK_SIZE);
-            while (data := src.read(BLOCK_SIZE))
-                contents.extend(data);
-
-            store := makeChunkStore(cwd, true);
-            digest := store.store(contents);
-            cout `$(hex(digest))\n`;
-        } else if (cmd == 'loadchunk') {
-            cm.checkArgs(3, "Usage: mawfs loadchunk <hash>\n");
-
-            store := makeChunkStore(cwd, true);
-            chunk := store.load(altDecode(args[2]));
-            if (!chunk)
-                cerr `Chunk $(args[2]) not found\n`;
-            else
-                cout `$(chunk.contents)`;
-        } else if (cmd == 'commit') {
-            cm.checkArgsAtLeast(3, "Usage: commit <mount-point> ...\n");
-
-            fd := open(args[2].buffer, O_RDONLY, 0);
-            if (fd == -1) {
-                cerr `Unable to open $(args[2]): c_strerror()\n`;
-                exit(1);
-            } else {
-                fsync(fd);
-                close(fd);
-                cerr `Synced.\n`;
-            }
+        if (cmd == 'commit') {
+            cm.commit();
         } else if (cmd == 'create') {
             cm.create();
         } else if (cmd == 'clone') {
             cm.clone();
         } else if (cmd == 'run') {
-            cm.checkArgsAtLeast(
-                4,
-                I"Usage: mawfs run [-b branch] <backing-dir> [fuse-options] \
-                  <mount-point>\n"
-            );
-
-            sa := SigAction();
-            sa.sa_sigaction = trapHandler;
-            sa.sa_flags = SA_SIGINFO;
-            sigaction(SIGSEGV, sa, null);
-            sigaction(SIGILL, sa, null);
-            sigaction(SIGFPE, sa, null);
-            free(sa);
-            sa = null;
-
-            # Last argument should be a mountpoint, verify that it exists.
-            if (!makePath(args[-1]).isDir())
-                throw Abort(FStr() I`Mountpoint $(args[-1]) does not exist \
-                                     or is not a directory.`
-                            );
-
-            StringArray fuseArgs = [args[0]];
-            fuseArgs.extend(args.subarray(3));
-
-            setLogFile(opts.getString('logfile'));
-
-            rootDir := makePath(args[2]);
-            newInstance := !(rootDir/'params').exists();
-            chunkStore := makeChunkStore(rootDir, true);
-
-            if (newInstance) {
-                cm.rootDir = rootDir;
-                cm._setInstanceName(chunkStore.getCipher());
-                cm.createConfig(rootDir, true);
-            }
-
-            # Initialize the config store (we have to do this after it may
-            # have been created).
-            configStore := ConfigStore(rootDir, 'peers');
-
-            # Start the peer network.
-            mutex := Mutex();
-            chunkReader := chunkStore.getRawChunkReader(mutex);
-
-            class PeerNetModule @impl UserModule {
-                PeerNetwork __net;
-                ConfigStore __config;
-                RawChunkReader __chunkReader;
-                InstanceState instState;
-
-                oper init(ConfigStore config, RawChunkReader chunkReader) :
-                    __config = config,
-                    __chunkReader = chunkReader {
-                }
-
-                void start() {
-                    params := PeerNetParams(instState, true);
-                    __net = PeerNetwork(__chunkReader, params.cipher,
-                                        params.name
-                                        );
-                    mawfsInstance := MAWFSInstance(instState, __net);
-                    __net.setSSLContext(makeSSLContext(mawfsInstance,
-                                                       __net.getComm(),
-                                                       instState.getCipher()
-                                                       )
-                                        );
-                    setInst(mawfsInstance);
-                    __net.configure(__config);
-                    __net.storeServersIn(instState);
-
-                    # Set the remote reader from the peer net (note that we
-                    # already have the instance lock).
-                    instState.getStore().setRemoteReader(
-                        RemoteReaderImpl(__net)
-                    );
-
-                    # Break the cycle with the instance state.
-                    instState = null;
-                }
-            }
-
-            peerModule := PeerNetModule(configStore, chunkReader);
-            instState := InstanceState.create(rootDir,
-                                              chunkStore.getCipher(),
-                                              chunkStore,
-                                              opts.getString('branch'),
-                                              mutex,
-                                              peerModule
-                                              );
-
-            # Create a temporary reference cycle, this will be resolved in
-            # PeerNetModule.start().
-            peerModule.instState = instState;
-            runFuse(instState, fuseArgs);
+            cm.run();
         } else if (cmd == 'dump') {
-            cm.checkArgs(3, "Usage: mawfs dump <path>");
-
-            password := readPassword();
-
-            path := makePath(args[2]);
-            contents := path.readAll();
-
-            # See if this is a tag.
-            if (contents.count() == 64 &&
-                ((refed := path.parent()/altDecode(contents))).exists()
-                )
-                contents = refed.readAll();
-
-            # Read it.
-            chunk := FSInfo(password).readChunk(StringReader(contents));
-            Node node = {};
-            readMessageFromString(node, chunk.contents);
-            dumpNode(cout, node);
+            cm.dump();
         } else if (cmd == 'pull') {
             cm.pull();
         } else if (cmd == 'push') {

@@ -111,10 +111,9 @@ bool gotFailures;
     void runMawfs(StringArray args) { runMawfs(args, null) }
 
     void startFS(String branch, String backing, String dir) {
-        runMawfs(StringArray!['run', '-b', branch, '-l',
-                              'mawfs_' + dir + '.log', '-n', dir, backing,
-                               '-v', 'debug',
-                              dir]);
+        runMawfs(StringArray!['run', '-b', branch, '--no-server',
+                              '-l','mawfs_' + dir + '.log', '-n', dir,
+                              backing, '-v', 'debug', dir]);
     }
 
     void startFS(String branch) {
