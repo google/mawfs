@@ -305,4 +305,23 @@ correct order (we otherwise want to touch so that children end up less recently
 used than the parent)  But node.release now also needs to release() all
 descendents, and we have to get the recursive cache size.
 
+Server initialization in the "run" command
+==========================================
 
+When doing "run", we really want to create a server because there aren't many
+things you can do without one.  We probably want to run this server on
+localhost only.
+
+If --port is specified, the user can be cconsidered to be consciously
+accepting that they're going to create a server.  We could therefore assume
+that they also expect it to run on all interfaces, or alternately we could
+require that they be explicit about specifying the --iface flag.
+
+Alternately, if we want a consistent but slightly less safe approach we could
+default to starting a server on all interfaces.
+
+After some consideration, I'm inclined to just go with the simple approach:
+run will attempt to configure the default port on all interfaces.  It's not
+worth it to worry too much about the legacy interfaces, better to just focus
+on moving the newer command line interfaces from mfs.  As it stands, --port
+works for "run" and that's all I really set out to accomplish.
