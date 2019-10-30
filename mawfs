@@ -44,7 +44,7 @@ import crack.protobuf readMessageFromString;
 import crack.threads Mutex;
 
 import mawfs.aes_siv SIVCipher;
-import mawfs.blockstore hashFile, ChunkStore, FSInfo, Node, BLOCK_SIZE;
+import mawfs.blockstore hashFile, ChunkStore, Commit, FSInfo, Node, BLOCK_SIZE;
 import mawfs.cache sig;
 import mawfs.ciphers Cipher;
 import mawfs.configstore ConfigStore;
@@ -868,6 +868,19 @@ class CommandManager {
         getRPC().getProxy().addPeer(args[2], args[3]);
     }
 
+    ## Formats a commit, returns the first parent digest if there is one.
+    String _formatCommit(Formatter out, Commit commit, String commitDigest) {
+        cout `commit: $(sig(commitDigest))\n`;
+        if (commit.parent) {
+            for (parent :in commit.parent)
+                cout `  parent: $(sig(parent))\n`;
+            return commit.parent[0]
+        } else {
+            return null;
+        }
+
+    }
+
     void dbg_log() {
         checkArgs(4, 'Usage: mawfs dbg_log <backing-dir> <branch>');
         password := readPassword();
@@ -890,15 +903,8 @@ class CommandManager {
         if (!commit)
             cerr `Head commit $(sig(commitDigest)) not found!\n`;
         while (commit) {
-            cout `commit: $(sig(commitDigest))\n`;
-            if (commit.parent) {
-                for (parent :in commit.parent)
-                    cout `  parent: $(sig(parent))\n`;
-                commitDigest = commit.parent[0];
-                commit = store.getCommit(commitDigest);
-            } else {
-                commit = null;
-            }
+            commitDigest = _formatCommit(cout, commit, commitDigest);
+            commit = commitDigest ? store.getCommit(commitDigest) : null;
         }
     }
 
@@ -1030,6 +1036,21 @@ class CommandManager {
         algo := getTraverseType(true, TRAVERSE_FULL);
         getRPC().getProxy().traverse(args[2], algo);
     }
+
+    void log() {
+        checkArgs(3, 'Usage: mawfs log <commit-digest-or-branch>');
+        commitDigest := args[2];
+        rpc := getRPC();
+        proxy := rpc.getProxy();
+        commitAndDigest := proxy.getCommit(commitDigest);
+        while (commitAndDigest) {
+            commitDigest = _formatCommit(cout, commitAndDigest.commit,
+                                         commitAndDigest.digest
+                                         );
+            commitAndDigest =
+                commitDigest ? proxy.getCommit(altEncode(commitDigest)) : null;
+        }
+    }
 }
 
 # The main function, which is a command dispatcher.
@@ -1080,6 +1101,8 @@ void main() {
             cm.verify();
         } else if (cmd == 'traverse') {
             cm.traverse();
+        } else if (cmd == 'log') {
+            cm.log();
         } else {
             cerr `Unknown command: $cmd\n`;
             usage();

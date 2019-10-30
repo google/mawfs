@@ -18,6 +18,7 @@ import crack.serial SerialReader, SerialWriter;
 import crack.threads MutexLock;
 import crack.net.ssl SSLConnection, SSLContext;
 
+import .blockstore Commit;
 import .ciphers Cipher, sha256;
 import .entropy getEntropySource;
 import .rawchunk GeneralCallback, JournalBlock, RawChunkReader;
@@ -188,6 +189,18 @@ class PeerDisconnectedError : Exception {}
     message PeerConnectedRequest {
         optional string peerName = 1;
     }
+
+    message GetCommitRequest {
+        ## This can either be an alt-base64 encoded commit id or a branch tag.
+        optional string commitOrTag = 1;
+    }
+
+    declare Commit;
+
+    message CommitAndDigest {
+        optional Commit commit = 1;
+        optional bytes digest = 2;
+    }
 }
 
 const int
@@ -262,6 +275,9 @@ class LoginError : Exception {
                             GeneralCallback[int] callback
                             );
 
+    @abstract void getCommit(String digestOrBranch,
+                             GeneralCallback[CommitAndDigest] callback
+                             );
 
     ## Responds to a login challenge from a client.
     @abstract LoginState answerChallenge(String challenge);
@@ -1025,6 +1041,18 @@ class PeerProxy : _PeerProxyBase {
         __invoke('peerConnected', req.toString());
     }
 
+    ## Returns the deccrypted commit object.
+    ##
+    ## commitIdOrTag is either an alt-base64 encoded commit id or a branch tag.
+    CommitAndDigest getCommit(String commitIdOrTag) {
+        req := GetCommitRequest();
+        req.commitOrTag = commitIdOrTag;
+        result := CommitAndDigest();
+        respData := __invoke('getCommit', req.toString());
+        readMessageFromString(result, respData);
+        return result;
+    }
+
     ## Sets the "authenticated" flag on the local client context.  This allows
     ## the remote peer to invoke methods back to this instance if a method
     ## table was provided.
@@ -1301,6 +1329,28 @@ void peerConnected(Context context, RPCMessage msg, Connection conn) {
     context.writeResponse(conn, null, msg.id);
 }
 
+void getCommit(Context context, RPCMessage msg, Connection conn) {
+    req := GetCommitRequest();
+    readMessageFromString(req, msg.request);
+
+    class ResponseCallback @impl GeneralCallback[CommitAndDigest] {
+        @cvars {Context context; Connection conn; int32 requestId;}
+        void oper call(CommitAndDigest result, Exception ex) {
+            if (result)
+                context.writeResponse(conn, result, requestId);
+            else if (ex)
+                context.writeError(conn,
+                                   FStr() `$(ex.class.name): $(ex.text)`,
+                                   requestId
+                                   );
+            else
+                context.writeError(conn, 'chunk not found', requestId);
+        }
+    }
+
+    _inst.getCommit(req.commitOrTag, ResponseCallback(context, conn, msg.id));
+}
+
 const METHODS := MethodMap();
 METHODS['getObject'] = MethodHandler(getObject);
 METHODS['getHead'] = MethodHandler(getHead);
@@ -1314,6 +1364,7 @@ METHODS['addPeer'] = MethodHandler(addPeer);
 METHODS['getInfo'] = MethodHandler(getInfo);
 METHODS['traverse'] = MethodHandler(traverse);
 METHODS['peerConnected'] = MethodHandler(peerConnected);
+METHODS['getCommit'] = MethodHandler(getCommit);
 METHODS['pushBranch'] = MethodHandler(pushBranch);
 METHODS['getMountpoint'] = MethodHandler(getMountpoint, true);
 METHODS['login'] = MethodHandler(login, true);

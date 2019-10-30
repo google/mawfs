@@ -18,8 +18,8 @@ import .merge Merger, MergeState;
 import .nonces NONCE_SIZE;
 import .peernet Peer, PeerNetwork;
 import .rawchunk GeneralCallback;
-import .rpc parseAddr, InfoResponse, InstIFace, LoginError, LoginState,
-    MergeResult, MergeResponse, PeerProxy, PSKInfo, TRAVERSE_NONE,
+import .rpc parseAddr, CommitAndDigest, InfoResponse, InstIFace, LoginError,
+    LoginState, MergeResult, MergeResponse, PeerProxy, PSKInfo, TRAVERSE_NONE,
     TRAVERSE_DELTA, TRAVERSE_FULL;
 import .util findCommonAncestor, traverseCommit;
 
@@ -517,6 +517,38 @@ class MAWFSInstance @impl InstIFace {
         return 0;
     }
 
+
+    ## Gets the commit named by the given dgest or branch.
+    ##
+    ## If digestOrBranch is a digest, it is alternate-base64 encoded (this is
+    ## fairly unique, but insulates the "digest or branch" logic from the
+    ## client and RPC layers)
+    CommitAndDigest getCommit(String digestOrBranch) {
+        lock := __state.lock();
+        store := __state.getStore();
+
+        CommitAndDigest makeResult(Commit commit, String digest) {
+            result := CommitAndDigest();
+            result.commit = commit;
+            result.digest = digest;
+            return result;
+        }
+
+        try {
+            digest := altDecode(digestOrBranch);
+            commit := store.getCommit(digest);
+            if (commit)
+                return makeResult(commit, digest);
+        } catch (InvalidArgumentError ex) {
+            # Just fall through, assume it to be a branch name.
+        }
+
+        digest := store.getHead(digestOrBranch);
+        if (!digest)
+            return null;
+        return makeResult(store.getCommit(digest), digest);
+    }
+
     ## RPC service for pullBranch.  Starts the call off in a new thread.
     void pullBranch(String name, String peer,
                     GeneralCallback[String] callback
@@ -706,5 +738,13 @@ class MAWFSInstance @impl InstIFace {
         @task(MAWFSInstance inst; String branch; int algo;, int,
               inst.traverse(branch, algo));
         __pool.submit(MyTask(this, branch, algo, callback));
+    }
+
+    void getCommit(String digestOrBranch,
+                   GeneralCallback[CommitAndDigest] callback
+                   ) {
+        @task(MAWFSInstance inst; String digestOrBranch;, CommitAndDigest,
+              inst.getCommit(digestOrBranch));
+        __pool.submit(MyTask(this, digestOrBranch, callback));
     }
 }

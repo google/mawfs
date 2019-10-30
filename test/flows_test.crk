@@ -1,10 +1,11 @@
 
 import crack.cont.hashmap HashMap;
+import crack.enc.base64 altEncode;
 import crack.fs makePath, Path;
 import crack.io cerr, Formatter, FStr, StringWriter;
 import crack.lang Exception;
 import crack.rawptr RawPtr;
-import crack.threads Mutex;
+import crack.threads Condition, Mutex, MutexLock;
 import mawfs.aes_siv SIVCipher;
 import mawfs.blockstore ChunkStore, FSInfo, FSRawChunkReader, NodeStore;
 import mawfs.cache Tree;
@@ -13,7 +14,7 @@ import mawfs.inst InstanceState;
 import mawfs.path MAWFSPath;
 import mawfs.rawchunk GeneralCallback, JournalBlock, RawChunkReader;
 import mawfs.peernet ClientPeer, PeerNetwork, RemoteReaderImpl;
-import mawfs.rpc PeerProxy, RemoteError;
+import mawfs.rpc CommitAndDigest, PeerProxy, RemoteError;
 import test.unittest register, runAllTests, Test;
 
 @import crack.ann impl;
@@ -227,12 +228,21 @@ class FakePathTest : Test {
 class FakeCallback[ResultType] @impl GeneralCallback[ResultType] {
     ResultType result;
     Exception ex;
+    Condition cond = Condition();
+    bool complete;
+
     void oper call(ResultType result, Exception ex) {
+        lock := MutexLock(cond.mutex);
         this.result = result;
         this.ex = ex;
+        complete = true;
+        cond.signal();
     }
 
     ResultType getResult() {
+        lock := MutexLock(cond.mutex);
+        if (!complete)
+            cond.wait();
         if (ex)
             throw ex;
         return result;
@@ -330,6 +340,16 @@ class FakeInst {
         instLock := inst.lock();
         return inst.getRoot();
     }
+
+    void commit() {
+        lock := inst.lock();
+        inst.commit();
+    }
+
+    String getHead() {
+        lock := inst.lock();
+        return inst.getHead();
+    }
 }
 
 ## Test that we can pull a subsuming branch without a merge.
@@ -402,6 +422,43 @@ class PullOfSubsumerNoLocalJournal : FlowTest {
 }
 register(PullOfSubsumerNoLocalJournal());
 
+## Test that getCommit() works as expected.
+class GetCommit : FlowTest {
+    void run() {
+        cb := FakeCallback[CommitAndDigest]();
+        flows.getCommit('master', cb);
+        result := cb.getResult();
+        @assert(result);
+        @assert(result.commit);
+        @assert(!result.commit.parent);
+        assertEqual(result.digest, getHead());
+        orgDigest := result.digest;
+        (getRootPath()/'foo').writeAll('first file');
+
+        # Make sure we can query by digest.
+        cb = FakeCallback[CommitAndDigest]();
+        flows.getCommit(altEncode(orgDigest), cb);
+        result = cb.getResult();
+        assertEqual(result.digest, orgDigest);
+        @assert(result);
+        @assert(result.commit);
+        @assert(!result.commit.parent);
+
+        # Store a new commit, verify that we now get the new commit.
+        commit();
+        cb = FakeCallback[CommitAndDigest]();
+        flows.getCommit('master', cb);
+        result = cb.getResult();
+        @assert(result);
+        @assert(result.commit);
+        @assert(result.commit.parent);
+        @assert(result.digest);
+        @assert(result.commit.parent.count() == 1);
+        assertEqual(result.commit.parent[0], orgDigest);
+        assertEqual(result.digest, getHead());
+    }
+}
+register(GetCommit());
 
 runAllTests();
 

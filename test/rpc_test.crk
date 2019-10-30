@@ -10,9 +10,10 @@ import crack.net.comm2 Comm, CommListener, Connection, ConnectionFactory,
 import crack.net.ssl SSLContext;
 import crack.runtime exit;
 import mawfs.aes_siv SIVCipher;
+import mawfs.blockstore Commit;
 import mawfs.ciphers sha256, Cipher;
 import mawfs.rawchunk GeneralCallback, JournalBlock, RawChunkReader;
-import mawfs.rpc parseAddr, setInst, Context, GetFileResponse,
+import mawfs.rpc parseAddr, setInst, CommitAndDigest, Context, GetFileResponse,
     GetObjectResponse, InfoResponse, InstIFace, LoginError, LoginState,
     MergeResponse, MethodHandler, MethodMap, PeerProxy,
     PeerServiceConnectionFactory, PSKInfo, RemoteError, RPCMessage;
@@ -78,6 +79,17 @@ class FakeInstance @impl InstIFace {
 
     void resolve(GeneralCallback[int] callback) {}
     void cancelMerge(GeneralCallback[int] callback) {}
+
+    void getCommit(String digestOrBranch,
+                   GeneralCallback[CommitAndDigest] callback
+                   ) {
+        resp := CommitAndDigest();
+        resp.commit = Commit();
+        resp.commit.root = 'commit root';
+        resp.digest = digestOrBranch;
+        callback(resp, null);
+    }
+
     void addPeer(String peerName, String peerAddr,
                  GeneralCallback[int] callback
                  ) {
@@ -200,27 +212,38 @@ class RPCTestBed {
         startServer();
     }
 
+    PeerProxy makePeerProxy() {
+        return PeerProxy.make(comm, Log(log, 'client'),
+                              FStr() `127.0.0.1:$port`,
+                              __getSSLContext()
+                              );
+    }
+
+    ## Make a peer proxy that stubs out server methods.
+    PeerProxy makePeerProxy(MethodMap methods) {
+        return PeerProxy.make(comm, Log(log, 'client'),
+                              FStr() `127.0.0.1:$port`,
+                              __getSSLContext(),
+                              methods,
+                              FakeChunkReader()
+                              );
+    }
+
     void testGetObject() {
-        peer :=
-            PeerProxy.make(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`,
-                           __getSSLContext());
+        peer := makePeerProxy();
         @assert(peer);
         peer.login(cipher);
         @assert(peer.getObject('foo') == 'from the chunk reader');
     }
 
     void testGetHead() {
-        peer :=
-            PeerProxy.make(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`,
-                           __getSSLContext());
+        peer := makePeerProxy();
         peer.login(cipher);
         @assert(peer.getHead('master') == 'digest');
     }
 
     void testReadJournal() {
-        peer :=
-            PeerProxy.make(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`,
-                           __getSSLContext());
+        peer := makePeerProxy();
         peer.login(cipher);
         jb := peer.getJournalBlock('digest', 'branch', 0);
         @assert(jb.firstBlockDigest == 'digest');
@@ -232,26 +255,18 @@ class RPCTestBed {
     }
 
     void testGetFile() {
-        peer :=
-            PeerProxy.make(comm, Log(log, 'client'), FStr() `127.0.0.1:$port`,
-                           __getSSLContext());
+        peer := makePeerProxy();
         peer.login(cipher);
         @assert(peer.getFile('filename') == 'contents');
     }
 
     void testPeerLogin() {
-        peer := PeerProxy.make(comm, Log(log, 'client'),
-                               FStr() `127.0.0.1:$port`,
-                               __getSSLContext()
-                               );
+        peer := makePeerProxy();
         peer.login(cipher);
     }
 
     void testFailingPeerLogin() {
-        peer := PeerProxy.make(comm, Log(log, 'client'),
-                               FStr() `127.0.0.1:$port`,
-                               __getSSLContext()
-                               );
+        peer := makePeerProxy();
         try {
             peer.login(SIVCipher(sha256('wrong password'), null));
             @assert(false);
@@ -265,18 +280,12 @@ class RPCTestBed {
     }
 
     void testUserLogin() {
-        peer := PeerProxy.make(comm, Log(log, 'client'),
-                               FStr() `127.0.0.1:$port`,
-                               __getSSLContext()
-                               );
+        peer := makePeerProxy();
         peer.login('nonce');
     }
 
     void testFailedUserLogin() {
-        peer := PeerProxy.make(comm, Log(log, 'client'),
-                               FStr() `127.0.0.1:$port`,
-                               __getSSLContext()
-                               );
+        peer := makePeerProxy();
         try {
             peer.login('badnonce');
             @assert(false);
@@ -293,12 +302,7 @@ class RPCTestBed {
         methods := MethodMap();
         methods['getObject'] = MethodHandler(clientSideGetObject);
         methods['getFile'] = MethodHandler(clientSideGetFile);
-        peer := PeerProxy.make(comm, Log(log, 'client'),
-                               FStr() `127.0.0.1:$port`,
-                               __getSSLContext(),
-                               methods,
-                               FakeChunkReader()
-                               );
+        peer := makePeerProxy(methods);
         peer.login(cipher);
         peer.peerConnected('foo');
         @assert(inst.peerName == 'foo');
@@ -315,14 +319,17 @@ class RPCTestBed {
         methods := MethodMap();
         methods['getObject'] = MethodHandler(clientSideGetObject);
         methods['getFile'] = MethodHandler(clientSideGetFile);
-        peer := PeerProxy.make(comm, Log(log, 'client'),
-                               FStr() `127.0.0.1:$port`,
-                               __getSSLContext(),
-                               methods,
-                               FakeChunkReader()
-                               );
+        peer := makePeerProxy(methods);
         peer.login(cipher);
         @assert(peer.pushBranch('master', 'peer', 1) == 'master1');
+    }
+
+    void testGetCommit() {
+        peer := makePeerProxy();
+        peer.login(cipher);
+        commitAndDigest := peer.getCommit('branch123');
+        @assert(commitAndDigest.digest == 'branch123');
+        @assert(commitAndDigest.commit.root == 'commit root');
     }
 
     void tearDown() {
@@ -364,6 +371,7 @@ try {
     testbed.testFailedUserLogin();
     testbed.testPeerConnected();
     testbed.testPushBranch();
+    testbed.testGetCommit();
 } catch (Exception ex) {
     testbed.tearDown();
     throw ex;
