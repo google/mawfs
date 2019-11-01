@@ -7,7 +7,8 @@ import crack.lang Exception;
 import crack.rawptr RawPtr;
 import crack.threads Condition, Mutex, MutexLock;
 import mawfs.aes_siv SIVCipher;
-import mawfs.blockstore ChunkStore, FSInfo, FSRawChunkReader, NodeStore;
+import mawfs.blockstore ChunkStore, CommitMetadata, FSInfo, FSRawChunkReader,
+    NodeStore;
 import mawfs.cache Tree;
 import mawfs.flows MAWFSInstance;
 import mawfs.inst InstanceState;
@@ -459,6 +460,24 @@ class GetCommit : FlowTest {
     }
 }
 register(GetCommit());
+
+class CommitTest : FlowTest {
+    void run() {
+        cb := FakeCallback[int]();
+        (getRootPath()/'foo').writeAll('this is a file');
+        md := CommitMetadata();
+        md.comment = 'commit message';
+        md.committer = 'author';
+        flows.commit(md, cb);
+        cb.getResult();
+
+        lock := inst.lock();
+        head := inst.getHead();
+        commit := inst.getStore().getCommit(head);
+        assertEqual(commit.metadata, md);
+    }
+}
+register(CommitTest());
 
 runAllTests();
 

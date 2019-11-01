@@ -18,7 +18,7 @@ import crack.serial SerialReader, SerialWriter;
 import crack.threads MutexLock;
 import crack.net.ssl SSLConnection, SSLContext;
 
-import .blockstore Commit;
+import .blockstore Commit, CommitMetadata;
 import .ciphers Cipher, sha256;
 import .entropy getEntropySource;
 import .rawchunk GeneralCallback, JournalBlock, RawChunkReader;
@@ -201,6 +201,12 @@ class PeerDisconnectedError : Exception {}
         optional Commit commit = 1;
         optional bytes digest = 2;
     }
+
+    declare CommitMetadata;
+
+    message CommitRequest {
+        optional CommitMetadata metadata = 1;
+    }
 }
 
 const int
@@ -253,6 +259,8 @@ class LoginError : Exception {
     bool authenticated;
 }
 
+## The interface for mawfs.flows.MAWFSInstance, which is how the RPC system
+## communicates to the broader system.
 @interface InstIFace {
     @abstract void pullBranch(String branch, String peer,
                               GeneralCallback[String] callback
@@ -278,6 +286,10 @@ class LoginError : Exception {
     @abstract void getCommit(String digestOrBranch,
                              GeneralCallback[CommitAndDigest] callback
                              );
+
+    @abstract void commit(CommitMetadata metadata,
+                          GeneralCallback[int] callback
+                          );
 
     ## Responds to a login challenge from a client.
     @abstract LoginState answerChallenge(String challenge);
@@ -1053,6 +1065,15 @@ class PeerProxy : _PeerProxyBase {
         return result;
     }
 
+    ## Perform a commit with the given metadata (which may be null).
+    ## User-provided fields in metadata will be stored in the final commit,
+    ## other fields are ignored.
+    void commit(CommitMetadata metadata) {
+        req := CommitRequest();
+        req.metadata = metadata;
+        __invoke('commit', req.toString());
+    }
+
     ## Sets the "authenticated" flag on the local client context.  This allows
     ## the remote peer to invoke methods back to this instance if a method
     ## table was provided.
@@ -1351,6 +1372,14 @@ void getCommit(Context context, RPCMessage msg, Connection conn) {
     _inst.getCommit(req.commitOrTag, ResponseCallback(context, conn, msg.id));
 }
 
+void commit(Context context, RPCMessage msg, Connection conn) {
+    req := CommitRequest();
+    readMessageFromString(req, msg.request);
+    _inst.commit(req.metadata,
+                 EmptyResponseCallback(context, conn, msg.id)
+                 );
+}
+
 const METHODS := MethodMap();
 METHODS['getObject'] = MethodHandler(getObject);
 METHODS['getHead'] = MethodHandler(getHead);
@@ -1365,6 +1394,7 @@ METHODS['getInfo'] = MethodHandler(getInfo);
 METHODS['traverse'] = MethodHandler(traverse);
 METHODS['peerConnected'] = MethodHandler(peerConnected);
 METHODS['getCommit'] = MethodHandler(getCommit);
+METHODS['commit'] = MethodHandler(commit);
 METHODS['pushBranch'] = MethodHandler(pushBranch);
 METHODS['getMountpoint'] = MethodHandler(getMountpoint, true);
 METHODS['login'] = MethodHandler(login, true);

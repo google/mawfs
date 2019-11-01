@@ -9,7 +9,7 @@ import crack.lang Exception, InvalidArgumentError, InvalidResourceError;
 import crack.logger debug, error, info;
 import crack.threads Mutex, MutexLock, Queue, Thread;
 
-import .blockstore ChunkStore, Commit, JournalIter;
+import .blockstore ChunkStore, Commit, CommitMetadata, JournalIter;
 import .cache Cache, NodeContext;
 import .ciphers sha256, Cipher;
 import .entropy getEntropySource;
@@ -549,6 +549,14 @@ class MAWFSInstance @impl InstIFace {
         return makeResult(store.getCommit(digest), digest);
     }
 
+    ## Store a commit consisting of the current branch state.  Return value is
+    ## always zero.
+    int commit(CommitMetadata metadata) {
+        lock := __state.lock();
+        __state.commit(metadata);
+        return 0;
+    }
+
     ## RPC service for pullBranch.  Starts the call off in a new thread.
     void pullBranch(String name, String peer,
                     GeneralCallback[String] callback
@@ -746,5 +754,11 @@ class MAWFSInstance @impl InstIFace {
         @task(MAWFSInstance inst; String digestOrBranch;, CommitAndDigest,
               inst.getCommit(digestOrBranch));
         __pool.submit(MyTask(this, digestOrBranch, callback));
+    }
+
+    void commit(CommitMetadata metadata, GeneralCallback[int] callback) {
+        @task(MAWFSInstance inst; CommitMetadata metadata;, int,
+              inst.commit(metadata));
+        __pool.submit(MyTask(this, metadata, callback));
     }
 }

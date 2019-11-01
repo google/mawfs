@@ -10,7 +10,7 @@ import crack.net.comm2 Comm, CommListener, Connection, ConnectionFactory,
 import crack.net.ssl SSLContext;
 import crack.runtime exit;
 import mawfs.aes_siv SIVCipher;
-import mawfs.blockstore Commit;
+import mawfs.blockstore Commit, CommitMetadata;
 import mawfs.ciphers sha256, Cipher;
 import mawfs.rawchunk GeneralCallback, JournalBlock, RawChunkReader;
 import mawfs.rpc parseAddr, setInst, CommitAndDigest, Context, GetFileResponse,
@@ -61,6 +61,7 @@ class FakeInstance @impl InstIFace {
     Cipher cipher;
     String peerName;
     PeerProxy peerProxy;
+    CommitMetadata lastCommit;
 
     oper init(Cipher cipher) : cipher = cipher {}
 
@@ -88,6 +89,11 @@ class FakeInstance @impl InstIFace {
         resp.commit.root = 'commit root';
         resp.digest = digestOrBranch;
         callback(resp, null);
+    }
+
+    void commit(CommitMetadata metadata, GeneralCallback[int] callback) {
+        lastCommit = metadata;
+        callback(0, null);
     }
 
     void addPeer(String peerName, String peerAddr,
@@ -332,6 +338,16 @@ class RPCTestBed {
         @assert(commitAndDigest.commit.root == 'commit root');
     }
 
+    void testCommit() {
+        peer := makePeerProxy();
+        peer.login(cipher);
+        md := CommitMetadata();
+        md.comment = 'commit comment';
+        md.committer = 'commit author';
+        peer.commit(md);
+        @assert(inst.lastCommit == md);
+    }
+
     void tearDown() {
         comm.stop();
     }
@@ -372,6 +388,7 @@ try {
     testbed.testPeerConnected();
     testbed.testPushBranch();
     testbed.testGetCommit();
+    testbed.testCommit();
 } catch (Exception ex) {
     testbed.tearDown();
     throw ex;

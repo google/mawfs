@@ -88,6 +88,17 @@ const int
         optional int32 time = 6;
     }
 
+    ## User-provided metadata that is associated with a commit.
+    message CommitMetadata {
+        ## A user-provided commit comment.
+        optional string comment = 1;
+
+        ## A user-provided identifier of the committer of the change.  Should
+        ## generally consist of a standard e-mail address, e.g.
+        ## "John Doe" <jdoe@example.com>
+        optional string committer = 2;
+    }
+
     ## A commit.  These objects track the history of an entire filesystem.
     message Commit {
         ## The digest of the "parent" commits.  There should generally be one
@@ -108,6 +119,13 @@ const int
         ## commit.  The implementation must not rely either on this field
         ## being present or the referenced journal being accessible.
         optional bytes journal = 4;
+
+        ## Commit time, in seconds since the epoch.
+        optional int32 timestamp = 5;
+
+        ## User-provided commit metadata.  THis is only present if the user
+        ## provided it from a commit RPC.
+        optional CommitMetadata metadata = 6;
     }
 
     ## Change is like a lightweight Commit for purposes of storing changes in

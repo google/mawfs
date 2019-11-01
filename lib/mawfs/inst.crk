@@ -24,7 +24,7 @@ import crack.threads Mutex, MutexLock;
 
 import .admin AdminRootFactory, InfoFiles;
 import .alt ResidentBranches;
-import .blockstore Commit, Node, NodeStore, MODE_DIR;
+import .blockstore CommitMetadata, Node, NodeStore, MODE_DIR;
 import .ciphers Cipher;
 import .cache CachedNode, Tree;
 import .entropy getEntropySource;
@@ -305,6 +305,13 @@ class InstanceState {
     void commit() {
         @checkLock();
         __tree.commit();
+        resetTree();
+    }
+
+    ## Does a full commit on the tree (see Tree.commit()).
+    void commit(CommitMetadata metadata) {
+        @checkLock();
+        __tree.commit(null, metadata);
         resetTree();
     }
 

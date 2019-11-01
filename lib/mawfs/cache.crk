@@ -29,8 +29,8 @@ import crack.logger debug, error, info;
 import crack.serial SerialReader, SerialWriter;
 import crack.strutil StringArray;
 import crack.time Time;
-import mawfs.blockstore Entry, Change, ChangeEntry, Commit, JournalIter,
-    Node, NodeStore, Session, MODE_DIR;
+import mawfs.blockstore Entry, Change, ChangeEntry, Commit, CommitMetadata,
+    JournalIter, Node, NodeStore, Session, MODE_DIR;
 import mawfs.chunker RabinChunker, DEFAULT_WINDOW_SIZE;
 import mawfs.dllist DLList;
 
@@ -1130,11 +1130,14 @@ class CachedNode {
     ## Commit the entire tree and record a commit object.
     ## altDigest: nullable, if present this is the digest of a commit of an
     ## alternate branch that is being merged.
-    void commitTree(String altDigest) {
+    ## metadata: nullable, if present contains user-supplied metadata.
+    void commitTree(String altDigest, CommitMetadata metadata) {
         info `committing on branch $(__ctx.getBranch()).`;
         newRootDigest := getRoot().commit();
         Commit commit = {};
         commit.root = newRootDigest;
+        commit.timestamp = Time.now().secs;
+        commit.metadata = metadata;
 
         # Add the parent commits.
         if (head := __ctx.getHead())
@@ -1153,7 +1156,7 @@ class CachedNode {
     }
 
     ## Commit the entire tree and record a commit object.
-    void commitTree() { commitTree(null) }
+    void commitTree() { commitTree(null, null) }
 
     ## Record a change in the journal for this node or for the appropriate
     ## parent node if this node doesn't have a digest yet.
@@ -2753,8 +2756,16 @@ Object _makeOrphanContext(NodeContext context) {
     ## Commit the tree.  This ends up setting the local branch head and
     ## clearing the journal as well as doing garbage collection.  Note that
     ## this will call 'initialize()' so it's safe to call this at any time.
-    @final void commit() {
+    ##
+    ## metadata: nullable, user-provided metadata.
+    @final void commit(String comment, CommitMetadata metadata) {
         initialize();
-        __root.commitTree();
+        __root.commitTree(null, metadata);
+    }
+
+    ## Same as commit(String, CommitMetadata) only without an alt digest or
+    ## metadata.
+    @final void commit() {
+        commit(null, null);
     }
 }

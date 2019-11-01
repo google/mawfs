@@ -454,7 +454,7 @@ Outcome merge3(CachedNode target, CachedNode org, CachedNode other) {
         if (__otherCommit == __targetCommit)
             newRoot.commitTree();
         else
-            newRoot.commitTree(__otherCommit);
+            newRoot.commitTree(__otherCommit, null);
     }
 
     ## Performs the merge, returns a Merger object containing the details of

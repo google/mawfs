@@ -26,6 +26,7 @@ import crack.runtime abort, backtrace, close, free, getLocation, isatty,
     SA_SIGINFO, SIGFPE, SIGILL, SIGSEGV;
 import crack.strutil split, StringArray;
 import crack.sys argv, exit;
+import crack.time Date;
 import crack.io cin, cout, cerr, Formatter, FStr, Reader, StandardFormatter,
     StringFormatter, StringReader;
 
@@ -44,7 +45,8 @@ import crack.protobuf readMessageFromString;
 import crack.threads Mutex;
 
 import mawfs.aes_siv SIVCipher;
-import mawfs.blockstore hashFile, ChunkStore, Commit, FSInfo, Node, BLOCK_SIZE;
+import mawfs.blockstore hashFile, ChunkStore, Commit, CommitMetadata, FSInfo,
+    Node, BLOCK_SIZE;
 import mawfs.cache sig;
 import mawfs.ciphers Cipher;
 import mawfs.configstore ConfigStore;
@@ -363,6 +365,16 @@ opts := CmdOptions![
            '',
            CMD_STR
            ),
+    Option('comment', 'm',
+           'When specified during commit, add a commit message.'
+           null,
+           CMD_STR
+           ),
+    Option('committer', 'a',
+           'When specified during commit, e-mail address of the committer.',
+           null,
+           CMD_STR
+           ),
 ];
 
 ## Convenience class for obtaining the peer network parameters from the
@@ -601,16 +613,36 @@ class CommandManager {
 
     ## The "commit" command.
     void commit() {
-        checkArgsAtLeast(3, "Usage: commit <mount-point> ...\n");
+        if (args.count() == 3) {
+            # Old style commit, just do a sync.
 
-        fd := open(args[2].buffer, O_RDONLY, 0);
-        if (fd == -1) {
-            cerr `Unable to open $(args[2]): c_strerror()\n`;
-            exit(1);
+            if (opts.getString('comment')) {
+                cerr `Old style commit can not accespt a commit message.\n`;
+                exit(1);
+            }
+
+            fd := open(args[2].buffer, O_RDONLY, 0);
+            if (fd == -1) {
+                cerr `Unable to open $(args[2]): c_strerror()\n`;
+                exit(1);
+            } else {
+                fsync(fd);
+                close(fd);
+                cerr `Synced.\n`;
+            }
+        } else if (args.count() == 2) {
+            message := opts.getString('comment');
+            committer := opts.getString('committer');
+            CommitMetadata md;
+            if (message || committer) {
+                md = CommitMetadata();
+                md.comment = message;
+                md.committer = committer;
+            }
+            getRPC().getProxy().commit(md);
         } else {
-            fsync(fd);
-            close(fd);
-            cerr `Synced.\n`;
+            cerr `Usage: commit <mount-point>\n      commit -m <message\n`;
+            exit(1);
         }
     }
 
@@ -871,6 +903,14 @@ class CommandManager {
     ## Formats a commit, returns the first parent digest if there is one.
     String _formatCommit(Formatter out, Commit commit, String commitDigest) {
         cout `commit: $(sig(commitDigest))\n`;
+        if (commit.metadata) {
+            if (commit.metadata.comment)
+                cout `  comment: $(commit.metadata.comment)\n`;
+            if (commit.metadata.committer)
+                cout `  commiter: $(commit.metadata.committer)\n`;
+        }
+        if (commit.timestamp)
+            cout `  timestamp: $(Date(commit.timestamp))\n`;
         if (commit.parent) {
             for (parent :in commit.parent)
                 cout `  parent: $(sig(parent))\n`;
