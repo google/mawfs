@@ -39,6 +39,7 @@ class InvalidPasswordError : Exception {
 ## A peer for connecting to a server.
 class ServerPeer : Peer {
     Address addr;
+    String __name;
     Comm __comm;
     Log __log;
     PeerProxy __proxy;
@@ -48,12 +49,13 @@ class ServerPeer : Peer {
     String __myName;
 
     ## sslCtx: nullable. if present, use ssl.
-    oper init(Comm comm, Log log, Address addr, Cipher cipher,
+    oper init(Comm comm, Log log, Address addr, String name, Cipher cipher,
               SSLContext sslCtx,
               RawChunkReader chunkReader,
               String myName
               ) :
         addr = addr,
+        __name = name,
         __comm = comm,
         __log = log,
         __cipher = cipher,
@@ -80,7 +82,7 @@ class ServerPeer : Peer {
     }
 
     String getName() {
-        return FStr() `$addr`;
+        return __name;
     }
 
     String getDisplayName() {
@@ -157,9 +159,10 @@ class PeerNetwork {
         }
     }
 
-    void addPeer(ExtendedAddress addr) {
+    void addPeer(String name, ExtendedAddress addr) {
         __peers.append(ServerPeer(__comm, Log(__log, FStr() `peer-$addr`),
                                   addr,
+                                  name,
                                   __cipher,
                                   addr.ssl ? __sslCtx : null,
                                   __chunkReader,
@@ -403,7 +406,7 @@ class PeerNetwork {
                 inetAddr := parseAddr(addrStr);
                 if (inetAddr) {
                     __log.info `adding peer $peerName at $inetAddr`;
-                    addPeer(inetAddr);
+                    addPeer(peerName, inetAddr);
                 } else {
                     __log.error `unable to resolve $addrStr for peer $peerName`;
                 }

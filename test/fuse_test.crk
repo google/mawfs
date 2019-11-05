@@ -426,7 +426,7 @@ register(CloneTest());
     void pullAndMerge() {
         runMawfs(StringArray!['pull', '-i', 'localhost:9119', 'master']);
         runMawfs(StringArray!['merge', '-i', 'localhost:9119',
-                              '127.0.0.1:12543:master'
+                              'origin:master'
                               ]
                  );
     }
@@ -476,8 +476,9 @@ class MergeWithConflictsTest : MergeTest {
         StringArray branches = {};
         for (child :in (makePath('fs2')/'.mawfs'/'alt').children())
             branches.append(child.getName());
+        branches.sort();
         assertEqual(branches,
-                    StringArray!['127.0.0.1:12543:master', 'merge:org']
+                    StringArray!['merge:org', 'origin:master']
                     );
 
         # Verify that file contents are as we expect.
@@ -492,7 +493,7 @@ class MergeWithConflictsTest : MergeTest {
                     'alt contents'
                     );
 
-        masterFS := fs2/'.mawfs'/'alt'/'127.0.0.1:12543:master';
+        masterFS := fs2/'.mawfs'/'alt'/'origin:master';
         assertEqual(
             (masterFS/'on_master').readAll(),
             'on master contents'
@@ -532,7 +533,7 @@ class MergeNoConflictTest : MergeTest {
         pullAndMerge();
 
         # Verify that we ended up in a clean state.
-        masterFS := makePath('fs2')/'.mawfs'/'alt'/'127.0.0.1:12543:master';
+        masterFS := makePath('fs2')/'.mawfs'/'alt'/'origin:master';
         @assert(!masterFS.exists());
         orgFS := makePath('fs2')/'.mawfs'/'alt'/'merge:org';
         @assert(!orgFS.exists());
@@ -543,7 +544,7 @@ class MergeNoConflictTest : MergeTest {
             branches.append(child.getName());
         }
         branches.sort();
-        assertEqual(branches, StringArray!['127.0.0.1:12543:master', 'master']);
+        assertEqual(branches, StringArray!['master', 'origin:master']);
 
         assertEqual((makePath('fs2')/'.mawfs'/'branch').readAll(),
                     'master'
@@ -583,7 +584,7 @@ class CancelMergeTest : MergeTest {
 
         # Verify that we're in "outstanding merge" state.
         mawfsDir := makePath('fs2')/'.mawfs';
-        masterFS := mawfsDir/'alt'/'127.0.0.1:12543:master';
+        masterFS := mawfsDir/'alt'/'origin:master';
         @assert(masterFS.exists());
         @assert((mawfsDir/'branch').readAll().startsWith('merge:'));
 
@@ -621,8 +622,9 @@ class RestoreStateTest : MergeTest {
         StringArray branches = {};
         for (child :in (makePath('fs2')/'.mawfs'/'alt').children())
             branches.append(child.getName());
+        branches.sort();
         assertEqual(branches,
-                    StringArray!['127.0.0.1:12543:master', 'merge:org']
+                    StringArray!['merge:org', 'origin:master']
                     );
 
         # Verify that the origin looks like we expect it to.
@@ -643,7 +645,7 @@ class PullEmptyJournalTest : MergeTest {
         runMawfs(StringArray!['pull', '-i', 'localhost:9119', 'master']);
 
         # verify that we have a journal.
-        @assert(makePath('backing2/journals/127.0.0.1:12543:master').exists());
+        @assert(makePath('backing2/journals/origin:master').exists());
 
         # Commit the master, verify that its journal is gone and load its ref.
         runMawfs(StringArray!['commit', 'fs']);
@@ -651,15 +653,15 @@ class PullEmptyJournalTest : MergeTest {
         head := makePath('backing/refs/master').readAll();
 
         # Make sure we don't currently have the same head as the master.
-        @assert(makePath('backing2/refs/127.0.0.1:12543:master').readAll() !=
+        @assert(makePath('backing2/refs/origin:master').readAll() !=
                 head)
 
         # Pull again.
         runMawfs(StringArray!['pull', '-i', 'localhost:9119', 'master']);
 
         # make sure we now have an empty journal and the latest head.
-        @assert(!makePath('backing2/journals/127.0.0.1:12543:master').exists());
-        @assert(makePath('backing2/refs/127.0.0.1:12543:master').readAll() ==
+        @assert(!makePath('backing2/journals/origin:master').exists());
+        @assert(makePath('backing2/refs/origin:master').readAll() ==
                 head)
     }
 }
@@ -964,7 +966,7 @@ class PushTest : DoubleInstanceTest {
         # Make the secondary push to the primary, capture the branch name.
         buf := AppendBuffer(256);
         runMawfs(StringArray!['push', '-i', 'localhost:9119:ssl',
-                              'master', '127.0.0.1:12543'],
+                              'master', 'origin'],
                  buf
                  );
         assertEqual(buf, 'remote branch: master\n');

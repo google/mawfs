@@ -463,7 +463,7 @@ class MAWFSInstance @impl InstIFace {
         addr := parseAddr(peerAddr);
         if (!addr)
             throw InvalidResourceError(FStr() `Unable to resolve $peerAddr`);
-        __net.addPeer(addr);
+        __net.addPeer(peerName, addr);
 
         # Read the existing file.
         backing := __state.getBacking();

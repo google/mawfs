@@ -564,6 +564,10 @@ class CommandManager {
     RPCCmd getRPC() {
         serverAndNonce := getServer();
         addr := parseAddr(serverAndNonce.server);
+        if (!addr)
+            throw Abort(FStr() I`Unable to resolve server address \
+                                 $(serverAndNonce.server)`
+                        );
         cmd := RPCCmd(addr, serverAndNonce.nonce);
         if (!cmd.getProxy())
             throw Abort(FStr() `Unable to connect to $addr`);
@@ -673,7 +677,7 @@ class CommandManager {
         # can give it a null.
         net := PeerNetwork(null, params.cipher, params.name);
         net.setSSLContext(makeClientSSLContext(net.getComm(), tempCipher));
-        net.addPeer(peerAddr);
+        net.addPeer('origin', peerAddr);
 
         # If there's no params file, get one.
         paramInfo := net.pullParams(rootDir, password);

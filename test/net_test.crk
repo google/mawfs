@@ -156,7 +156,8 @@ class PeerInfo {
         root = makePath('tmp');
         createMaster();
         createSlave();
-        slave.peerNet.addPeer(ExtendedAddress('localhost', 127, 0, 0, 1,
+        slave.peerNet.addPeer('peer',
+                              ExtendedAddress('localhost', 127, 0, 0, 1,
                                               MASTER_PORT,
                                               false
                                               )
