@@ -318,7 +318,8 @@ def new(path):
                        stdin=password
                        ) or \
              run_mawfs('run', backing, path, stdin=password, logfile=logfile)
-        print('Your filesystem has been mounted on %s' % path)
+        if not rc:
+            print('Your filesystem has been mounted on %s' % path)
     finally:
         if rc and os.path.exists(backing):
             shutil.rmtree(backing)
@@ -431,6 +432,9 @@ def info():
                 sec = config[key]
                 print('%s: host=%s port=%s' %
                       (key, sec.get('host', ''), sec.get('port', '')))
+
+        # Finally give the mawfs command a chance to process this.
+        run_mawfs('info', '-i', inst.get_descriptor())
     else:
         print('No peers file.')
 
@@ -561,12 +565,15 @@ def verify():
 
 def main(args):
     global instance
-    opts, args = getopt.gnu_getopt(args[1:], 'i:v:')
+    opts, args = getopt.gnu_getopt(args[1:], 'i:v:n:')
     for opt, val in opts:
         if opt == '-i':
             instance = val
         elif opt == '-v':
             mawfs_flags.append('-v')
+            mawfs_flags.append(val)
+        elif opt == '-n':
+            mawfs_flags.append('-n')
             mawfs_flags.append(val)
         else:
             raise AssertionError('unkonwn flag: %s' % opt)
