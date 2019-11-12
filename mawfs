@@ -322,9 +322,9 @@ opts := CmdOptions![
     Option('logfile', 'l', 'logfile name', 'mawfs.log', CMD_STR),
     Option('branch', 'b', 'branch name', 'master', CMD_STR),
     Option('port', 'p', 'port number', '9119', CMD_INT),
-    Option('no-server', 'false',
+    Option('no-server', 's',
            'if set to false, disable configuring a server for a new instance',
-           null,
+           'false',
            CMD_BOOL
            ),
     Option('ssl', '',
