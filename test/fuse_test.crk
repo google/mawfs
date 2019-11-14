@@ -393,10 +393,17 @@ class CloneTest : DoubleInstanceTest {
         (makePath('backing')/'config/peers').writeAll('[server]\nport = 12543\n');
         (makePath('fs')/'foo').writeAll('test file contents');
         restartFS('master');
-        runMawfs(StringArray!['clone', 'localhost:12543', 'backing2']);
+        runMawfs(StringArray!['clone', '-n', 'theclone', 'localhost:12543',
+                              'backing2']);
         @assert((backing2/'params').exists());
         startFS('master', 'backing2', 'fs2');
         @assert((fs2/'foo').readAll() == 'test file contents');
+
+        # Verify that we've got the correct name.
+        stdout := AppendBuffer(256);
+        runMawfs(StringArray!['info', '-i', 'fs2'], stdout);
+        mount := (cwd/'fs2').getFullName();
+        assertEqual(stdout, FStr() `Name: theclone\nMountpoint: $mount\n`);
 
         # Now try doing a "pull" and verify that we see the update in the
         # new filesystem.

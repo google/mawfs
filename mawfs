@@ -669,7 +669,10 @@ class CommandManager {
                                           mutex,
                                           null
                                           );
-        _setInstanceName(tempCipher);
+        if (name := opts.getString('name')) {
+            lock := instState.lock();
+            instState.setInstanceName(name);
+        }
 
         params := PeerNetParams(instState, false);
 
@@ -713,6 +716,19 @@ class CommandManager {
             ssl = $(peerAddr.ssl ? 'true' : 'false')
             `;
         showRunInstructions();
+    }
+
+    ## Dump a bunch of information from the backing directory (currently only
+    ## "inst".
+    void dumpBacking() {
+        checkArgs(3, 'Usage: mawfs show <backing-dir>\n');
+        rootDir = makePath(args[2]);
+        password := readPassword();
+        tempCipher := SIVCipher(password, null);
+        state := LocalInstanceState();
+        data := tempCipher.decrypt((rootDir/'inst').readAll());
+        readMessageFromString(state, data);
+        cout `$state\n`;
     }
 
     ## The "run" command.
@@ -1117,6 +1133,8 @@ void main() {
             cm.clone();
         } else if (cmd == 'run') {
             cm.run();
+        } else if (cmd == 'dump_backing') {
+            cm.dumpBacking();
         } else if (cmd == 'dump') {
             cm.dump();
         } else if (cmd == 'pull') {
