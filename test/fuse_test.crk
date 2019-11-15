@@ -393,7 +393,8 @@ class CloneTest : DoubleInstanceTest {
         (makePath('backing')/'config/peers').writeAll('[server]\nport = 12543\n');
         (makePath('fs')/'foo').writeAll('test file contents');
         restartFS('master');
-        runMawfs(StringArray!['clone', '-n', 'theclone', 'localhost:12543',
+        runMawfs(StringArray!['clone', '-n', 'theclone', '-r', 'org',
+                              'localhost:12543',
                               'backing2']);
         @assert((backing2/'params').exists());
         startFS('master', 'backing2', 'fs2');
@@ -404,6 +405,10 @@ class CloneTest : DoubleInstanceTest {
         runMawfs(StringArray!['info', '-i', 'fs2'], stdout);
         mount := (cwd/'fs2').getFullName();
         assertEqual(stdout, FStr() `Name: theclone\nMountpoint: $mount\n`);
+
+        # Verify that the origin name was set up correctly.
+        @assert((backing2/'config/peers').readAll().lfind('[peer-org]') !=
+                -1);
 
         # Now try doing a "pull" and verify that we see the update in the
         # new filesystem.

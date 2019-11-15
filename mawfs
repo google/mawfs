@@ -365,6 +365,12 @@ opts := CmdOptions![
            '',
            CMD_STR
            ),
+    Option('peer-name', 'r',
+           'During a clone operation, identifiers the peer name to create '
+           'for the remote instance ("origin" is used by default)',
+           'origin',
+           CMD_STR
+           ),
     Option('comment', 'm',
            'When specified during commit, add a commit message.'
            null,
@@ -710,7 +716,7 @@ class CommandManager {
             StandardFormatter((rootDir/'config/peers').writer());
         peersOut.write(peers);
         peersOut I`
-            [peer-origin]
+            [peer-$(opts.getString('peer-name'))]
             host = $(peerAddr.getHostname())
             port = $(peerAddr.getPort())
             ssl = $(peerAddr.ssl ? 'true' : 'false')

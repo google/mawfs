@@ -565,7 +565,7 @@ def verify():
 
 def main(args):
     global instance
-    opts, args = getopt.gnu_getopt(args[1:], 'i:v:n:')
+    opts, args = getopt.gnu_getopt(args[1:], 'i:v:n:r:')
     for opt, val in opts:
         if opt == '-i':
             instance = val
@@ -574,6 +574,9 @@ def main(args):
             mawfs_flags.append(val)
         elif opt == '-n':
             mawfs_flags.append('-n')
+            mawfs_flags.append(val)
+        elif opt == '-r':
+            mawfs_flags.append('-r')
             mawfs_flags.append(val)
         else:
             raise AssertionError('unkonwn flag: %s' % opt)
