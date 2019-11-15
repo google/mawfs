@@ -136,51 +136,6 @@ void dumpNode(Formatter out, Node node) {
     }
 }
 
-void usage() {
-    cerr I`\
-        Usage:
-            mawfs run <backing> <mountpoint>
-                Mount a mawfs filesystem.
-            mawfs create <backing> [options]
-                Create a new MAWFS instance.
-            mawfs clone <peer-address> <backing-store>
-                Clone the remote peer into the give backing directory.
-                The remote peer is in the form address:port.  The backing
-                directory must not already exist.
-            mawfs pull <branch> [peer]
-                Pull the branch. You may optionally specify a peer to pull
-                the branch from a specific peer, otherwise the instance will
-                just select one.
-            mawfs push <branch> <peer>
-                Push the branch to the specified peer.  Prints the remote
-                branch name.
-            mawfs merge <branch>
-                Merge with another branch.  This produces a new commit if
-                there are no conflicts, or a merge branch and a conflict
-                report if there are.
-            mawfs resolve
-                Resolve an outstanding merge that had conflicts.
-            mawfs cancelMerge
-                Cancel an outstanding merge.
-            mawfs dump <filename>
-                Dump the contents of an encrypted backing file.
-            mawfs addPeer <peer-name> <peer-addr>
-                Add a new peer to the instance.  'peer-name' can be any name
-                that is meaningful to the user.  'peer-addr' is an IP address
-                in host:port format.
-            mawfs dbg_log <backing-dir> <branch>
-                Show a log of all changes in a branch.  Requires a password.
-            mawfs info
-                Show information about the instance.
-            mawfs traverse <branch>
-                Traverse the entirety or a subset of the given branch.
-                Traversal serves two purposes: 1) it verifies all chunks of
-                the filesystem and 2) it pulls any missing/invalid chunks from
-                peers.  See the --traverse-type (-t) opton for details on the
-                types of traversal that are available.
-        `;
-}
-
 ## Returns a reader for the file specified by 'filename'.  If 'filename' is
 ## "-", returns a reader for standard input.
 Reader getReader(String filename) {
@@ -366,7 +321,7 @@ opts := CmdOptions![
            CMD_STR
            ),
     Option('peer-name', 'r',
-           'During a clone operation, identifiers the peer name to create '
+           'During a clone operation, identifies the peer name to create '
            'for the remote instance ("origin" is used by default)',
            'origin',
            CMD_STR
@@ -1117,16 +1072,66 @@ class CommandManager {
                 commitDigest ? proxy.getCommit(altEncode(commitDigest)) : null;
         }
     }
+
+    void usage() {
+        opts.writeUsage(cout, FStr() I`\
+            Usage:
+                mawfs run <backing> <mountpoint>
+                    Mount a mawfs filesystem.
+                mawfs create <backing> [options]
+                    Create a new MAWFS instance.
+                mawfs clone <peer-address> <backing-store>
+                    Clone the remote peer into the give backing directory.
+                    The remote peer is in the form address:port.  The backing
+                    directory must not already exist.
+                mawfs pull <branch> [peer]
+                    Pull the branch. You may optionally specify a peer to pull
+                    the branch from a specific peer, otherwise the instance will
+                    just select one.
+                mawfs push <branch> <peer>
+                    Push the branch to the specified peer.  Prints the remote
+                    branch name.
+                mawfs merge <branch>
+                    Merge with another branch.  This produces a new commit if
+                    there are no conflicts, or a merge branch and a conflict
+                    report if there are.
+                mawfs resolve
+                    Resolve an outstanding merge that had conflicts.
+                mawfs cancelMerge
+                    Cancel an outstanding merge.
+                mawfs dump <filename>
+                    Dump the contents of an encrypted backing file.
+                mawfs addPeer <peer-name> <peer-addr>
+                    Add a new peer to the instance.  'peer-name' can be any name
+                    that is meaningful to the user.  'peer-addr' is an IP address
+                    in host:port format.
+                mawfs dbg_log <backing-dir> <branch>
+                    Show a log of all changes in a branch.  Requires a password.
+                mawfs info
+                    Show information about the instance.
+                mawfs traverse <branch>
+                    Traverse the entirety or a subset of the given branch.
+                    Traversal serves two purposes: 1) it verifies all chunks of
+                    the filesystem and 2) it pulls any missing/invalid chunks from
+                    peers.  See the --traverse-type (-t) opton for details on the
+                    types of traversal that are available.
+                mawfs help
+                    Show this help message.
+            `
+        );
+    }
+
+
 }
 
 # The main function, which is a command dispatcher.
 void main() {
     args := opts.parse();
+    cm := CommandManager(args);
     if (args.count() < 2) {
-        usage();
+        cm.usage();
         exit(1);
     }
-    cm := CommandManager(args);
     cm.initLogs();
 
     try {
@@ -1171,9 +1176,12 @@ void main() {
             cm.traverse();
         } else if (cmd == 'log') {
             cm.log();
+        } else if (cmd == 'help') {
+            cm.usage();
+            exit(0);
         } else {
             cerr `Unknown command: $cmd\n`;
-            usage();
+            cm.usage();
             exit(1);
         }
     } catch (Abort ex) {
