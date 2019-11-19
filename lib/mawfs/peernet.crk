@@ -206,15 +206,32 @@ class PeerNetwork {
     }
 
     @define iterPeers(code) {
-        class Deleter : Array[uint] {
+
+        const MOVE_TO_BACK := 0x80000000;
+
+        # Adding an index with the high bit set causes the index to be moved
+        # to the end of the array, without the high bit it is deleted.
+        class Organizer : Array[uint] {
             @cvars { Array[Peer] peers; }
             oper del() {
                 // Delete in reverse order to preserve indexes.
-                for (int i = count() - 1; i > -1; --i)
-                    peers.delete(this[i]);
+                for (int i = count() - 1; i > -1; --i) {
+                    if (this[i] & MOVE_TO_BACK) {
+                        idx := this[i] & 0x7fffffff;
+                        temp := peers[idx];
+                        peers.delete(idx);
+                        peers.append(temp);
+                    } else {
+                        peers.delete(this[i]);
+                    }
+                }
+            }
+
+            void addPeer(Array[Peer].ArrayIter iter) {
+                append(iter.index | (iter.elem().reusable() ? 0x80000000 : 0));
             }
         }
-        toDelete := Deleter(__peers);
+        organizer := Organizer(__peers);
         for (peerIter :on __peers) {
             peer := peerIter.elem();
             proxy := peer.getProxy();
@@ -223,17 +240,16 @@ class PeerNetwork {
                     code
                 catch (PeerDisconnectedError ex) {
                     __log.debug `Peer $(peer.getDisplayName()) disconnected.`;
+                    organizer.addPeer(peerIter);
                 }
             } else {
                 __log.debug `unable to get proxy for $(peer.getDisplayName())`;
-                if (!peer.reusable()) {
-                    __log.info I`deleting closed client peer \
-                                 $(peer.getDisplayName())`;
-                    toDelete.append(peerIter.index);
-                }
+                __log.info I`$(peer.reusable() ? 'reordering' : 'deleting') \
+                             closed client peer \
+                             $(peer.getDisplayName())`;
+                organizer.addPeer(peerIter);
             }
         }
-        __deletePeers(toDelete);
     }
 
     @struct HeadAndPeer {

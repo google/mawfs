@@ -29,7 +29,7 @@ import mawfs.rawchunk JournalBlock;
 import mawfs.rpc PeerProxy;
 import mawfs.testutil FakeEntropySource;
 
-@import crack.ann assert;
+@import crack.ann assert, cvars;
 
 class FakeProxy : PeerProxy {
     Array[JournalBlock] results;
@@ -58,6 +58,10 @@ class FakeProxy : PeerProxy {
         } else {
             return 'contents';
         }
+    }
+
+    String getObject(String digest) {
+        return digest;
     }
 
     bool isTrue() { return valid }
@@ -136,6 +140,39 @@ class TestBed {
         @assert((root/'params').exists());
     }
 
+    void testPeerReorg() {
+
+        class FakePeer : Peer {
+            @cvars {
+                String name;
+                bool __reusable;
+            }
+
+
+            PeerProxy getProxy() { return null }
+            String getName() { return name }
+            String getDisplayName() { return name }
+            void shutdown() {}
+            bool reusable() { return __reusable }
+        }
+
+        Array[String] getNames(PeerNetwork net) {
+            result := Array[String]();
+            for (peer :in net.getPeers())
+                result.append(peer.getName());
+            return result;
+        }
+
+        net2 := PeerNetwork(null, SIVCipher(sha256('test test'), null), 'name');
+        net2.addPeer(FakePeer('delete', false));
+        net2.addPeer(FakePeer('moveToEnd', true));
+        peer := ClientPeer('peer', FakeProxy(getJournalBlockResults, true));
+        net2.addPeer(peer);
+
+        @assert(net2.getObject('foo') == 'foo');
+        @assert(getNames(net2) == Array[String]!['peer', 'moveToEnd']);
+    }
+
     # If the journal has changed to a less than 1 block value, the server
     # should still reply with a null first block digest and not done
     # Test that the server gives us null, null, false when the journal is
@@ -166,6 +203,7 @@ class TestBed {
         result = __run(testJournalChanged, 'journal changed') ? result : false;
         result = __run(testGetFile, 'get file') ? result : false;
         result = __run(testPeerCleanup, 'peer cleanup') ? result : false;
+        result = __run(testPeerReorg, 'peer reorg') ? result : false;
         return result;
     }
 }
