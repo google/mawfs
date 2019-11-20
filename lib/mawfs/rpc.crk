@@ -23,8 +23,8 @@ import .ciphers Cipher, sha256;
 import .entropy getEntropySource;
 import .rawchunk GeneralCallback, JournalBlock, RawChunkReader;
 
-@import crack.ann cvars, impl, implements, interface, struct;
-@import crack.protobuf.ann  protobuf;
+@import crack.ann assert, cvars, impl, implements, interface, struct;
+@import crack.protobuf.ann protobuf;
 
 const DEFAULT_PORT := 9119
 const IPV4_ADDR := Regex(r'(\d+)\.(\d+)\.(\d+)\.(\d+)');
@@ -885,8 +885,13 @@ class PeerProxy : _PeerProxyBase {
 
             void setResponse(RPCMessage result) {
                 PullBranchResponse resp = {};
-                readMessageFromString(resp, result.response);
-                callback(resp.localName, null);
+                if (result.error) {
+                    callback(null, Exception(result.error));
+                } else {
+                    @assert(result.response);
+                    readMessageFromString(resp, result.response);
+                    callback(resp.localName, null);
+                }
             }
         }
 
