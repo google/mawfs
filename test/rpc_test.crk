@@ -13,7 +13,7 @@ import mawfs.aes_siv SIVCipher;
 import mawfs.blockstore Commit, CommitMetadata;
 import mawfs.ciphers sha256, Cipher;
 import mawfs.rawchunk GeneralCallback, JournalBlock, RawChunkReader;
-import mawfs.rpc parseAddr, setInst, CommitAndDigest, Context, GetFileResponse,
+import mawfs.rpc parseAddr, CommitAndDigest, Context, GetFileResponse,
     GetObjectResponse, InfoResponse, InstIFace, LoginError, LoginState,
     MergeResponse, MethodHandler, MethodMap, PeerProxy,
     PeerServiceConnectionFactory, PSKInfo, RemoteError, RPCMessage;
@@ -200,15 +200,15 @@ class RPCTestBed {
     void startServer() {
         portCallback := PortCollectorCallback();
         ConnectionFactory factory =
-            PeerServiceConnectionFactory(FakeChunkReader());
+            PeerServiceConnectionFactory(FakeChunkReader(),
+                                         inst = FakeInstance(cipher)
+                                         );
         if (ssl)
             factory = __getSSLContext().makeConnectionFactory(factory);
         listener := CommListener(log, factory);
         listener.addSocketInitCallback(portCallback);
         comm.startServer(InetAddress(127, 0, 0, 1, 0), listener, true);
         port = portCallback.waiter.getResult();
-
-        setInst(inst = FakeInstance(cipher));
     }
 
     void setUp() {

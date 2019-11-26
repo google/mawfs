@@ -7,6 +7,7 @@ import crack.functor Functor0;
 import crack.io FStr;
 import crack.lang Exception, InvalidArgumentError, InvalidResourceError;
 import crack.logger debug, error, info;
+import crack.rawptr RawPtr;
 import crack.threads Mutex, MutexLock, Queue, Thread;
 
 import .blockstore ChunkStore, Commit, CommitMetadata, JournalIter;
@@ -16,10 +17,10 @@ import .entropy getEntropySource;
 import .inst InstanceState;
 import .merge Merger, MergeState;
 import .nonces NONCE_SIZE;
-import .peernet Peer, PeerNetwork;
+import .peernet PeerNetInstIFace, Peer, PeerNetwork;
 import .rawchunk GeneralCallback;
-import .rpc parseAddr, CommitAndDigest, InfoResponse, InstIFace, LoginError,
-    LoginState, MergeResult, MergeResponse, PeerProxy, PSKInfo, TRAVERSE_NONE,
+import .rpc parseAddr, CommitAndDigest, InfoResponse, LoginError, LoginState,
+    MergeResult, MergeResponse, PeerProxy, PSKInfo, TRAVERSE_NONE,
     TRAVERSE_DELTA, TRAVERSE_FULL;
 import .util findCommonAncestor, traverseCommit;
 
@@ -92,14 +93,15 @@ ThreadPool __pool = {};
 }
 
 import crack.io cerr;
-class MAWFSInstance @impl InstIFace {
+class MAWFSInstance : PeerNetInstIFace {
     InstanceState __state;
-    PeerNetwork __net;
+    RawPtr[PeerNetwork] __net;
 
-    oper init(InstanceState state, PeerNetwork net) :
-        __state = state,
-        __net = net {
-    }
+    oper init(InstanceState state) : __state = state {}
+
+    ## Set the PeerNetwork for the instance.  This _must_ be called prior to
+    ## the use of the instance.
+    void setPeerNetwork(PeerNetwork net) { __net = RawPtr[PeerNetwork](net) }
 
     ## Returns true if the commit derives from the ancestor.
     ##

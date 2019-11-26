@@ -57,8 +57,8 @@ import mawfs.inst InstanceState, LocalInstanceState, UserModule;
 import mawfs.params ParamInfo;
 import mawfs.peernet PeerNetwork, RemoteReaderImpl;
 import mawfs.rawchunk RawChunkReader;
-import mawfs.rpc parseAddr, setInst, ExtendedAddress, PeerProxy,
-    TRAVERSE_DELTA, TRAVERSE_FULL, TRAVERSE_NONE;
+import mawfs.rpc parseAddr, ExtendedAddress, PeerProxy, TRAVERSE_DELTA,
+    TRAVERSE_FULL, TRAVERSE_NONE;
 import mawfs.ssl makeAnonSSLContext, makeClientSSLContext, makeSSLContext;
 import mawfs.util traverseCommit;
 
@@ -639,7 +639,9 @@ class CommandManager {
 
         # Only need a raw chunk reader if we're running a server, so we
         # can give it a null.
-        net := PeerNetwork(null, params.cipher, params.name);
+        net := PeerNetwork(null, params.cipher, params.name,
+                           MAWFSInstance(instState)
+                           );
         net.setSSLContext(makeClientSSLContext(net.getComm(), tempCipher));
         net.addPeer('origin', peerAddr);
 
@@ -750,16 +752,16 @@ class CommandManager {
 
             void start() {
                 params := PeerNetParams(instState, true);
+                mawfsInstance := MAWFSInstance(instState);
                 __net = PeerNetwork(__chunkReader, params.cipher,
-                                    params.name
+                                    params.name,
+                                    mawfsInstance
                                     );
-                mawfsInstance := MAWFSInstance(instState, __net);
                 __net.setSSLContext(makeSSLContext(mawfsInstance,
                                                    __net.getComm(),
                                                    instState.getCipher()
                                                    )
                                     );
-                setInst(mawfsInstance);
                 __net.configure(__config);
                 __net.storeServersIn(instState);
 
@@ -768,9 +770,6 @@ class CommandManager {
                 instState.getStore().setRemoteReader(
                     RemoteReaderImpl(__net)
                 );
-
-                # Break the cycle with the instance state.
-                instState = null;
             }
         }
 
@@ -784,7 +783,8 @@ class CommandManager {
                                           );
 
         # Create a temporary reference cycle, this will be resolved in
-        # PeerNetModule.start().
+        # InstanceState.start() when the instance state releases the
+        # PeerNetModule.
         peerModule.instState = instState;
         runFuse(instState, fuseArgs);
     }

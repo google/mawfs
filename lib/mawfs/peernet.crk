@@ -14,14 +14,14 @@ import crack.net.ssl SSLContext;
 import mawfs.blockstore RemoteReader;
 import mawfs.configstore ConfigStore;
 import mawfs.rawchunk RawChunkReader;
-import mawfs.rpc parseAddr, Context, ExtendedAddress, PeerDisconnectedError,
-    PeerProxy, PeerServiceConnectionFactory, METHODS;
+import mawfs.rpc parseAddr, Context, ExtendedAddress, InstIFace,
+    PeerDisconnectedError, PeerProxy, PeerServiceConnectionFactory, METHODS;
 
 import .ciphers Cipher;
 import .inst InstanceState;
 import .params ParamInfo;
 
-@import crack.ann cvars, define, impl, struct;
+@import crack.ann cvars, define, impl, interface, struct;
 
 ## Thrown by pullParams() in the case of an invalid password.
 class InvalidPasswordError : Exception {
@@ -34,6 +34,12 @@ class InvalidPasswordError : Exception {
     @abstract String getDisplayName();
     @abstract void shutdown();
     @abstract bool reusable();
+}
+
+class PeerNetwork;
+
+@abstract class PeerNetInstIFace @impl InstIFace {
+    @abstract void setPeerNetwork(PeerNetwork net);
 }
 
 ## A peer for connecting to a server.
@@ -124,17 +130,29 @@ class PeerNetwork {
     Cipher __cipher;
     String __name;
     SSLContext __sslCtx;
+    PeerNetInstIFace __inst;
 
     oper init(RawChunkReader chunkReader, Cipher cipher,
-              String name
+              String name,
+              PeerNetInstIFace inst
               ) :
         __chunkReader = chunkReader,
         __cipher = cipher,
-        __name = name {
+        __name = name,
+        __inst = inst {
+
+        # The instance should not normally be null, but it can be in tests.
+        if (__inst)
+            __inst.setPeerNetwork(this);
 
         __log = Log(cerrLogger, 'peernet');
         __comm = Comm(__log);
         __comm.start();
+    }
+
+    oper del() {
+        if (__inst)
+            __inst.setPeerNetwork(null);
     }
 
     void setSSLContext(SSLContext sslCtx) {
@@ -144,7 +162,8 @@ class PeerNetwork {
     Comm getComm() { return __comm }
 
     void addServer(ExtendedAddress addr) {
-        ConnectionFactory factory = PeerServiceConnectionFactory(__chunkReader);
+        ConnectionFactory factory =
+            PeerServiceConnectionFactory(__chunkReader, __inst);
         __log.info `starting server on $addr:$(addr.ssl ? 'ssl' : 'tcp')`;
         try {
             useSSL := __sslCtx && addr.ssl;
@@ -196,8 +215,6 @@ class PeerNetwork {
         # Used to be in oper del()
         __comm.stop();
     }
-
-    oper del() {}
 
     void __deletePeers(Array[uint] indexes) {
         // Delete in reverse order to preserve indexes.

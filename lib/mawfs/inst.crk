@@ -210,7 +210,9 @@ class InstanceState {
     ## branch: the active branch name
     ## mutex: the filesystem mutex
     ## userModule: a user module to be started when the fuse system is
-    ##     initialized.  May be null.
+    ##     initialized.  May be null.  The UserModule is released after the
+    ##     start() method is called, and therefore it may contain cyclic
+    ##     references to the InstanceState.
     oper init(Path backing, Cipher cipher, NodeStore store, String branch,
               Mutex mutex,
               UserModule userModule
@@ -294,11 +296,14 @@ class InstanceState {
         resetTree();
     }
 
-    ## Calls the start() method of the UserModule, if there is one.
+    ## Calls the start() method of the UserModule, if there is one.  This then
+    ## releases the reference to the UserModule.
     void start() {
         @checkLock();
-        if (__userModule)
+        if (__userModule) {
             __userModule.start();
+            __userModule = null;
+        }
     }
 
     ## Does a full commit on the tree (see Tree.commit()).

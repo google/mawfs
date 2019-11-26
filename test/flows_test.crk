@@ -328,13 +328,13 @@ class FakeInst {
                                     Mutex(),
                                     null);
 
-        peerNet := PeerNetwork(null, testInst.cipher, 'client');
+        flows = MAWFSInstance(inst);
+        peerNet := PeerNetwork(null, testInst.cipher, 'client', flows);
         peerNet.addPeer(ClientPeer('peer',
                                    FakeProxy(peerInst.backing, peerInst.store)
                                    )
                         );
         testInst.store.setRemoteReader(RemoteReaderImpl(peerNet));
-        flows = MAWFSInstance(inst, peerNet);
     }
 
     Path getRootPath() {

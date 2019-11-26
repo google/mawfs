@@ -81,7 +81,9 @@ class TestBed {
 
     void setUp() {
         __resetTempDir();
-        net = PeerNetwork(null, SIVCipher(sha256('test test'), null), 'name');
+        net = PeerNetwork(null, SIVCipher(sha256('test test'), null), 'name',
+                          null
+                          );
         peer := ClientPeer('invalid', FakeProxy(getJournalBlockResults, false));
         net.addPeer(peer);
         peer = ClientPeer('peer', FakeProxy(getJournalBlockResults, true));
@@ -163,7 +165,8 @@ class TestBed {
             return result;
         }
 
-        net2 := PeerNetwork(null, SIVCipher(sha256('test test'), null), 'name');
+        net2 := PeerNetwork(null, SIVCipher(sha256('test test'), null), 'name',
+                            null);
         net2.addPeer(FakePeer('delete', false));
         net2.addPeer(FakePeer('moveToEnd', true));
         peer := ClientPeer('peer', FakeProxy(getJournalBlockResults, true));

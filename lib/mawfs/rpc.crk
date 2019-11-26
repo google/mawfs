@@ -304,9 +304,6 @@ class LoginError : Exception {
     @abstract int peerConnected(String name, PeerProxy proxy);
 }
 
-InstIFace _inst;
-void setInst(InstIFace inst) { _inst = inst }
-
 @interface ResultHandler {
     alias Info = int;
     @abstract void setResponse(RPCMessage result);
@@ -387,6 +384,7 @@ class _BufferSerialReader {
 class Context {
     Log log;
     RawChunkReader reader;
+    InstIFace inst;
     LoginState loginState;
 
     ## The name of the peer that made the RPC request.  This is null if either
@@ -397,7 +395,10 @@ class Context {
     ## Gets set to true when the client has completed authentication.
     bool authenticated;
 
-    oper init(RawChunkReader reader) : reader = reader {}
+    oper init(RawChunkReader reader, InstIFace inst) :
+        reader = reader,
+        inst = inst {
+    }
 
     oper init(Log log) : log = log {}
 
@@ -1199,8 +1200,8 @@ void pullBranch(Context context, RPCMessage msg, Connection comm) {
         peerName = context.peerName;
     }
 
-    _inst.pullBranch(req.branch, peerName,
-                     ResponseCallback(context, comm, msg.id));
+    context.inst.pullBranch(req.branch, peerName,
+                            ResponseCallback(context, comm, msg.id));
 }
 
 void pushBranch(Context context, RPCMessage msg, Connection comm) {
@@ -1222,8 +1223,8 @@ void pushBranch(Context context, RPCMessage msg, Connection comm) {
         }
     }
 
-    _inst.pushBranch(req.branch, req.peer, req.traverse - 1,
-                     ResponseCallback(context, comm, msg.id));
+    context.inst.pushBranch(req.branch, req.peer, req.traverse - 1,
+                            ResponseCallback(context, comm, msg.id));
 }
 
 void merge(Context context, RPCMessage msg, Connection comm) {
@@ -1243,7 +1244,7 @@ void merge(Context context, RPCMessage msg, Connection comm) {
         }
     }
 
-    _inst.merge(req.branch, ResponseCallback(context, comm, msg.id));
+    context.inst.merge(req.branch, ResponseCallback(context, comm, msg.id));
 }
 
 ## Callback that can be used for RPCs that don't have a meaningful return
@@ -1260,25 +1261,25 @@ class EmptyResponseCallback @impl GeneralCallback[int] {
 }
 
 void resolve(Context context, RPCMessage msg, Connection comm) {
-    _inst.resolve(EmptyResponseCallback(context, comm, msg.id));
+    context.inst.resolve(EmptyResponseCallback(context, comm, msg.id));
 }
 
 void cancelMerge(Context context, RPCMessage msg, Connection comm) {
-    _inst.cancelMerge(EmptyResponseCallback(context, comm, msg.id));
+    context.inst.cancelMerge(EmptyResponseCallback(context, comm, msg.id));
 }
 
 void addPeer(Context context, RPCMessage msg, Connection comm) {
     req := AddPeerRequest();
     readMessageFromString(req, msg.request);
 
-    _inst.addPeer(req.peerName, req.peerAddr,
+    context.inst.addPeer(req.peerName, req.peerAddr,
                   EmptyResponseCallback(context, comm, msg.id)
                   );
 }
 
 void getInfo(Context context, RPCMessage msg, Connection comm) {
     try {
-        info := _inst.getInfo();
+        info := context.inst.getInfo();
         context.writeResponse(comm, info, msg.id);
     } catch (Exception ex) {
         context.writeError(comm, ex.text, msg.id);
@@ -1287,7 +1288,7 @@ void getInfo(Context context, RPCMessage msg, Connection comm) {
 
 void getMountpoint(Context context, RPCMessage msg, Connection comm) {
     try {
-        info := _inst.getInfo();
+        info := context.inst.getInfo();
         resp := InfoResponse();
         resp.mountpoint = info.mountpoint;
         context.writeResponse(comm, resp, msg.id);
@@ -1299,7 +1300,7 @@ void getMountpoint(Context context, RPCMessage msg, Connection comm) {
 void traverse(Context context, RPCMessage msg, Connection comm) {
     req := TraverseRequest();
     readMessageFromString(req, msg.request);
-    _inst.traverse(req.branch, req.algo,
+    context.inst.traverse(req.branch, req.algo,
                    EmptyResponseCallback(context, comm, msg.id)
                    );
 }
@@ -1311,7 +1312,7 @@ void login(Context context, RPCMessage msg, Connection comm) {
         if (req.challenge) {
             # Phase 1 request, p2p challenge.  Write response, send our own
             # challenge.
-            context.loginState = _inst.answerChallenge(req.challenge);
+            context.loginState = context.inst.answerChallenge(req.challenge);
             resp := LoginResponse();
             resp.response = context.loginState.response;
             resp.challenge = context.loginState.challenge;
@@ -1325,7 +1326,7 @@ void login(Context context, RPCMessage msg, Connection comm) {
                 throw LoginError('Incorrect login response.');
         } else if (req.nonce) {
             # Client side nonce verification.  Just verify the nonce.
-            if (!_inst.validNonce(req.nonce))
+            if (!context.inst.validNonce(req.nonce))
                 throw LoginError('Invalid nonce.');
         } else {
             throw LoginError('Invalid login request.');
@@ -1351,7 +1352,7 @@ void peerConnected(Context context, RPCMessage msg, Connection conn) {
     handler.setOwner(RawPtr[_PeerProxyBase](proxy));
 
     context.peerName = req.peerName;
-    _inst.peerConnected(req.peerName, proxy);
+    context.inst.peerConnected(req.peerName, proxy);
     context.writeResponse(conn, null, msg.id);
 }
 
@@ -1374,15 +1375,16 @@ void getCommit(Context context, RPCMessage msg, Connection conn) {
         }
     }
 
-    _inst.getCommit(req.commitOrTag, ResponseCallback(context, conn, msg.id));
+    context.inst.getCommit(req.commitOrTag,
+                           ResponseCallback(context, conn, msg.id));
 }
 
 void commit(Context context, RPCMessage msg, Connection conn) {
     req := CommitRequest();
     readMessageFromString(req, msg.request);
-    _inst.commit(req.metadata,
-                 EmptyResponseCallback(context, conn, msg.id)
-                 );
+    context.inst.commit(req.metadata,
+                        EmptyResponseCallback(context, conn, msg.id)
+                        );
 }
 
 const METHODS := MethodMap();
@@ -1406,15 +1408,18 @@ METHODS['login'] = MethodHandler(login, true);
 
 class PeerServiceConnectionFactory @impl ConnectionFactory {
     RawChunkReader __chunkReader;
+    InstIFace __inst;
 
-    oper init(RawChunkReader chunkReader) : __chunkReader = chunkReader {
+    oper init(RawChunkReader chunkReader, InstIFace inst) :
+        __chunkReader = chunkReader,
+        __inst = inst {
     }
 
     Connection makeConnection(NewConnection conn) {
         conn.log.info `accepted connection from $(conn.accepted.addr)\n`;
         log := Log(conn.log, FStr() `server-client-$(conn.accepted.addr)`);
         return Connection(log,
-                          RPCHandler(METHODS, Context(__chunkReader),
+                          RPCHandler(METHODS, Context(__chunkReader, __inst),
                                      conn.accepted.addr
                                      )
                           );

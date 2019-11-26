@@ -34,7 +34,7 @@ import mawfs.inst InstanceState;
 import mawfs.path MAWFSPath;
 import mawfs.peernet PeerNetwork, RemoteReaderImpl;
 import mawfs.params ParamInfo;
-import mawfs.rpc setInst, ExtendedAddress, PeerProxy;
+import mawfs.rpc ExtendedAddress, PeerProxy;
 import mawfs.testutil FakeEntropySource;
 import test.unittest register, runAllTests, Test;
 
@@ -72,9 +72,14 @@ class PeerInfo {
         cipher = params.cipher;
         cs = ChunkStore(backDir, FSInfo(cipher));
 
+        instState = InstanceState.create(backDir, cipher, cs, 'master', mutex,
+                                         null
+                                         );
+
         # Create the peer network.
         chunkReader := cs.getRawChunkReader(mutex);
-        peerNet = PeerNetwork(chunkReader, cipher, 'name');
+        inst := MAWFSInstance(instState);
+        peerNet = PeerNetwork(chunkReader, cipher, 'name', inst);
 
         # Set up a remote reader.
         cs.setRemoteReader(RemoteReaderImpl(peerNet));
@@ -106,7 +111,6 @@ class PeerInfo {
     ## Returns the root from the instance state (you must have set the
     ## instance state to be able to use this)
     Path getRoot() {
-        @assert(instState);
         lock := instState.lock();
         return instState.getRoot();
     }
@@ -139,15 +143,6 @@ class PeerInfo {
         backDir := root/'back1';
         slave = PeerInfo(backDir, SLAVE_PORT);
         slave.create();
-
-        # The slace gets the MAWFS instance, he's the one we're communicating
-        # to.
-        slave.instState = InstanceState.create(backDir, slave.cipher, slave.cs,
-                                               'master',
-                                               slave.mutex,
-                                               null
-                                               );
-        setInst(MAWFSInstance(slave.instState, slave.peerNet));
     }
 
     int getPort() { return SLAVE_PORT }
@@ -182,8 +177,6 @@ class PeerInfo {
         comm.stop();
         comm = null;
         proxy = null;
-
-        setInst(null);
     }
 }
 
