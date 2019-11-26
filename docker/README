@@ -1,0 +1,50 @@
+
+# MAWFS Docker Image
+
+This directory contains files to support building the MAWFS docker image.  The
+image is deployed to docker.io/mawfs/basic and can be retrieved from there.
+
+## Running It.
+
+Doing FUSE mounts on docker requires that the container be given special
+privileges and also access to the fuse device.
+
+Try running:
+
+    $ docker run --device /dev/fuse -ti --cap-add SYS_ADMIN mawfs/basic
+
+if this doesn't work:
+
+    $ docker run --device /dev/fuse -ti --privileged mawfs/basic
+
+Adding the SYS_ADMIN capability is supposed to work, but for some reason
+doesn't always.
+
+Note that these examples use long-lived containers (no --rm option).
+
+Cloning a remote filesystem:
+  mfs clone 172.26.108.32:9111:ssl fs2
+
+## Building It.
+
+(Mostly for the dev team, but potentially useful for power users)
+
+Edit the VERSION variable in build-mawfs.sh with the release tag you want to
+use.  You'll want to check this in.  And yes, there is probably a better way
+to do this.
+
+We follow the convention of tagging the docker
+image with a tag corresponding to the git source.  So if the git source is
+tagged "rel-0.1", we would use "0.1" as the tag in the example above.
+
+Build from this directory with `docker build -t mawfs/basic:<tag> .`, where
+`<tag>` is the release tag.
+
+Push to docker hub like so (you won't be able to do this unless you're
+authorized):
+
+```
+$ docker push mawfs/basic:<tag>
+$ docker tag mawfs/basic:<tag> mawfs/basic:latest
+$ docker push mawfs/basic:latest
+```
