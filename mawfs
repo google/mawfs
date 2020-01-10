@@ -63,6 +63,7 @@ import mawfs.ssl makeAnonSSLContext, makeClientSSLContext, makeSSLContext;
 import mawfs.util traverseCommit;
 
 @import crack.ann assert, impl, struct;
+@import mawfs.gitver gitver;
 
 import 'libc.so.6' fsync;
 int fsync(int fd);
@@ -79,6 +80,7 @@ int fsync(int fd);
 
 # Lifted from crack.lang.
 
+const VERSION := @gitver;
 const _ADDRS_SIZE := 100;
 const array[voidptr] _addrs = {_ADDRS_SIZE};
 const array[byteptr] _addrInfo = {3};
@@ -336,6 +338,8 @@ opts := CmdOptions![
            null,
            CMD_STR
            ),
+
+    Option('version', 'v', 'Write version and exit.', null, CMD_BOOL),
 ];
 
 ## Convenience class for obtaining the peer network parameters from the
@@ -1128,10 +1132,18 @@ class CommandManager {
 void main() {
     args := opts.parse();
     cm := CommandManager(args);
+
+    # If we get a --version flag, print the version and quit.
+    if (opts.getBool('version')) {
+        cout `$VERSION\n`;
+        exit(0);
+    }
+
     if (args.count() < 2) {
         cm.usage();
         exit(1);
     }
+
     cm.initLogs();
 
     try {

@@ -1,0 +1,38 @@
+## Annotation module for obtaining the git version.
+
+import crack.lang AppendBuffer, Buffer, CString;
+import crack.compiler CrackContext, Token, TOK_STRING;
+import crack.fs cwd, makePath;
+import crack.process Process, ProcessHandlerImpl;
+import crack.strutil SA = StringArray;
+
+## Obtain the repository working directory's git revision id as a string in
+## the source code.
+##
+## Note that this assumes that the source file is located in a git directory.
+## Code that is installed or repackaged (e.g as a tarball without repository
+## metadata) should replace this annotation with the appropriate version
+## number in the course of the repackaging.
+void gitver(CrackContext ctx) {
+    class Collector : ProcessHandlerImpl {
+        AppendBuffer buf = AppendBuffer(256);
+        void onOutData(Buffer data) {
+            buf.extend(data);
+        }
+    }
+
+    # Set the current directory to the name of the source file so that we end
+    # up in the git repo.
+    gitDir := makePath(String(ctx.getLocation().getName())).parent();
+    orgPath := cwd.getFullName();
+    cwd.set(gitDir);
+
+    proc := Process(SA!['git', 'rev-parse', 'HEAD']);
+    collector := Collector();
+    rc := proc.run(collector);
+    cwd.set(orgPath);
+    if (rc & 0xff)
+        ctx.error('Error running git rev-parse'.buffer);
+    collector.buf.append(0);
+    ctx.putBack(Token(TOK_STRING, collector.buf.buffer, ctx.getLocation()));
+}
