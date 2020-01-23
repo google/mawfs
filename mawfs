@@ -340,6 +340,11 @@ opts := CmdOptions![
            ),
 
     Option('version', 'v', 'Write version and exit.', null, CMD_BOOL),
+    Option('help', 'h',
+           'Show this help message (equivalent to the "help" command)',
+           null,
+           CMD_BOOL
+           ),
 ];
 
 ## Convenience class for obtaining the peer network parameters from the
@@ -1079,6 +1084,8 @@ class CommandManager {
 
     void usage() {
         opts.writeUsage(cout, FStr() I`\
+            mawfs - An encrypted, distributed, branching filesystem.
+
             Usage:
                 mawfs run <backing> <mountpoint>
                     Mount a mawfs filesystem.
@@ -1121,6 +1128,8 @@ class CommandManager {
                     types of traversal that are available.
                 mawfs help
                     Show this help message.
+
+            Options:
             `
         );
     }
@@ -1136,6 +1145,12 @@ void main() {
     # If we get a --version flag, print the version and quit.
     if (opts.getBool('version')) {
         cout `$VERSION\n`;
+        exit(0);
+    }
+
+    # Check for the help flag.
+    if (opts.getBool('help')) {
+        cm.usage();
         exit(0);
     }
 

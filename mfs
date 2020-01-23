@@ -19,6 +19,8 @@ import subprocess
 import sys
 from tempfile import SpooledTemporaryFile
 
+DEFAULT_MAWFS_BIN = 'mawfs'
+
 class Abort(Exception):
     pass
 
@@ -193,7 +195,7 @@ def run_mawfs(*args, **kwargs):
     logfile = kwargs.get('logfile')
     if logfile is None:
         logfile = os.path.join(get_backing_dir_root(), 'mawfs.log')
-    cmd = [os.environ.get('MAWFS_BIN', 'mawfs')] + \
+    cmd = [os.environ.get('MAWFS_BIN', DEFAULT_MAWFS_BIN)] + \
           [str(arg) for arg in args if arg is not None] + \
           ['-l', logfile] + mawfs_flags
     if stdin is not None or capture_stdout:
@@ -478,6 +480,10 @@ def pull(branch, peer=None):
     """Pull the branch from the cell."""
     run_mawfs('pull', '-i', get_instance().get_descriptor(), branch, peer)
 
+def push(peer, branch):
+    """Push the branch to the peer."""
+    run_mawfs('push', '-i', get_instance().get_descriptor(), peer, branch)
+
 def file_or_dev_null(filename):
     return filename if os.path.exists(filename) else '/dev/null'
 
@@ -565,7 +571,7 @@ def verify():
 
 def main(args):
     global instance
-    opts, args = getopt.gnu_getopt(args[1:], 'i:v:n:r:')
+    opts, args = getopt.gnu_getopt(args[1:], 'i:v:n:r:h', ['help'])
     for opt, val in opts:
         if opt == '-i':
             instance = val
@@ -578,6 +584,9 @@ def main(args):
         elif opt == '-r':
             mawfs_flags.append('-r')
             mawfs_flags.append(val)
+        elif opt == '-h' or opt == '--help':
+            help()
+            return 0
         else:
             raise AssertionError('unkonwn flag: %s' % opt)
     try:
